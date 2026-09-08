@@ -1,0 +1,44 @@
+[package]
+name = "catshell"
+version = "0.1.0"
+description = "CatShell - 服务器远程运维工具 SSH/SFTP/监控"
+authors = ["smcloudcat"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "catshell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+russh-keys = { version = "0.49.2", default-features = false, features = ["legacy-ed25519-pkcs8-parser"] }
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+bytes = "1.12.1"
+russh = { version = "0.63.2", default-features = false, features = ["flate2", "rsa", "ring"] }
+russh-sftp = "2.4.0"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+bytes = "1.12.1"
+rand = "0.10.2"
