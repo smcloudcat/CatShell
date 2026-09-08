@@ -37,6 +37,7 @@ interface SessionsState {
   resize: (id: number, cols: number, rows: number) => void
   disconnect: (id: number) => Promise<void>
   closeTab: (id: number) => Promise<void>
+  renameSession: (id: number, name: string) => Promise<void>
   setActive: (id: number | null) => void
   setBroadcastEnabled: (enabled: boolean) => void
   toggleBroadcastTarget: (id: number) => void
@@ -159,14 +160,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
             port: 22,
             username: '',
             status: event.status,
-            reason: event.reason
+            reason: event.reason,
+            attempt: event.attempt
           }
         },
         order: s.order.includes(event.id) ? s.order : [...s.order, event.id]
       }))
       return
     }
-    const updated: SessionInfo = { ...info, status: event.status, reason: event.reason }
+    const updated: SessionInfo = { ...info, status: event.status, reason: event.reason, attempt: event.attempt }
     set({ sessions: { ...sessions, [event.id]: updated } })
     const prompt = get().hostKeyPrompt
     if (
@@ -279,6 +281,17 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const activeId = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
       return { sessions, requests, order, terminals, activeId }
     })
+  },
+  renameSession: async (id, name) => {
+    const info = get().sessions[id]
+    if (!info) throw new Error('会话不存在')
+    const trimmed = name.trim().slice(0, 80)
+    if (!trimmed) throw new Error('名称不能为空')
+    const request = get().requests[id]
+    set((s) => ({
+      sessions: { ...s.sessions, [id]: { ...info, name: trimmed } },
+      requests: request ? { ...s.requests, [id]: { ...request, name: trimmed } } : s.requests
+    }))
   },
   setActive: (id) => set({ activeId: id }),
   setBroadcastEnabled: (enabled) => {

@@ -92,8 +92,13 @@ async fn ssh_processes(state: State<'_, AppState>, id: u64) -> Result<Vec<Proces
 }
 
 #[tauri::command]
-async fn ssh_kill_process(state: State<'_, AppState>, id: u64, pid: u32) -> Result<(), String> {
-    state.ssh.kill_process(id, pid).await
+async fn ssh_kill_process(
+    state: State<'_, AppState>,
+    id: u64,
+    pid: u32,
+    signal: String,
+) -> Result<(), String> {
+    state.ssh.kill_process(id, pid, &signal).await
 }
 
 #[tauri::command]
@@ -199,6 +204,11 @@ async fn sftp_write_file(
 #[tauri::command]
 async fn sftp_remove_file(state: State<'_, AppState>, id: u64, path: String) -> Result<(), String> {
     state.ssh.sftp_remove_file(id, path).await
+}
+
+#[tauri::command]
+async fn sftp_remove_dir(state: State<'_, AppState>, id: u64, path: String) -> Result<(), String> {
+    state.ssh.sftp_remove_dir(id, path).await
 }
 
 #[tauri::command]
@@ -334,6 +344,7 @@ pub fn run() {
             sftp_read_file,
             sftp_write_file,
             sftp_remove_file,
+            sftp_remove_dir,
             sftp_mkdir,
             sftp_rename,
             sftp_download_begin,

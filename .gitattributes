@@ -1,0 +1,16 @@
+* text=auto
+*.rs text
+*.ts text
+*.tsx text
+*.css text
+*.html text
+*.json text
+*.md text
+*.yml text
+*.yaml text
+*.toml text
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.ico binary
+*.exe binary

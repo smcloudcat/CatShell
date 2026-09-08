@@ -7,6 +7,7 @@ import {
   sftpList,
   sftpMkdir,
   sftpReadFile,
+  sftpRemoveDir,
   sftpRemoveFile,
   sftpRename,
   sftpTransferCancel,
@@ -56,9 +57,10 @@ async function uploadWithRetry(target: string, data: Uint8Array, writeFile: (pat
 
 interface Props {
   sessionId: number
+  onCollapse?: () => void
 }
 
-export function SessionSftpPanel({ sessionId }: Props) {
+export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const sessions = useSessions((state) => state.sessions)
   const [path, setPath] = useState('/')
   const [entries, setEntries] = useState<SftpEntry[]>([])
@@ -342,7 +344,31 @@ export function SessionSftpPanel({ sessionId }: Props) {
   }
 
   const handleDelete = async (entry: SftpEntry) => {
-    if (entry.kind !== 'file') return
+    if (entry.kind !== 'file' && entry.kind !== 'directory') return
+    if (entry.kind === 'directory') {
+      const accepted = await confirmDialog({
+        title: '递归删除远程目录',
+        message: `目录“${entry.name}”及其全部子目录和文件将被删除，该操作不可恢复。确认继续？`,
+        confirmLabel: '全部删除',
+        danger: true
+      })
+      if (!accepted) return
+      setBusy(true)
+      setError(null)
+      setNotice(null)
+      try {
+        await sftpRemoveDir(sessionId, entry.path)
+        recordAudit('sftp.rmdir', entry.path, 'success', '递归删除远程目录')
+        setNotice(`已删除目录 ${entry.name}`)
+        await loadDirectory(path)
+      } catch (err) {
+        recordAudit('sftp.rmdir', entry.path, 'failure', '递归删除远程目录失败')
+        setError(typeof err === 'string' ? err : '递归删除目录失败')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     const accepted = await confirmDialog({
       title: '删除远程文件',
       message: `确认删除远程文件“${entry.name}”？该操作不可恢复。`,
@@ -379,6 +405,7 @@ export function SessionSftpPanel({ sessionId }: Props) {
       <div className="sftp-toolbar">
         <Icon name="folder" size={15} />
         <span className="sftp-heading">SFTP 文件</span>
+        {onCollapse && <button className="host-icon-btn" onClick={onCollapse} title="折叠面板"><Icon name="chevron-down" size={14} /></button>}
         <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title="刷新目录"><Icon name="refresh" size={15} /></button>
         <button className="glass-btn" onClick={() => setNameDialog({ mode: 'mkdir', target: null, value: '' })} title="新建目录"><Icon name="plus" size={15} /></button>
         <label className="glass-btn primary">
@@ -407,7 +434,7 @@ export function SessionSftpPanel({ sessionId }: Props) {
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
               <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title="重命名"><Icon name="edit" size={14} /></button>
-              {entry.kind === 'file' && <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title="删除"><Icon name="trash" size={14} /></button>}
+              <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title={entry.kind === 'directory' ? '递归删除目录' : '删除'}><Icon name="trash" size={14} /></button>
             </span>
           </div>
         ))}

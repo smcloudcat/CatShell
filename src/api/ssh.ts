@@ -53,8 +53,8 @@ export async function sshProcesses(id: number): Promise<ProcessInfo[]> {
   return invoke<ProcessInfo[]>('ssh_processes', { id })
 }
 
-export async function sshKillProcess(id: number, pid: number): Promise<void> {
-  await invoke('ssh_kill_process', { id, pid })
+export async function sshKillProcess(id: number, pid: number, signal: 'TERM' | 'KILL'): Promise<void> {
+  await invoke('ssh_kill_process', { id, pid, signal })
 }
 
 export async function sshNetworkDiagnostic(id: number, kind: 'ping' | 'trace', target: string): Promise<NetworkDiagnostic> {
@@ -128,6 +128,10 @@ export async function sftpWriteFile(id: number, path: string, data: Uint8Array):
 
 export async function sftpRemoveFile(id: number, path: string): Promise<void> {
   await invoke('sftp_remove_file', { id, path })
+}
+
+export async function sftpRemoveDir(id: number, path: string): Promise<void> {
+  await invoke('sftp_remove_dir', { id, path })
 }
 
 export async function sftpMkdir(id: number, path: string): Promise<void> {

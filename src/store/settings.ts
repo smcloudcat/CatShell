@@ -9,6 +9,7 @@ const SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed'
 const VAULT_AUTO_LOCK_KEY = 'vaultAutoLockMinutes'
 const TERMINAL_KEY = 'terminal'
 const MONITOR_INTERVAL_KEY = 'monitorIntervalSeconds'
+const SESSION_PANELS_KEY = 'sessionPanelsCollapsed'
 
 export const VAULT_AUTO_LOCK_OPTIONS = [0, 5, 15, 30]
 export const DEFAULT_VAULT_AUTO_LOCK_MINUTES = 15
@@ -44,6 +45,23 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
 export const MONITOR_INTERVAL_OPTIONS = [5, 10, 30, 60]
 export const DEFAULT_MONITOR_INTERVAL_SECONDS = 10
 
+export interface SessionPanelState {
+  monitorCollapsed: boolean
+  sftpCollapsed: boolean
+}
+
+export const DEFAULT_SESSION_PANELS: SessionPanelState = {
+  monitorCollapsed: false,
+  sftpCollapsed: false
+}
+
+function normalizeSessionPanels(value: Partial<SessionPanelState> | null | undefined): SessionPanelState {
+  return {
+    monitorCollapsed: value?.monitorCollapsed === true,
+    sftpCollapsed: value?.sftpCollapsed === true
+  }
+}
+
 function normalizeTerminalSettings(value: Partial<TerminalSettings> | null | undefined): TerminalSettings {
   return {
     fontFamily: typeof value?.fontFamily === 'string' && value.fontFamily.trim() ? value.fontFamily : DEFAULT_TERMINAL_SETTINGS.fontFamily,
@@ -59,6 +77,7 @@ interface SettingsState {
   vaultAutoLockMinutes: number
   terminal: TerminalSettings
   monitorIntervalSeconds: number
+  sessionPanels: SessionPanelState
   ready: boolean
   setTheme: (patch: Partial<ThemeConfig>) => void
   setAppearanceMode: (mode: ThemeConfig['mode']) => void
@@ -74,6 +93,7 @@ interface SettingsState {
   saveTerminal: () => Promise<void>
   setMonitorIntervalSeconds: (seconds: number) => void
   saveMonitorIntervalSeconds: () => Promise<void>
+  setSessionPanelCollapsed: (panel: 'monitor' | 'sftp', collapsed: boolean) => Promise<void>
   init: () => Promise<void>
 }
 
@@ -91,6 +111,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   vaultAutoLockMinutes: DEFAULT_VAULT_AUTO_LOCK_MINUTES,
   terminal: { ...DEFAULT_TERMINAL_SETTINGS },
   monitorIntervalSeconds: DEFAULT_MONITOR_INTERVAL_SECONDS,
+  sessionPanels: { ...DEFAULT_SESSION_PANELS },
   ready: false,
   setTheme: (patch) => set((state) => ({ theme: { ...state.theme, ...patch } })),
   setAppearanceMode: (mode) =>
@@ -177,6 +198,20 @@ export const useSettings = create<SettingsState>((set, get) => ({
       localStorage.setItem(MONITOR_INTERVAL_KEY, JSON.stringify(seconds))
     }
   },
+  setSessionPanelCollapsed: (panel, collapsed) => {
+    const current = get().sessionPanels
+    const next: SessionPanelState = { ...current, [`${panel}Collapsed`]: collapsed }
+    set({ sessionPanels: next })
+    return (async () => {
+      try {
+        const store = await load(STORE_FILE)
+        await store.set(SESSION_PANELS_KEY, next)
+        await store.save()
+      } catch {
+        localStorage.setItem(SESSION_PANELS_KEY, JSON.stringify(next))
+      }
+    })()
+  },
   init: async () => {
     if (get().ready) return
     if (initializationPromise) return initializationPromise
@@ -193,6 +228,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const vaultAutoLockMinutes = await store.get<number>(VAULT_AUTO_LOCK_KEY)
       const savedTerminal = await store.get<Partial<TerminalSettings>>(TERMINAL_KEY)
       const savedInterval = await store.get<number>(MONITOR_INTERVAL_KEY)
+      const savedPanels = await store.get<Partial<SessionPanelState>>(SESSION_PANELS_KEY)
       if (saved && !isLegacyTheme(saved)) {
         set({ theme: { ...get().theme, ...saved, gradient: { ...get().theme.gradient, ...saved.gradient } } })
       }
@@ -210,6 +246,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (typeof savedInterval === 'number' && MONITOR_INTERVAL_OPTIONS.includes(savedInterval)) {
         set({ monitorIntervalSeconds: savedInterval })
+      }
+      if (savedPanels && typeof savedPanels === 'object') {
+        set({ sessionPanels: normalizeSessionPanels(savedPanels) })
       }
     } catch (err) {
       console.warn('读取主题设置失败，使用默认值', err)
@@ -279,6 +318,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
           }
         } catch {
           /* ignore corrupt stored monitor interval */
+        }
+      }
+      const savedPanelsRaw = localStorage.getItem(SESSION_PANELS_KEY)
+      if (savedPanelsRaw) {
+        try {
+          const parsed: unknown = JSON.parse(savedPanelsRaw)
+          if (parsed && typeof parsed === 'object') {
+            set({ sessionPanels: normalizeSessionPanels(parsed as Partial<SessionPanelState>) })
+          }
+        } catch {
+          /* ignore corrupt stored session panel state */
         }
       }
     } finally {

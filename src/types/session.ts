@@ -14,6 +14,7 @@ export interface SessionInfo {
   username: string
   status: SessionStatus
   reason?: string | null
+  attempt?: number | null
 }
 
 export interface SessionStatusEvent {
@@ -42,12 +43,21 @@ export interface HostKeyWarning {
   reason: string
 }
 
+export interface PartitionMetric {
+  mountPoint: string
+  totalKb: number
+  usedKb: number
+  availableKb: number
+}
+
 export interface ServerMetrics {
   sessionId: number
   hostname: string
   os: string
   cpuCores: number
   load1m: number
+  cpuPercent?: number | null
+  partitions?: PartitionMetric[]
   memoryTotalKb: number
   memoryAvailableKb: number
   diskTotalKb: number

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { getSessionLog, useSessions } from '../../store/sessions'
 import { STATUS_TEXT, SessionStatus } from '../../types/session'
@@ -6,6 +6,7 @@ import { TerminalPane } from './TerminalPane'
 import { SessionSftpPanel } from './SessionSftpPanel'
 import { SessionMonitorPanel } from './SessionMonitorPanel'
 import { useSnippets } from '../../store/snippets'
+import { useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
@@ -26,7 +27,13 @@ export function SessionsView() {
   const broadcastTargets = useSessions((s) => s.broadcastTargets)
   const setBroadcastEnabled = useSessions((s) => s.setBroadcastEnabled)
   const toggleBroadcastTarget = useSessions((s) => s.toggleBroadcastTarget)
+  const renameSession = useSessions((s) => s.renameSession)
+  const sessionPanels = useSettings((s) => s.sessionPanels)
+  const setSessionPanelCollapsed = useSettings((s) => s.setSessionPanelCollapsed)
   const [snippetId, setSnippetId] = useState('')
+  const [renamingId, setRenamingId] = useState<number | null>(null)
+  const [renamingValue, setRenamingValue] = useState('')
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCommand, setBulkCommand] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -125,6 +132,25 @@ export function SessionsView() {
   const broadcastActiveCount = broadcastTargets.filter((id) => sessions[id]?.status === 'connected').length
   const allBroadcastSelected = connectedSessions.length > 0 && connectedSessions.every((id) => broadcastTargets.includes(id))
 
+  const commitRename = async () => {
+    const id = renamingId
+    const name = renamingValue.trim()
+    setRenamingId(null)
+    if (id === null || !name) return
+    try {
+      await renameSession(id, name)
+      recordAudit('session.rename', name, 'success', '重命名会话标签')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '重命名失败', 'error')
+    }
+  }
+
+  const startRename = (id: number, currentName: string) => {
+    setRenamingId(id)
+    setRenamingValue(currentName)
+    requestAnimationFrame(() => renameInputRef.current?.select())
+  }
+
   if (order.length === 0) {
     return (
       <div className="view">
@@ -163,8 +189,33 @@ export function SessionsView() {
               title={`${info.name} · ${info.host}:${info.port}`}
             >
               <span className={`tab-dot tab-dot-${status}`} />
-              <span className="tab-name">{info.name}</span>
-              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason)}</span>
+              {renamingId === id ? (
+                <input
+                  ref={renameInputRef}
+                  className="glass-input tab-rename-input"
+                  value={renamingValue}
+                  onChange={(event) => setRenamingValue(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void commitRename()
+                    if (event.key === 'Escape') setRenamingId(null)
+                  }}
+                  onBlur={() => void commitRename()}
+                  autoFocus
+                />
+              ) : (
+                <span
+                  className="tab-name"
+                  onDoubleClick={(event) => {
+                    event.stopPropagation()
+                    startRename(id, info.name)
+                  }}
+                  title="双击重命名"
+                >
+                  {info.name}
+                </span>
+              )}
+              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason, info.attempt ?? null)}</span>
               {(status === 'disconnected' || status === 'closed') && (
                 <button
                   className="tab-close"
@@ -264,15 +315,49 @@ export function SessionsView() {
           ))}
         </div>
         {activeId !== null && (
-          <aside className="session-monitor-panel">
-            <SessionMonitorPanel key={activeId} sessionId={activeId} />
-          </aside>
+          sessionPanels.monitorCollapsed ? (
+            <aside className="session-panel-rail">
+              <button
+                className="panel-rail-btn"
+                onClick={() => void setSessionPanelCollapsed('monitor', false)}
+                title="展开监控面板"
+              >
+                <Icon name="monitor" size={15} />
+                <span>监控</span>
+              </button>
+            </aside>
+          ) : (
+            <aside className="session-monitor-panel">
+              <SessionMonitorPanel
+                key={activeId}
+                sessionId={activeId}
+                onCollapse={() => void setSessionPanelCollapsed('monitor', true)}
+              />
+            </aside>
+          )
         )}
       </div>
       {activeId !== null && (
-        <div className="session-sftp-panel">
-          <SessionSftpPanel key={activeId} sessionId={activeId} />
-        </div>
+        sessionPanels.sftpCollapsed ? (
+          <div className="session-sftp-rail">
+            <button
+              className="panel-rail-btn"
+              onClick={() => void setSessionPanelCollapsed('sftp', false)}
+              title="展开 SFTP 面板"
+            >
+              <Icon name="folder" size={15} />
+              <span>SFTP 文件</span>
+            </button>
+          </div>
+        ) : (
+          <div className="session-sftp-panel">
+            <SessionSftpPanel
+              key={activeId}
+              sessionId={activeId}
+              onCollapse={() => void setSessionPanelCollapsed('sftp', true)}
+            />
+          </div>
+        )
       )}
       {bulkOpen && (
         <div className="modal-overlay" onClick={() => !bulkBusy && setBulkOpen(false)}>
@@ -311,7 +396,11 @@ export function SessionsView() {
   )
 }
 
-function statusLabel(status: string, reason?: string | null): string {
+function statusLabel(status: string, reason?: string | null, attempt?: number | null): string {
+  if (status === 'reconnecting' && attempt && attempt > 0) {
+    const interval = attempt === 1 ? 2 : attempt === 2 ? 5 : 10
+    return `第 ${attempt} 次重连 · 间隔 ${interval}s`
+  }
   const text = STATUS_TEXT[status as SessionStatus]
   if ((status === 'disconnected' || status === 'closed' || status === 'reconnecting') && reason) {
     return reason.length > 22 ? `${reason.slice(0, 22)}…` : reason

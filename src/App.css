@@ -2890,6 +2890,91 @@
   }
 }
 
+/* ============ 面板折叠与会话细节 ============ */
+.session-panel-rail,
+.session-sftp-rail {
+  display: flex;
+  align-items: stretch;
+}
+
+.session-sftp-rail {
+  height: 40px;
+}
+
+.panel-rail-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px dashed var(--hairline);
+  border-radius: 10px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.02));
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.panel-rail-btn:hover {
+  color: var(--text-main);
+  border-color: var(--accent-border);
+  background: var(--hover-bg);
+}
+
+.tab-rename-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 180px;
+  height: 24px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.partition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+}
+
+.partition-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) 2fr 44px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.partition-mount {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partition-percent {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-bar-small {
+  height: 5px;
+}
+
+.process-signal {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
 /* ============ 广播输入 ============ */
 .broadcast-bar {
   display: flex;

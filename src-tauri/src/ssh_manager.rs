@@ -74,12 +74,23 @@ pub struct SessionInfo {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PartitionMetric {
+    pub mount_point: String,
+    pub total_kb: u64,
+    pub used_kb: u64,
+    pub available_kb: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerMetrics {
     pub session_id: u64,
     pub hostname: String,
     pub os: String,
     pub cpu_cores: u32,
     pub load_1m: f64,
+    pub cpu_percent: Option<f64>,
+    pub partitions: Vec<PartitionMetric>,
     pub memory_total_kb: u64,
     pub memory_available_kb: u64,
     pub disk_total_kb: u64,
@@ -518,6 +529,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_metrics_partitions_and_cpu_percent() {
+        let payload = b"__SSHOPS_METRICS_V1__\nos=Linux\nhostname=node-1\ncpu_cores=4\nload1=0.42\ncpu_percent=37.5\nmem_total_kb=8000\nmem_available_kb=3000\ndisk_total_kb=100000\ndisk_used_kb=25000\ndisk_available_kb=75000\npartitions=/|100000|25000|75000;/data|500000|100000|400000;/boot/efi|1024|2|1022;\nnetwork_rx_bytes=1\nnetwork_tx_bytes=1\n__SSHOPS_METRICS_END__\n";
+        let metrics = parse_metrics(7, payload).expect("metrics should parse");
+        assert_eq!(metrics.cpu_percent, Some(37.5));
+        assert_eq!(metrics.partitions.len(), 3);
+        assert_eq!(metrics.partitions[0].mount_point, "/");
+        assert_eq!(metrics.partitions[0].used_kb, 25_000);
+        assert_eq!(metrics.partitions[1].mount_point, "/data");
+        assert_eq!(metrics.partitions[2].total_kb, 1024);
+    }
+
+    #[test]
+    fn tolerates_missing_partitions_and_cpu_percent() {
+        let payload = b"__SSHOPS_METRICS_V1__\nos=Linux\nhostname=node-1\ncpu_cores=2\nload1=0.10\nmem_total_kb=1000\nmem_available_kb=500\ndisk_total_kb=1000\ndisk_used_kb=100\ndisk_available_kb=900\nnetwork_rx_bytes=1\nnetwork_tx_bytes=1\n__SSHOPS_METRICS_END__\n";
+        let metrics = parse_metrics(7, payload).expect("metrics should parse");
+        assert_eq!(metrics.cpu_percent, None);
+        assert!(metrics.partitions.is_empty());
+    }
+
+    #[test]
     fn rejects_network_command_injection_targets() {
         assert_eq!(
             validate_network_target("example.internal").unwrap(),
@@ -840,6 +871,52 @@ fn emit_output(sink: &dyn EventSink, id: u64, data: Vec<u8>) {
     );
 }
 
+const REMOTE_DELETE_MAX_DEPTH: usize = 16;
+const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
+
+fn segments_are_empty(path: &str) -> bool {
+    path.split('/').all(|item| item.is_empty())
+}
+
+async fn remove_remote_dir_recursive(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    depth: usize,
+    budget: &mut usize,
+) -> Result<(), String> {
+    if depth > REMOTE_DELETE_MAX_DEPTH {
+        return Err(format!("目录嵌套超过 {REMOTE_DELETE_MAX_DEPTH} 层，已中止删除"));
+    }
+    if *budget == 0 {
+        return Err("目录条目数超过限制（20000），已中止删除".to_string());
+    }
+    let mut entries = sftp
+        .read_dir(path)
+        .await
+        .map_err(|error| format!("读取远程目录失败: {error}"))?;
+    let mut names: Vec<(String, bool)> = Vec::new();
+    while let Some(entry) = entries.next() {
+        if *budget == 0 {
+            return Err("目录条目数超过限制（20000），已中止删除".to_string());
+        }
+        *budget -= 1;
+        names.push((entry.path(), entry.file_type().is_dir()));
+    }
+    for (child_path, is_dir) in names {
+        if is_dir {
+            Box::pin(remove_remote_dir_recursive(sftp, &child_path, depth + 1, budget)).await?;
+            sftp.remove_dir(&child_path)
+                .await
+                .map_err(|error| format!("删除远程目录失败: {error}"))?;
+        } else {
+            sftp.remove_file(&child_path)
+                .await
+                .map_err(|error| format!("删除远程文件失败: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn is_host_key_error(error: &str) -> bool {
     error.contains("Unknown server key")
         || error.contains("Key changed")
@@ -880,7 +957,7 @@ impl ConnectError {
     }
 }
 
-const MONITOR_COMMAND: &str = r#"printf '__SSHOPS_METRICS_V1__\n'; printf 'os='; (uname -s 2>/dev/null || echo unknown); printf 'hostname='; (hostname 2>/dev/null || echo unknown); printf 'cpu_cores='; (getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0); printf 'load1='; (awk '{print $1}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load averages?: ' '{print $2}' | awk '{print $1}' || echo 0); printf 'mem_total_kb='; (awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'mem_available_kb='; (awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || awk '/^MemFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'disk_total_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $2}' || echo 0); printf 'disk_used_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $3}' || echo 0); printf 'disk_available_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0); printf 'network_rx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); rx += $2} END {print rx+0}' /proc/net/dev 2>/dev/null || echo 0); printf 'network_tx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); tx += $10} END {print tx+0}' /proc/net/dev 2>/dev/null || echo 0); printf '__SSHOPS_METRICS_END__\n'"#;
+const MONITOR_COMMAND: &str = r#"printf '__SSHOPS_METRICS_V1__\n'; printf 'os='; (uname -s 2>/dev/null || echo unknown); printf 'hostname='; (hostname 2>/dev/null || echo unknown); printf 'cpu_cores='; (getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0); printf 'load1='; (awk '{print $1}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load averages?: ' '{print $2}' | awk '{print $1}' || echo 0); printf 'cpu_percent='; (st1=$(awk 'NR==1 {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}' /proc/stat 2>/dev/null); sleep 0.4; st2=$(awk 'NR==1 {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}' /proc/stat 2>/dev/null); awk -v a="$st1" -v b="$st2" 'BEGIN{split(a,x," ");split(b,y," ");t=y[1]-x[1];i=y[2]-x[2];if(t<=0){printf "0"}else{p=(t-i)/t*100;printf "%.1f",(p<0?0:(p>100?100:p))}}' 2>/dev/null || echo 0); printf '\n'; printf 'mem_total_kb='; (awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'mem_available_kb='; (awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || awk '/^MemFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'disk_total_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $2}' || echo 0); printf 'disk_used_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $3}' || echo 0); printf 'disk_available_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0); printf 'partitions='; (df -Pk 2>/dev/null | awk 'NR>1 && $1 ~ /^\// {print $6"|"$2"|"$3"|"$4}' | awk '!seen[$1]++' | head -n 8 | tr '\n' ';' || echo); printf '\n'; printf 'network_rx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); rx += $2} END {print rx+0}' /proc/net/dev 2>/dev/null || echo 0); printf 'network_tx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); tx += $10} END {print tx+0}' /proc/net/dev 2>/dev/null || echo 0); printf '__SSHOPS_METRICS_END__\n'"#;
 const PROCESS_COMMAND: &str = "ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null | head -n 31";
 
 fn parse_metric_u64(values: &HashMap<String, String>, key: &str) -> Result<u64, String> {
@@ -890,6 +967,30 @@ fn parse_metric_u64(values: &HashMap<String, String>, key: &str) -> Result<u64, 
         .trim()
         .parse::<u64>()
         .map_err(|_| format!("远程监控指标无效: {key}"))
+}
+
+fn parse_partitions(raw: Option<&str>) -> Vec<PartitionMetric> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    raw.split(';')
+        .filter_map(|entry| {
+            let mut parts = entry.split('|');
+            let mount_point = parts.next()?.trim().to_string();
+            if mount_point.is_empty() {
+                return None;
+            }
+            let total_kb = parts.next()?.trim().parse::<u64>().unwrap_or(0);
+            let used_kb = parts.next()?.trim().parse::<u64>().unwrap_or(0);
+            let available_kb = parts.next()?.trim().parse::<u64>().unwrap_or(0);
+            Some(PartitionMetric {
+                mount_point,
+                total_kb,
+                used_kb,
+                available_kb,
+            })
+        })
+        .collect()
 }
 
 fn parse_metrics(session_id: u64, output: &[u8]) -> Result<ServerMetrics, String> {
@@ -920,12 +1021,19 @@ fn parse_metrics(session_id: u64, output: &[u8]) -> Result<ServerMetrics, String
         .get("os")
         .cloned()
         .unwrap_or_else(|| "unknown".to_string());
+    let cpu_percent = values
+        .get("cpu_percent")
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .map(|percent| percent.clamp(0.0, 100.0));
+    let partitions = parse_partitions(values.get("partitions").map(String::as_str));
     Ok(ServerMetrics {
         session_id,
         hostname,
         os,
         cpu_cores: parse_metric_u64(&values, "cpu_cores")?.clamp(1, u32::MAX as u64) as u32,
         load_1m,
+        cpu_percent,
+        partitions,
         memory_total_kb: parse_metric_u64(&values, "mem_total_kb")?,
         memory_available_kb: parse_metric_u64(&values, "mem_available_kb")?,
         disk_total_kb: parse_metric_u64(&values, "disk_total_kb")?,
@@ -1416,16 +1524,21 @@ impl SshManager {
         ))
     }
 
-    pub async fn kill_process(&self, id: u64, pid: u32) -> Result<(), String> {
+    pub async fn kill_process(&self, id: u64, pid: u32, signal: &str) -> Result<(), String> {
         if pid == 0 || pid > 4_194_304 {
             return Err("进程号无效".to_string());
         }
+        let signal = match signal.to_ascii_uppercase().as_str() {
+            "TERM" => "TERM",
+            "KILL" => "KILL",
+            _ => return Err("不支持的终止信号，仅允许 TERM 或 KILL".to_string()),
+        };
         let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
             .ok_or_else(|| "会话尚未连接".to_string())?;
-        let command = format!("kill -TERM {pid}");
+        let command = format!("kill -{signal} {pid}");
         exec_command(connection, &command).await.map(|_| ())
     }
 
@@ -1906,6 +2019,25 @@ impl SshManager {
         sftp.create_dir(&path)
             .await
             .map_err(|error| format!("创建远程目录失败: {error}"))?;
+        sftp.close()
+            .await
+            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+    }
+
+    /// 递归删除远程目录及其全部内容。拒绝根目录，限制递归深度与条目总数，
+    /// 防止在超大目录树上失控；调用方必须先经过强确认流程。
+    pub async fn sftp_remove_dir(&self, id: u64, path: String) -> Result<(), String> {
+        let path = validate_sftp_path(path)?;
+        let normalized = path.trim_end_matches('/');
+        if normalized.is_empty() || segments_are_empty(normalized) {
+            return Err("拒绝删除根目录".to_string());
+        }
+        let sftp = self.open_sftp_channel(id).await?;
+        let mut budget = REMOTE_DELETE_ENTRY_BUDGET;
+        remove_remote_dir_recursive(&sftp, &path, 0, &mut budget).await?;
+        sftp.remove_dir(&path)
+            .await
+            .map_err(|error| format!("删除远程目录失败: {error}"))?;
         sftp.close()
             .await
             .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
