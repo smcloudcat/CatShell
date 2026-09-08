@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use russh::keys::*;
 use russh::server::{self, Msg as ServerMsg, Server as _};
 use russh::{Channel, ChannelId};
@@ -39,12 +41,10 @@ impl EventSink for TestSink {
             }
         }
         if name == "session-output" {
-            if let Some(data) = payload["data"].as_array() {
-                let bytes: Vec<u8> = data
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as u8))
-                    .collect();
-                self.output.lock().unwrap().extend_from_slice(&bytes);
+            if let Some(data) = payload["data"].as_str() {
+                if let Ok(bytes) = BASE64_STANDARD.decode(data) {
+                    self.output.lock().unwrap().extend_from_slice(&bytes);
+                }
             }
         }
         self.events
@@ -309,6 +309,55 @@ async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
     assert!(
         statuses.contains(&"closed"),
         "session should close after auth failure, got: {statuses:?}"
+    );
+    assert!(
+        !statuses.contains(&"connected"),
+        "must never connect with wrong password, got: {statuses:?}"
+    );
+    server_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auth_failure_does_not_retry_with_auto_reconnect() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let port = rx.await.unwrap();
+
+    let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
+        "auth-no-retry",
+        port,
+    )));
+    let sink = Arc::new(TestSink::new());
+    let mut req = connect_req(port, true);
+    req.password = Some("wrong-password".to_string());
+    let id = manager
+        .create(manager.clone(), sink.clone(), req)
+        .await
+        .expect("create should not fail");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        accept_pending_host_key(&manager, &sink).await;
+        if sink.closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let events = sink.events.lock().unwrap();
+    let statuses: Vec<&str> = events
+        .iter()
+        .filter(|(n, _)| n == "session-status")
+        .filter_map(|(_, p)| p["status"].as_str())
+        .collect();
+    let _ = id;
+    assert!(
+        statuses.contains(&"closed"),
+        "session should close after auth failure, got: {statuses:?}"
+    );
+    assert!(
+        !statuses.contains(&"reconnecting"),
+        "auth failure with auto_reconnect must not emit reconnecting status, got: {statuses:?}"
     );
     assert!(
         !statuses.contains(&"connected"),

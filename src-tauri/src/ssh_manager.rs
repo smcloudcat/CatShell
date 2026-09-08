@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{client, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
@@ -18,10 +20,18 @@ pub trait EventSink: Send + Sync + 'static {
 }
 
 const MAX_RECONNECT_ATTEMPTS: u32 = 3;
-const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MANUAL_POLL_INTERVAL: Duration = Duration::from_millis(800);
 const HOST_KEY_CONFIRM_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_SFTP_FILE_SIZE: usize = 64 * 1024 * 1024;
+
+fn reconnect_delay(attempt: u32) -> Duration {
+    match attempt {
+        1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(10),
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,7 +157,7 @@ struct StatusPayload {
 #[serde(rename_all = "camelCase")]
 struct OutputPayload {
     id: u64,
-    data: Vec<u8>,
+    data: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -486,7 +496,10 @@ fn emit_status(sink: &dyn EventSink, id: u64, status: &str, reason: Option<Strin
 }
 
 fn emit_output(sink: &dyn EventSink, id: u64, data: Vec<u8>) {
-    let payload = OutputPayload { id, data };
+    let payload = OutputPayload {
+        id,
+        data: BASE64_STANDARD.encode(&data),
+    };
     sink.emit(
         "session-output",
         serde_json::to_value(payload).unwrap_or_default(),
@@ -497,6 +510,40 @@ fn is_host_key_error(error: &str) -> bool {
     error.contains("Unknown server key")
         || error.contains("Key changed")
         || error.contains("主机密钥")
+}
+
+#[derive(Debug)]
+struct ConnectError {
+    message: String,
+    permanent: bool,
+    host_key: bool,
+}
+
+impl ConnectError {
+    fn transient(message: impl Into<String>) -> Self {
+        ConnectError {
+            message: message.into(),
+            permanent: false,
+            host_key: false,
+        }
+    }
+
+    fn permanent(message: impl Into<String>) -> Self {
+        ConnectError {
+            message: message.into(),
+            permanent: true,
+            host_key: false,
+        }
+    }
+
+    fn from_connect(message: String) -> Self {
+        let host_key = is_host_key_error(&message);
+        ConnectError {
+            message,
+            permanent: false,
+            host_key,
+        }
+    }
 }
 
 const MONITOR_COMMAND: &str = r#"printf '__SSHOPS_METRICS_V1__\n'; printf 'os='; (uname -s 2>/dev/null || echo unknown); printf 'hostname='; (hostname 2>/dev/null || echo unknown); printf 'cpu_cores='; (getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0); printf 'load1='; (awk '{print $1}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load averages?: ' '{print $2}' | awk '{print $1}' || echo 0); printf 'mem_total_kb='; (awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'mem_available_kb='; (awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || awk '/^MemFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'disk_total_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $2}' || echo 0); printf 'disk_used_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $3}' || echo 0); printf 'disk_available_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0); printf 'network_rx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); rx += $2} END {print rx+0}' /proc/net/dev 2>/dev/null || echo 0); printf 'network_tx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); tx += $10} END {print tx+0}' /proc/net/dev 2>/dev/null || echo 0); printf '__SSHOPS_METRICS_END__\n'"#;
@@ -641,7 +688,7 @@ async fn open_shell(
         ChannelReadHalf,
         ChannelWriteHalf<russh::client::Msg>,
     ),
-    String,
+    ConnectError,
 > {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(creds.keepalive.clamp(5, 300))),
@@ -657,9 +704,13 @@ async fn open_shell(
         session_id,
         remote_routes,
     };
-    let mut session = client::connect(config, (creds.host.as_str(), creds.port), handler)
-        .await
-        .map_err(|e| format!("连接失败: {e}"))?;
+    let mut session = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        client::connect(config, (creds.host.as_str(), creds.port), handler),
+    )
+    .await
+    .map_err(|_| ConnectError::transient(format!("连接超时：{} 秒内未能与服务器建立连接", CONNECT_TIMEOUT.as_secs())))?
+    .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
 
     let username = creds.username.clone();
     match creds.auth_method.as_str() {
@@ -667,26 +718,28 @@ async fn open_shell(
             let password = creds
                 .password
                 .clone()
-                .ok_or_else(|| "未提供登录密码".to_string())?;
+                .ok_or_else(|| ConnectError::permanent("未提供登录密码"))?;
             let result = session
                 .authenticate_password(username, password)
                 .await
-                .map_err(|e| format!("认证请求失败: {e}"))?;
+                .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
             if !result.success() {
-                return Err("认证失败：密码不正确或该账户不可用".to_string());
+                return Err(ConnectError::permanent(
+                    "认证失败：密码不正确或该账户不可用",
+                ));
             }
         }
         "key" => {
             let key_path = creds
                 .key_path
                 .clone()
-                .ok_or_else(|| "未选择私钥文件".to_string())?;
+                .ok_or_else(|| ConnectError::permanent("未选择私钥文件"))?;
             let key_pair = load_secret_key(&key_path, creds.passphrase.as_deref())
-                .map_err(|e| format!("私钥加载失败: {e}"))?;
+                .map_err(|e| ConnectError::permanent(format!("私钥加载失败: {e}")))?;
             let rsa_hash = session
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|e| format!("RSA 算法协商失败: {e}"))?
+                .map_err(|e| ConnectError::transient(format!("RSA 算法协商失败: {e}")))?
                 .flatten();
             let result = session
                 .authenticate_publickey(
@@ -694,33 +747,39 @@ async fn open_shell(
                     PrivateKeyWithHashAlg::new(Arc::new(key_pair), rsa_hash),
                 )
                 .await
-                .map_err(|e| format!("认证请求失败: {e}"))?;
+                .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
             if !result.success() {
-                return Err("认证失败：请检查私钥与口令是否与账户匹配".to_string());
+                return Err(ConnectError::permanent(
+                    "认证失败：请检查私钥与口令是否与账户匹配",
+                ));
             }
         }
         "keyboard-interactive" => {
             let otp = creds
                 .otp_secret
                 .clone()
-                .ok_or_else(|| "未提供一次性验证码".to_string())?;
+                .ok_or_else(|| ConnectError::permanent("未提供一次性验证码"))?;
             let password = creds.password.clone().unwrap_or_default();
             let mut response = session
                 .authenticate_keyboard_interactive_start(username, None::<String>)
                 .await
-                .map_err(|e| format!("认证请求失败: {e}"))?;
+                .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
             let mut rounds = 0;
             loop {
                 match response {
                     russh::client::KeyboardInteractiveAuthResponse::Success => break,
                     russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
-                        return Err("认证失败：一次性验证码不正确或该账户不可用".to_string())
+                        return Err(ConnectError::permanent(
+                            "认证失败：一次性验证码不正确或该账户不可用",
+                        ))
                     }
                     russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
                         prompts, ..
                     } => {
                         if prompts.is_empty() || prompts.len() > 8 || rounds >= 4 {
-                            return Err("认证失败：服务器返回了不支持的交互式认证提示".to_string());
+                            return Err(ConnectError::permanent(
+                                "认证失败：服务器返回了不支持的交互式认证提示",
+                            ));
                         }
                         response = session
                             .authenticate_keyboard_interactive_respond(
@@ -728,7 +787,15 @@ async fn open_shell(
                                     .into_iter()
                                     .map(|prompt| {
                                         let text = prompt.prompt.to_ascii_lowercase();
-                                        if text.contains("password") || text.contains("密码") {
+                                        let otp_prompt = text.contains("otp")
+                                            || text.contains("code")
+                                            || text.contains("token")
+                                            || text.contains("passcode")
+                                            || text.contains("验证")
+                                            || text.contains("动态口令");
+                                        if otp_prompt {
+                                            otp.clone()
+                                        } else if text.contains("password") || text.contains("密码") {
                                             password.clone()
                                         } else {
                                             otp.clone()
@@ -737,27 +804,27 @@ async fn open_shell(
                                     .collect(),
                             )
                             .await
-                            .map_err(|e| format!("认证请求失败: {e}"))?;
+                            .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
                         rounds += 1;
                     }
                 }
             }
         }
-        other => return Err(format!("不支持的认证方式: {other}")),
+        other => return Err(ConnectError::permanent(format!("不支持的认证方式: {other}"))),
     }
 
     let channel = session
         .channel_open_session()
         .await
-        .map_err(|e| format!("打开会话通道失败: {e}"))?;
+        .map_err(|e| ConnectError::transient(format!("打开会话通道失败: {e}")))?;
     channel
         .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
         .await
-        .map_err(|e| format!("申请终端失败: {e}"))?;
+        .map_err(|e| ConnectError::transient(format!("申请终端失败: {e}")))?;
     channel
         .request_shell(false)
         .await
-        .map_err(|e| format!("打开远程 Shell 失败: {e}"))?;
+        .map_err(|e| ConnectError::transient(format!("打开远程 Shell 失败: {e}")))?;
 
     let (read_half, write_half) = channel.split();
     Ok((session, read_half, write_half))
@@ -817,34 +884,36 @@ async fn run_session(
         .await
         {
             Err(err) => {
+                let reason = err.message.clone();
                 emit_status(
                     sink.as_ref(),
                     id,
                     "disconnected",
-                    Some(err.clone()),
+                    Some(reason.clone()),
                     attempt,
                 );
                 if !creds.auto_reconnect
                     || session.manual_closed.load(Ordering::SeqCst)
-                    || is_host_key_error(&err)
+                    || err.host_key
+                    || err.permanent
                     || attempt >= MAX_RECONNECT_ATTEMPTS
                 {
-                    break 'outer Some(err);
+                    break 'outer Some(reason);
                 }
                 attempt += 1;
-                tokio::time::sleep(RECONNECT_DELAY).await;
+                tokio::time::sleep(reconnect_delay(attempt)).await;
             }
             Ok((conn, read_half, write_half)) => {
                 attempt = 0;
                 let mut conn = conn;
                 if let Err(error) = manager.restore_remote_forwards(id, &mut conn).await {
                     emit_status(sink.as_ref(), id, "disconnected", Some(error), attempt);
-                    if session.manual_closed.load(Ordering::SeqCst) || !creds.auto_reconnect {
-                        break 'outer Some("远程端口转发恢复失败".to_string());
-                    }
-                    attempt += 1;
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                    continue;
+                if session.manual_closed.load(Ordering::SeqCst) || !creds.auto_reconnect {
+                    break 'outer Some("远程端口转发恢复失败".to_string());
+                }
+                attempt += 1;
+                tokio::time::sleep(reconnect_delay(attempt)).await;
+                continue;
                 }
                 emit_status(sink.as_ref(), id, "connected", None, 0);
                 {
@@ -873,7 +942,8 @@ async fn run_session(
                 if attempt >= MAX_RECONNECT_ATTEMPTS {
                     break 'outer Some(reason);
                 }
-                tokio::time::sleep(RECONNECT_DELAY).await;
+                attempt += 1;
+                tokio::time::sleep(reconnect_delay(attempt)).await;
             }
         }
     };
@@ -892,6 +962,15 @@ impl SshManager {
             known_hosts_path: Some(path),
             ..Self::default()
         }
+    }
+
+    async fn session_ref(&self, id: u64) -> Result<Arc<ActiveSession>, String> {
+        self.sessions
+            .lock()
+            .await
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "会话不存在".to_string())
     }
 
     pub async fn confirm_host_key(&self, token: String, accepted: bool) -> Result<(), String> {
@@ -961,8 +1040,7 @@ impl SshManager {
     }
 
     pub async fn write(&self, id: u64, data: Vec<u8>) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut write_lock = session.write.lock().await;
         let half = write_lock
             .as_mut()
@@ -973,8 +1051,7 @@ impl SshManager {
     }
 
     pub async fn monitor(&self, id: u64) -> Result<ServerMetrics, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -995,8 +1072,7 @@ impl SshManager {
     }
 
     pub async fn list_processes(&self, id: u64) -> Result<Vec<ProcessInfo>, String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1010,8 +1086,7 @@ impl SshManager {
         if pid == 0 || pid > 4_194_304 {
             return Err("进程号无效".to_string());
         }
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1036,8 +1111,7 @@ impl SshManager {
         } else {
             format!("(tracepath -m 12 -w 2 {target} || traceroute -m 12 -w 2 {target} || ping -c 1 -W 2 {target}) 2>&1")
         };
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1070,10 +1144,7 @@ impl SshManager {
             return Err("目标端口无效".to_string());
         }
         {
-            let sessions = self.sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| "会话不存在".to_string())?;
+            let session = self.session_ref(session_id).await?;
             if session.conn.lock().await.is_none() {
                 return Err("会话尚未连接".to_string());
             }
@@ -1109,8 +1180,7 @@ impl SshManager {
                 let target_host = target_host.clone();
                 tokio::spawn(async move {
                     let channel = {
-                        let sessions = manager.sessions.lock().await;
-                        let Some(session) = sessions.get(&session_id) else {
+                        let Ok(session) = manager.session_ref(session_id).await else {
                             return;
                         };
                         let mut connection = session.conn.lock().await;
@@ -1157,11 +1227,8 @@ impl SshManager {
         if target_port == 0 {
             return Err("目标端口无效".to_string());
         }
+        let session = self.session_ref(session_id).await?;
         let actual_port = {
-            let sessions = self.sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| "会话不存在".to_string())?;
             let mut connection = session.conn.lock().await;
             let connection = connection
                 .as_mut()
@@ -1219,10 +1286,7 @@ impl SshManager {
             return Err("动态转发只允许绑定回环地址".to_string());
         }
         {
-            let sessions = self.sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| "会话不存在".to_string())?;
+            let session = self.session_ref(session_id).await?;
             if session.conn.lock().await.is_none() {
                 return Err("会话尚未连接".to_string());
             }
@@ -1271,8 +1335,7 @@ impl SshManager {
                         }
                     };
                     let channel = {
-                        let sessions = manager.sessions.lock().await;
-                        let Some(session) = sessions.get(&session_id) else {
+                        let Ok(session) = manager.session_ref(session_id).await else {
                             write_socks_reply(&mut local, 0x01).await;
                             return;
                         };
@@ -1326,8 +1389,8 @@ impl SshManager {
             .remove(&id)
             .ok_or_else(|| "端口转发不存在".to_string())?;
         let cancel_result = {
-            let sessions = self.sessions.lock().await;
-            if let Some(session) = sessions.get(&remote.session_id) {
+            let session = self.session_ref(remote.session_id).await.ok();
+            if let Some(session) = session {
                 let mut connection = session.conn.lock().await;
                 if let Some(connection) = connection.as_mut() {
                     Some(
@@ -1419,8 +1482,7 @@ impl SshManager {
         } else {
             path
         };
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1470,8 +1532,7 @@ impl SshManager {
 
     pub async fn sftp_read_file(&self, id: u64, path: String) -> Result<Vec<u8>, String> {
         let path = validate_sftp_path(path)?;
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1509,8 +1570,7 @@ impl SshManager {
         if data.len() > MAX_SFTP_FILE_SIZE {
             return Err("文件超过 64 MB 上传限制".to_string());
         }
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1543,8 +1603,7 @@ impl SshManager {
 
     pub async fn sftp_remove_file(&self, id: u64, path: String) -> Result<(), String> {
         let path = validate_sftp_path(path)?;
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;
         let connection = connection
             .as_mut()
@@ -1569,8 +1628,7 @@ impl SshManager {
     }
 
     pub async fn resize(&self, id: u64, cols: u32, rows: u32) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&id).ok_or_else(|| "会话不存在".to_string())?;
+        let session = self.session_ref(id).await?;
         let mut write_lock = session.write.lock().await;
         if let Some(half) = write_lock.as_mut() {
             half.window_change(cols.clamp(2, 500), rows.clamp(2, 500), 0, 0)
@@ -1582,8 +1640,7 @@ impl SshManager {
 
     pub async fn disconnect(&self, sink: Arc<dyn EventSink>, id: u64) {
         self.stop_forwards_for_session(id).await;
-        let sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(&id) {
+        if let Ok(session) = self.session_ref(id).await {
             session.manual_closed.store(true, Ordering::SeqCst);
             if let Some(half) = session.write.lock().await.as_mut() {
                 let _ = half.close().await;
@@ -1594,11 +1651,10 @@ impl SshManager {
 
     pub async fn remove(&self, id: u64) {
         self.stop_forwards_for_session(id).await;
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(&id) {
+        if let Ok(session) = self.session_ref(id).await {
             session.manual_closed.store(true, Ordering::SeqCst);
         }
-        sessions.remove(&id);
+        self.sessions.lock().await.remove(&id);
     }
 }
 

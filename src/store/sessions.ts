@@ -25,10 +25,12 @@ interface SessionsState {
   order: number[]
   activeId: number | null
   terminals: Record<number, TerminalRef>
+  requests: Record<number, ConnectRequest>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
   init: () => Promise<void>
   open: (request: ConnectRequest) => Promise<number>
+  reconnect: (id: number) => Promise<number>
   write: (id: number, data: Uint8Array) => Promise<void>
   resize: (id: number, cols: number, rows: number) => void
   disconnect: (id: number) => Promise<void>
@@ -97,6 +99,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   order: [],
   activeId: null,
   terminals: {},
+  requests: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
   init: async () => {
@@ -119,10 +122,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
       set({ sessions, order, ready: true, activeId: order[0] ?? null })
       await subscribeSshEvents({
         onStatus: (event) => get().updateStatus(event),
-        onOutput: (event) => {
-          appendSessionLog(event.id, new Uint8Array(event.data))
-          const term = get().terminals[event.id]
-          if (term) term.write(new Uint8Array(event.data))
+        onOutput: (id, data) => {
+          appendSessionLog(id, data)
+          const term = get().terminals[id]
+          if (term) term.write(data)
         },
         onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
         ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
@@ -154,6 +157,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
     }
     const updated: SessionInfo = { ...info, status: event.status, reason: event.reason }
     set({ sessions: { ...sessions, [event.id]: updated } })
+    const prompt = get().hostKeyPrompt
+    if (
+      (event.status === 'disconnected' || event.status === 'closed') &&
+      prompt &&
+      prompt.host === info.host &&
+      prompt.port === info.port
+    ) {
+      set({ hostKeyPrompt: null })
+    }
     if (info && (event.status === 'connected' || event.status === 'disconnected' || event.status === 'closed')) {
       recordAudit('session.status', `${info.name} (${info.host}:${info.port})`, event.status === 'connected' ? 'success' : 'info', event.reason ?? event.status)
     }
@@ -182,6 +194,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return {
         order,
         activeId: id,
+        requests: { ...s.requests, [id]: request },
         sessions: {
           ...s.sessions,
           [id]: {
@@ -197,6 +210,33 @@ export const useSessions = create<SessionsState>((set, get) => ({
       }
     })
     return id
+  },
+  reconnect: async (id) => {
+    const request = get().requests[id]
+    const info = get().sessions[id]
+    if (!request || !info) throw new Error('该会话缺少可复用的连接参数，请从主机页重新连接')
+    const newId = await sshConnect(request)
+    recordAudit('session.connect', `${info.name} (${info.host}:${info.port})`, 'info', '从已断开标签重新连接')
+    set((s) => {
+      const sessions = { ...s.sessions }
+      const requests = { ...s.requests }
+      const terminals = { ...s.terminals }
+      delete sessions[id]
+      delete requests[id]
+      delete terminals[id]
+      sessions[newId] = {
+        id: newId,
+        name: info.name,
+        host: info.host,
+        port: info.port,
+        username: info.username,
+        status: 'connecting'
+      }
+      const order = [...new Set(s.order.map((item) => (item === id ? newId : item)))]
+      const activeId = s.activeId === id ? newId : s.activeId
+      return { sessions, requests, order, terminals, activeId }
+    })
+    return newId
   },
   write: async (id: number, data: Uint8Array) => {
     await sshWrite(id, data)
@@ -219,12 +259,14 @@ export const useSessions = create<SessionsState>((set, get) => ({
     clearSessionLog(id)
     set((s) => {
       const sessions = { ...s.sessions }
+      const requests = { ...s.requests }
       delete sessions[id]
+      delete requests[id]
       const order = s.order.filter((x) => x !== id)
       const terminals = { ...s.terminals }
       delete terminals[id]
       const activeId = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
-      return { sessions, order, terminals, activeId }
+      return { sessions, requests, order, terminals, activeId }
     })
   },
   setActive: (id) => set({ activeId: id }),

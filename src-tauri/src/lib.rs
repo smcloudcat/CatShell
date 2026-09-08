@@ -2,6 +2,8 @@ pub mod ssh_manager;
 
 use std::sync::Arc;
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use ssh_manager::{
     ConnectRequest, EventSink, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics,
     SessionInfo, SftpEntry, SshManager,
@@ -28,6 +30,12 @@ impl EventSink for AppEventSink {
     }
 }
 
+fn decode_base64_payload(data: &str) -> Result<Vec<u8>, String> {
+    BASE64_STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| "二进制数据解码失败".to_string())
+}
+
 #[tauri::command]
 async fn ssh_connect(
     app: AppHandle,
@@ -39,7 +47,8 @@ async fn ssh_connect(
 }
 
 #[tauri::command]
-async fn ssh_write(state: State<'_, AppState>, id: u64, data: Vec<u8>) -> Result<(), String> {
+async fn ssh_write(state: State<'_, AppState>, id: u64, data: String) -> Result<(), String> {
+    let data = decode_base64_payload(&data)?;
     state.ssh.write(id, data).await
 }
 
@@ -170,8 +179,9 @@ async fn sftp_read_file(
     state: State<'_, AppState>,
     id: u64,
     path: String,
-) -> Result<Vec<u8>, String> {
-    state.ssh.sftp_read_file(id, path).await
+) -> Result<String, String> {
+    let data = state.ssh.sftp_read_file(id, path).await?;
+    Ok(BASE64_STANDARD.encode(data))
 }
 
 #[tauri::command]
@@ -179,8 +189,9 @@ async fn sftp_write_file(
     state: State<'_, AppState>,
     id: u64,
     path: String,
-    data: Vec<u8>,
+    data: String,
 ) -> Result<(), String> {
+    let data = decode_base64_payload(&data)?;
     state.ssh.sftp_write_file(id, path, data).await
 }
 

@@ -607,6 +607,7 @@ dependencies = [
 name = "catshell"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "rand 0.10.2",
  "russh",

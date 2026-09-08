@@ -2,12 +2,31 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { ConnectRequest, HostKeyPrompt, HostKeyWarning, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SessionOutputEvent, SessionStatusEvent, SftpEntry } from '../types/session'
 
+const BASE64_CHUNK = 0x8000
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + BASE64_CHUNK))
+  }
+  return btoa(binary)
+}
+
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
 export async function sshConnect(request: ConnectRequest): Promise<number> {
   return invoke<number>('ssh_connect', { request })
 }
 
 export async function sshWrite(id: number, data: Uint8Array): Promise<void> {
-  await invoke('ssh_write', { id, data: Array.from(data) })
+  await invoke('ssh_write', { id, data: bytesToBase64(data) })
 }
 
 export async function sshResize(id: number, cols: number, rows: number): Promise<void> {
@@ -99,12 +118,12 @@ export async function sftpList(id: number, path: string): Promise<SftpEntry[]> {
 }
 
 export async function sftpReadFile(id: number, path: string): Promise<Uint8Array> {
-  const data = await invoke<number[]>('sftp_read_file', { id, path })
-  return new Uint8Array(data)
+  const data = await invoke<string>('sftp_read_file', { id, path })
+  return base64ToBytes(data)
 }
 
 export async function sftpWriteFile(id: number, path: string, data: Uint8Array): Promise<void> {
-  await invoke('sftp_write_file', { id, path, data: Array.from(data) })
+  await invoke('sftp_write_file', { id, path, data: bytesToBase64(data) })
 }
 
 export async function sftpRemoveFile(id: number, path: string): Promise<void> {
@@ -117,7 +136,7 @@ export async function sshConfirmHostKey(token: string, accepted: boolean): Promi
 
 export interface SshEventHandlers {
   onStatus: (event: SessionStatusEvent) => void
-  onOutput: (event: SessionOutputEvent) => void
+  onOutput: (id: number, data: Uint8Array) => void
   onHostKeyPrompt?: (event: HostKeyPrompt) => void
   onHostKeyWarning?: (event: HostKeyWarning) => void
 }
@@ -125,7 +144,11 @@ export interface SshEventHandlers {
 export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => Promise<void>> {
   const unlisteners: UnlistenFn[] = []
   unlisteners.push(await listen<SessionStatusEvent>('session-status', (e) => handlers.onStatus(e.payload)))
-  unlisteners.push(await listen<SessionOutputEvent>('session-output', (e) => handlers.onOutput(e.payload)))
+  unlisteners.push(
+    await listen<SessionOutputEvent>('session-output', (e) => {
+      handlers.onOutput(e.payload.id, base64ToBytes(e.payload.data))
+    })
+  )
   if (handlers.onHostKeyPrompt) {
     unlisteners.push(await listen<HostKeyPrompt>('host-key-prompt', (e) => handlers.onHostKeyPrompt?.(e.payload)))
   }

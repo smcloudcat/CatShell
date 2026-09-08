@@ -25,7 +25,7 @@ export interface SessionStatusEvent {
 
 export interface SessionOutputEvent {
   id: number
-  data: number[]
+  data: string
 }
 
 export interface HostKeyPrompt {
