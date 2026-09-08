@@ -66,6 +66,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
   const openSession = useSessions((s) => s.open)
   const upsertHost = useHosts((s) => s.upsert)
   const vaultUnlocked = useVault((s) => s.unlocked)
+  const vaultConfigured = useVault((s) => s.configured)
   const getCredential = useVault((s) => s.getCredential)
   const saveCredential = useVault((s) => s.saveCredential)
 
@@ -404,6 +405,17 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               />
             </label>
           </div>
+          {((form.authMethod === 'password' && form.password) ||
+            (form.authMethod === 'key' && form.passphrase)) &&
+            (vaultConfigured ? (
+              vaultUnlocked ? (
+                <div className="section-tip">连接成功后将自动加密保存当前凭据，下次可直接从主机列表一键连接。</div>
+              ) : (
+                <div className="section-tip">凭据保险箱当前已锁定，请在「设置 → 凭据保险箱」解锁后才能自动保存凭据。</div>
+              )
+            ) : (
+              <div className="section-tip">密码与私钥口令不会写入主机配置文件。如需自动保存并在下次连接时复用，请在「设置 → 凭据保险箱」设置主密码。</div>
+            ))}
           {error && <div className="form-error">{error}</div>}
         </div>
         <footer className="modal-footer">

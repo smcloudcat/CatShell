@@ -15,6 +15,7 @@ export type IconName =
   | 'link'
   | 'key'
   | 'chevron-down'
+  | 'upload'
 
 const paths: Record<IconName, React.ReactNode> = {
   home: (
@@ -102,7 +103,13 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="m10.8 12.2 8.7-8.7M15 8l3 3M17.5 5.5 20 8" />
     </>
   ),
-  'chevron-down': <path d="m6 9 6 6 6-6" />
+  'chevron-down': <path d="m6 9 6 6 6-6" />,
+  upload: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m17 8-5-5-5 5M12 3v12" />
+    </>
+  )
 }
 
 interface IconProps {

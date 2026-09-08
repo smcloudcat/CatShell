@@ -148,7 +148,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
             reason: event.reason
           }
         },
-        order: [...s.order, event.id]
+        order: s.order.includes(event.id) ? s.order : [...s.order, event.id]
       }))
       return
     }
@@ -176,21 +176,26 @@ export const useSessions = create<SessionsState>((set, get) => ({
       throw error
     }
     recordAudit('session.connect', `${request.name} (${request.host}:${request.port})`, 'info', '已提交连接请求')
-    set((s) => ({
-      order: [...s.order, id],
-      activeId: id,
-      sessions: {
-        ...s.sessions,
-        [id]: {
-          id,
-          name: request.name || `${request.username}@${request.host}`,
-          host: request.host,
-          port: request.port,
-          username: request.username,
-          status: 'connecting'
+    set((s) => {
+      const existing = s.sessions[id]
+      const order = s.order.includes(id) ? s.order : [...s.order, id]
+      return {
+        order,
+        activeId: id,
+        sessions: {
+          ...s.sessions,
+          [id]: {
+            id,
+            name: existing?.name || request.name || `${request.username}@${request.host}`,
+            host: existing?.host || request.host,
+            port: existing?.port ?? request.port,
+            username: existing?.username || request.username,
+            status: existing?.status ?? 'connecting',
+            reason: existing?.reason ?? undefined
+          }
         }
       }
-    }))
+    })
     return id
   },
   write: async (id: number, data: Uint8Array) => {

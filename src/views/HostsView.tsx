@@ -3,7 +3,9 @@ import { Icon } from '../components/Icon'
 import { ConnectDialog } from './hosts/ConnectDialog'
 import { useSessions } from '../store/sessions'
 import { useHosts } from '../store/hosts'
+import { useVault } from '../store/vault'
 import { HostProfile } from '../types/host'
+import { ConnectRequest } from '../types/session'
 import { recordAudit } from '../store/audit'
 
 interface Props {
@@ -18,6 +20,9 @@ export function HostsView({ onOpenSessions }: Props) {
   const hosts = useHosts((s) => s.hosts)
   const removeHost = useHosts((s) => s.remove)
   const importProfiles = useHosts((s) => s.importProfiles)
+  const openSession = useSessions((s) => s.open)
+  const vaultUnlocked = useVault((s) => s.unlocked)
+  const getCredential = useVault((s) => s.getCredential)
 
   useEffect(() => {
     void useHosts.getState().init()
@@ -39,6 +44,43 @@ export function HostsView({ onOpenSessions }: Props) {
   const openEdit = (host: HostProfile) => {
     setEditingHost(host)
     setDialogOpen(true)
+  }
+
+  const reconnect = async (host: HostProfile) => {
+    const credential = vaultUnlocked ? getCredential(host.id) : null
+    const hasAuth =
+      host.authMethod === 'key'
+        ? Boolean(host.keyPath)
+        : host.authMethod === 'password'
+          ? Boolean(credential?.password)
+          : false
+    if (!hasAuth) {
+      setEditingHost(host)
+      setDialogOpen(true)
+      return
+    }
+    const request: ConnectRequest = {
+      name: host.name,
+      host: host.host,
+      port: host.port,
+      username: host.username,
+      authMethod: host.authMethod,
+      password: host.authMethod === 'password' ? (credential?.password ?? null) : null,
+      keyPath: host.authMethod === 'key' ? host.keyPath ?? null : null,
+      passphrase: host.authMethod === 'key' ? (credential?.passphrase ?? null) : null,
+      otpSecret: null,
+      keepalive: host.keepAliveInterval,
+      autoReconnect: host.autoReconnect
+    }
+    try {
+      await openSession(request)
+      recordAudit('session.connect', `${host.name} (${host.host}:${host.port})`, 'success', '从主机列表快速连接')
+      onOpenSessions()
+    } catch (err) {
+      recordAudit('session.connect', `${host.name} (${host.host}:${host.port})`, 'failure', '快速连接失败，打开连接对话框')
+      setEditingHost(host)
+      setDialogOpen(true)
+    }
   }
 
   const exportHosts = () => {
@@ -79,24 +121,15 @@ export function HostsView({ onOpenSessions }: Props) {
       <header className="view-header">
         <div>
           <div className="view-title">主机</div>
-          <div className="view-subtitle">管理你的服务器连接配置</div>
+          <div className="view-subtitle">{hosts.length} 台已保存主机 · 管理服务器连接配置</div>
         </div>
-        <div className="hosts-header">
-          <div style={{ position: 'relative', flex: 1 }}>
-            <div
-              style={{
-                position: 'absolute',
-                left: 10,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: 'var(--text-muted)'
-              }}
-            >
+          <div className="hosts-header">
+          <div className="search-field">
+            <div className="search-field-icon">
               <Icon name="search" size={15} />
             </div>
             <input
               className="glass-input"
-              style={{ paddingLeft: 34 }}
               placeholder="搜索主机 / IP / 标签"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -140,7 +173,7 @@ export function HostsView({ onOpenSessions }: Props) {
                   <div className="host-meta">{host.username}@{host.host}:{host.port} · {host.authMethod === 'key' ? 'SSH 私钥' : host.authMethod === 'keyboard-interactive' ? '交互式 2FA' : '密码认证'}</div>
                 </div>
                 <div className="host-actions">
-                  <button className="host-icon-btn" onClick={() => { setEditingHost(host); setDialogOpen(true) }} title="连接">
+                  <button className="host-icon-btn" onClick={() => void reconnect(host)} title="连接">
                     <Icon name="link" size={15} />
                   </button>
                   <button className="host-icon-btn" onClick={() => openEdit(host)} title="编辑">

@@ -1,9 +1,9 @@
 import { ChangeEvent, useEffect, useState } from 'react'
-import { Icon } from '../components/Icon'
-import { sftpList, sftpReadFile, sftpRemoveFile, sftpWriteFile } from '../api/ssh'
-import { useSessions } from '../store/sessions'
-import { SftpEntry } from '../types/session'
-import { recordAudit } from '../store/audit'
+import { Icon } from '../../components/Icon'
+import { sftpList, sftpReadFile, sftpRemoveFile, sftpWriteFile } from '../../api/ssh'
+import { useSessions } from '../../store/sessions'
+import { SftpEntry } from '../../types/session'
+import { recordAudit } from '../../store/audit'
 
 function formatSize(size: number): string {
   if (size < 1024) return `${size} B`
@@ -19,11 +19,11 @@ function parentPath(path: string): string {
   return index <= 0 ? '/' : normalized.slice(0, index)
 }
 
-async function uploadWithRetry(id: number, target: string, data: Uint8Array): Promise<number> {
+async function uploadWithRetry(target: string, data: Uint8Array, writeFile: (path: string, data: Uint8Array) => Promise<void>): Promise<number> {
   let lastError: unknown
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await sftpWriteFile(id, target, data)
+      await writeFile(target, data)
       return attempt
     } catch (error) {
       lastError = error
@@ -33,10 +33,12 @@ async function uploadWithRetry(id: number, target: string, data: Uint8Array): Pr
   throw lastError
 }
 
-export function SftpView() {
+interface Props {
+  sessionId: number
+}
+
+export function SessionSftpPanel({ sessionId }: Props) {
   const sessions = useSessions((state) => state.sessions)
-  const order = useSessions((state) => state.order)
-  const [selectedId, setSelectedId] = useState<number | null>(null)
   const [path, setPath] = useState('/')
   const [entries, setEntries] = useState<SftpEntry[]>([])
   const [busy, setBusy] = useState(false)
@@ -46,26 +48,19 @@ export function SftpView() {
   const [editorText, setEditorText] = useState('')
   const [editorBusy, setEditorBusy] = useState(false)
 
-  const connectedSessions = order
-    .map((id) => sessions[id])
-    .filter((session) => session && session.status === 'connected')
+  const connected = sessions[sessionId]?.status === 'connected'
 
-  useEffect(() => {
-    if (selectedId !== null && connectedSessions.some((session) => session.id === selectedId)) return
-    setSelectedId(connectedSessions[0]?.id ?? null)
-  }, [selectedId, connectedSessions])
-
-  const loadDirectory = async (nextPath = path) => {
-    if (selectedId === null) return
+  const loadDirectory = async (nextPath?: string) => {
+    const target = nextPath ?? path
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      setEntries(await sftpList(selectedId, nextPath))
-      recordAudit('sftp.list', nextPath, 'success', '读取远程目录')
-      setPath(nextPath)
+      setEntries(await sftpList(sessionId, target))
+      recordAudit('sftp.list', target, 'success', '读取远程目录')
+      setPath(target)
     } catch (err) {
-      recordAudit('sftp.list', nextPath, 'failure', '读取远程目录失败')
+      recordAudit('sftp.list', target, 'failure', '读取远程目录失败')
       setError(typeof err === 'string' ? err : '无法读取远程目录')
     } finally {
       setBusy(false)
@@ -73,15 +68,15 @@ export function SftpView() {
   }
 
   useEffect(() => {
-    if (selectedId !== null) void loadDirectory('/')
+    if (connected) void loadDirectory()
     // Directory loading is intentionally triggered only when the session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [sessionId, connected])
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!files.length || selectedId === null) return
+    if (!files.length) return
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -92,7 +87,7 @@ export function SftpView() {
       for (const file of files) {
         const target = path === '/' ? `/${file.name}` : `${path.replace(/\/$/, '')}/${file.name}`
         try {
-          const attempts = await uploadWithRetry(selectedId, target, new Uint8Array(await file.arrayBuffer()))
+          const attempts = await uploadWithRetry(target, new Uint8Array(await file.arrayBuffer()), (filePath, data) => sftpWriteFile(sessionId, filePath, data))
           if (attempts > 1) retried += 1
           recordAudit('sftp.upload', target, 'success', attempts > 1 ? `上传文件，第 ${attempts} 次尝试成功` : '上传文件')
           uploaded += 1
@@ -112,11 +107,11 @@ export function SftpView() {
   }
 
   const openEditor = async (entry: SftpEntry) => {
-    if (selectedId === null || entry.kind !== 'file') return
+    if (entry.kind !== 'file') return
     setBusy(true)
     setError(null)
     try {
-      const data = await sftpReadFile(selectedId, entry.path)
+      const data = await sftpReadFile(sessionId, entry.path)
       const text = new TextDecoder('utf-8', { fatal: true }).decode(data)
       setEditorText(text)
       setEditing(entry)
@@ -128,11 +123,11 @@ export function SftpView() {
   }
 
   const saveEditor = async () => {
-    if (selectedId === null || !editing) return
+    if (!editing) return
     setEditorBusy(true)
     setError(null)
     try {
-      await sftpWriteFile(selectedId, editing.path, new TextEncoder().encode(editorText))
+      await sftpWriteFile(sessionId, editing.path, new TextEncoder().encode(editorText))
       recordAudit('sftp.edit', editing.path, 'success', '编辑并回传远程文件')
       setNotice(`已保存 ${editing.name}`)
       setEditing(null)
@@ -146,12 +141,12 @@ export function SftpView() {
   }
 
   const handleDownload = async (entry: SftpEntry) => {
-    if (selectedId === null || entry.kind !== 'file') return
+    if (entry.kind !== 'file') return
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      const data = await sftpReadFile(selectedId, entry.path)
+      const data = await sftpReadFile(sessionId, entry.path)
       recordAudit('sftp.download', entry.path, 'success', '下载文件')
       const downloadBuffer = new ArrayBuffer(data.byteLength)
       new Uint8Array(downloadBuffer).set(data)
@@ -170,13 +165,13 @@ export function SftpView() {
   }
 
   const handleDelete = async (entry: SftpEntry) => {
-    if (selectedId === null || entry.kind !== 'file') return
+    if (entry.kind !== 'file') return
     if (!window.confirm(`确认删除远程文件“${entry.name}”？`)) return
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      await sftpRemoveFile(selectedId, entry.path)
+      await sftpRemoveFile(sessionId, entry.path)
       recordAudit('sftp.delete', entry.path, 'success', '删除文件')
       setNotice(`已删除 ${entry.name}`)
       await loadDirectory(path)
@@ -187,65 +182,53 @@ export function SftpView() {
     }
   }
 
-  return (
-    <div className="view sftp-view">
-      <header className="view-header">
-        <div>
-          <div className="view-title">SFTP 文件</div>
-          <div className="view-subtitle">通过 SSH 子系统浏览和传输远程文件，单文件限制 64 MB</div>
-        </div>
-        {selectedId !== null && (
-          <label className="glass-btn primary">
-            <Icon name="folder" size={15} />
-            上传文件
-            <input className="sr-only" type="file" multiple onChange={handleUpload} disabled={busy} />
-          </label>
-        )}
-      </header>
+  if (!connected) {
+    return (
+      <div className="sftp-empty">
+        <Icon name="folder" size={44} />
+        <p>会话未连接，连接成功后即可在此浏览和传输远程文件。</p>
+      </div>
+    )
+  }
 
-      {connectedSessions.length === 0 ? (
-        <section className="glass empty-state">
-          <div className="empty-icon"><Icon name="folder" size={44} /></div>
-          <div className="empty-title">没有可用的 SSH 连接</div>
-          <div className="empty-desc">请先建立 SSH 连接，SFTP 将复用已认证的会话通道。</div>
-        </section>
-      ) : (
-        <section className="glass sftp-panel">
-          <div className="sftp-toolbar">
-            <Icon name="server" size={16} />
-            <select className="glass-input sftp-session-select" value={selectedId ?? ''} onChange={(event) => setSelectedId(Number(event.target.value))}>
-              {connectedSessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.host}</option>)}
-            </select>
-            <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title="刷新目录"><Icon name="refresh" size={15} /></button>
+  return (
+    <div className="sftp-panel-body">
+      <div className="sftp-toolbar">
+        <Icon name="folder" size={15} />
+        <span className="sftp-heading">SFTP 文件</span>
+        <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title="刷新目录"><Icon name="refresh" size={15} /></button>
+        <label className="glass-btn primary">
+          <Icon name="upload" size={15} />
+          上传文件
+          <input className="sr-only" type="file" multiple onChange={handleUpload} disabled={busy} />
+        </label>
+      </div>
+      <div className="sftp-pathbar">
+        <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
+        <code>{path}</code>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      {notice && <div className="form-notice">{notice}</div>}
+      <div className="sftp-table-head"><span>名称</span><span>类型</span><span>大小</span><span>操作</span></div>
+      <div className="sftp-entries">
+        {entries.map((entry) => (
+          <div className="sftp-entry" key={entry.path}>
+            <button className="sftp-name" onClick={() => entry.kind === 'directory' ? void loadDirectory(entry.path) : void handleDownload(entry)}>
+              <Icon name={entry.kind === 'directory' ? 'folder' : 'save'} size={15} />
+              <span>{entry.name}</span>
+            </button>
+            <span>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
+            <span>{entry.kind === 'file' ? formatSize(entry.size) : '-'}</span>
+            <span className="sftp-actions">
+              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
+              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
+              {entry.kind === 'file' && <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title="删除"><Icon name="trash" size={14} /></button>}
+            </span>
           </div>
-          <div className="sftp-pathbar">
-            <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
-            <code>{path}</code>
-          </div>
-          {error && <div className="form-error">{error}</div>}
-          {notice && <div className="form-notice">{notice}</div>}
-          <div className="sftp-table-head"><span>名称</span><span>类型</span><span>大小</span><span>操作</span></div>
-          <div className="sftp-entries">
-            {entries.map((entry) => (
-              <div className="sftp-entry" key={entry.path}>
-                <button className="sftp-name" onClick={() => entry.kind === 'directory' ? void loadDirectory(entry.path) : void handleDownload(entry)}>
-                  <Icon name={entry.kind === 'directory' ? 'folder' : 'save'} size={15} />
-                  <span>{entry.name}</span>
-                </button>
-                <span>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
-                <span>{entry.kind === 'file' ? formatSize(entry.size) : '-'}</span>
-                <span className="sftp-actions">
-                   {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
-                   {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
-                   {entry.kind === 'file' && <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title="删除"><Icon name="trash" size={14} /></button>}
-                </span>
-              </div>
-            ))}
-            {!busy && entries.length === 0 && <div className="sftp-empty">目录为空</div>}
-            {busy && <div className="sftp-empty">读取中…</div>}
-          </div>
-        </section>
-      )}
+        ))}
+        {!busy && entries.length === 0 && <div className="sftp-empty">目录为空</div>}
+        {busy && <div className="sftp-empty">读取中…</div>}
+      </div>
       {editing && (
         <div className="modal-overlay" onClick={() => !editorBusy && setEditing(null)}>
           <div className="modal glass sftp-editor-modal" onClick={(event) => event.stopPropagation()}>

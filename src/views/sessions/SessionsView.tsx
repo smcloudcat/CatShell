@@ -3,6 +3,8 @@ import { Icon } from '../../components/Icon'
 import { getSessionLog, useSessions } from '../../store/sessions'
 import { STATUS_TEXT, SessionStatus } from '../../types/session'
 import { TerminalPane } from './TerminalPane'
+import { SessionSftpPanel } from './SessionSftpPanel'
+import { SessionMonitorPanel } from './SessionMonitorPanel'
 import { useSnippets } from '../../store/snippets'
 import { recordAudit } from '../../store/audit'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
@@ -170,7 +172,8 @@ export function SessionsView() {
           )
         })}
       </div>
-       <div className="snippet-toolbar glass">
+       <div className="session-tool">
+        <div className="snippet-toolbar">
         <Icon name="terminal" size={15} />
         <select className="glass-input snippet-select" value={snippetId} onChange={(event) => setSnippetId(event.target.value)}>
           <option value="">选择命令片段</option>
@@ -185,14 +188,27 @@ export function SessionsView() {
         <button className="glass-btn" onClick={exportSessionLog} disabled={activeId === null} title="导出当前会话最近 2 MB 输出">
           <Icon name="save" size={14} />保存日志
         </button>
+        </div>
       </div>
        {snippetError && <div className="form-error">{snippetError}</div>}
        {bulkResult && <div className="form-notice">{bulkResult}</div>}
-      <div className="terminal-stack">
-        {order.map((id) => (
-          <TerminalPane key={id} id={id} active={activeId === id} />
-        ))}
+      <div className="session-workspace">
+        <div className="terminal-stack">
+          {order.map((id) => (
+            <TerminalPane key={id} id={id} active={activeId === id} />
+          ))}
+        </div>
+        {activeId !== null && (
+          <aside className="session-monitor-panel">
+            <SessionMonitorPanel key={activeId} sessionId={activeId} />
+          </aside>
+        )}
       </div>
+      {activeId !== null && (
+        <div className="session-sftp-panel">
+          <SessionSftpPanel key={activeId} sessionId={activeId} />
+        </div>
+      )}
       {bulkOpen && (
         <div className="modal-overlay" onClick={() => !bulkBusy && setBulkOpen(false)}>
           <div className="modal glass" onClick={(event) => event.stopPropagation()}>

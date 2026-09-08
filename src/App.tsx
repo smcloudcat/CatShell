@@ -10,13 +10,11 @@ import { HomeView } from './views/HomeView'
 import { HostsView } from './views/HostsView'
 import { SessionsView } from './views/sessions/SessionsView'
 import { SettingsView } from './views/SettingsView'
-import { MonitorView } from './views/MonitorView'
-import { SftpView } from './views/SftpView'
 import { ForwardView } from './views/ForwardView'
 import './styles/glass.css'
 import './App.css'
 
-type ViewId = 'home' | 'sessions' | 'hosts' | 'sftp' | 'monitor' | 'forward' | 'settings'
+type ViewId = 'home' | 'sessions' | 'hosts' | 'forward' | 'settings'
 
 export type { ViewId }
 
@@ -24,8 +22,6 @@ const NAV_ITEMS: { id: ViewId; icon: IconName; label: string }[] = [
   { id: 'home', icon: 'home', label: '概览' },
   { id: 'sessions', icon: 'terminal', label: '会话' },
   { id: 'hosts', icon: 'server', label: '主机' },
-  { id: 'sftp', icon: 'folder', label: 'SFTP' },
-  { id: 'monitor', icon: 'monitor', label: '监控' },
   { id: 'forward', icon: 'link', label: '转发' },
   { id: 'settings', icon: 'settings', label: '设置' }
 ]
@@ -96,8 +92,14 @@ function App() {
     <div className="app-shell">
       <div id="app-bg" />
       <aside className="sidebar glass">
-        <div className="sidebar-logo" title="CatShell">
-          <Icon name="terminal" size={24} />
+        <div className="sidebar-brand" title="CatShell">
+          <div className="sidebar-logo">
+            <Icon name="terminal" size={21} />
+          </div>
+          <div className="sidebar-brand-copy">
+            <strong>CatShell</strong>
+            <span>SSH OPS</span>
+          </div>
         </div>
         <nav className="sidebar-nav">
           {NAV_ITEMS.map((item) => (
@@ -108,6 +110,7 @@ function App() {
               title={item.label}
             >
               <Icon name={item.icon} size={22} />
+              <span className="nav-label">{item.label}</span>
               {item.id === 'sessions' && sessionCount > 0 && (
                 <span className="nav-badge">{sessionCount}</span>
               )}
@@ -121,9 +124,7 @@ function App() {
         )}
         {view === 'sessions' && <SessionsView />}
         {view === 'hosts' && <HostsView onOpenSessions={() => setView('sessions')} />}
-        {view === 'monitor' && <MonitorView />}
         {view === 'forward' && <ForwardView />}
-        {view === 'sftp' && <SftpView />}
         {view === 'settings' && <SettingsView />}
       </main>
       {hostKeyPrompt && (
