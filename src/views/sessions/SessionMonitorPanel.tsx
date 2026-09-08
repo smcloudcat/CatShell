@@ -3,6 +3,7 @@ import { Icon } from '../../components/Icon'
 import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshProcesses } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { useSettings } from '../../store/settings'
+import { showToast, confirmDialog } from '../../store/ui'
 import { NetworkDiagnostic, ProcessInfo, ServerMetrics } from '../../types/session'
 
 function formatBytes(value: number): string {
@@ -80,7 +81,7 @@ export function SessionMonitorPanel({ sessionId }: Props) {
             const exceeded = monitorThresholds.enabled && check.value >= check.threshold
             const wasExceeded = state[alertKey] ?? false
             if (exceeded && !wasExceeded) {
-              window.alert(`服务器监控告警\n${next.hostname}\n${check.label} ${check.value.toFixed(0)}% 已超过 ${check.threshold}%`)
+              showToast(`${next.hostname}：${check.label} ${check.value.toFixed(0)}% 已超过 ${check.threshold}%`, 'warning')
             }
             state[alertKey] = exceeded
           }
@@ -113,7 +114,13 @@ export function SessionMonitorPanel({ sessionId }: Props) {
   }, [sessionId, connected, refreshKey])
 
   const killProcess = async (process: ProcessInfo) => {
-    if (!window.confirm(`确认终止进程 ${process.pid} (${process.name})？`)) return
+    const accepted = await confirmDialog({
+      title: '终止远程进程',
+      message: `确认终止进程 ${process.pid} (${process.name})？进程将收到 SIGTERM 信号。`,
+      confirmLabel: '终止',
+      danger: true
+    })
+    if (!accepted) return
     setProcessBusy(true)
     setProcessError(null)
     try {

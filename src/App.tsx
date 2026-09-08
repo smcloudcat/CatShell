@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
+import { FeedbackHost } from './components/Feedback'
+import { confirmDialog } from './store/ui'
 import { useSettings } from './store/settings'
 import { useSessions } from './store/sessions'
 import { useHosts } from './store/hosts'
@@ -29,6 +32,8 @@ const NAV_ITEMS: { id: ViewId; icon: IconName; label: string }[] = [
 
 function App() {
   const { theme, init } = useSettings()
+  const sidebarCollapsed = useSettings((s) => s.sidebarCollapsed)
+  const toggleSidebar = useSettings((s) => s.toggleSidebar)
   const sessionsInit = useSessions((s) => s.init)
   const hostsInit = useHosts((s) => s.init)
   const vaultInit = useVault((s) => s.init)
@@ -49,6 +54,37 @@ function App() {
     void snippetsInit()
     void auditInit()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    const appWindow = getCurrentWindow()
+    void appWindow
+      .onCloseRequested(async (event) => {
+        const { sessions } = useSessions.getState()
+        const activeCount = Object.values(sessions).filter(
+          (session) => session.status === 'connected' || session.status === 'connecting' || session.status === 'reconnecting'
+        ).length
+        if (!activeCount) return
+        event.preventDefault()
+        const accepted = await confirmDialog({
+          title: '退出 CatShell',
+          message: `当前有 ${activeCount} 个活动 SSH 会话，退出将断开这些连接。确定要退出吗？`,
+          confirmLabel: '退出并断开',
+          danger: true
+        })
+        if (accepted) await appWindow.destroy()
+      })
+      .then((dispose) => {
+        if (disposed) dispose()
+        else unlisten = dispose
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
 
   useEffect(() => {
     const root = document.documentElement.style
@@ -106,7 +142,7 @@ function App() {
   return (
     <div className="app-shell">
       <div id="app-bg" />
-      <aside className="sidebar glass">
+      <aside className={`sidebar glass ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-brand" title="CatShell">
           <div className="sidebar-logo">
             <Icon name="terminal" size={21} />
@@ -132,6 +168,16 @@ function App() {
             </button>
           ))}
         </nav>
+        <button
+          className="glass-btn sidebar-toggle"
+          onClick={toggleSidebar}
+          title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+        >
+          <span className="sidebar-toggle-icon">
+            <Icon name="chevron-down" size={16} />
+          </span>
+          <span className="nav-label">收起侧栏</span>
+        </button>
       </aside>
       <main className="main-area">
         {view === 'home' && (
@@ -190,6 +236,7 @@ function App() {
           </div>
         </div>
       )}
+      <FeedbackHost />
     </div>
   )
 }

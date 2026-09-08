@@ -22,6 +22,7 @@ export type AuditAction =
   | 'forward.stop'
   | 'vault.unlock'
   | 'vault.lock'
+  | 'vault.upgrade'
 
 export interface AuditEntry {
   id: string

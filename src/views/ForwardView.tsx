@@ -4,6 +4,7 @@ import { sshForwardList, sshForwardStart, sshForwardStartDynamic, sshForwardStar
 import { useSessions } from '../store/sessions'
 import { PortForwardInfo } from '../types/session'
 import { recordAudit } from '../store/audit'
+import { confirmDialog } from '../store/ui'
 
 interface FormState {
   sessionId: string
@@ -47,9 +48,12 @@ export function ForwardView() {
     }
   }
 
+  const statusSignature = order.map((id) => `${id}:${sessions[id]?.status ?? ''}`).join(',')
+
   useEffect(() => {
     void loadForwards()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusSignature])
 
   const update = (patch: Partial<FormState>) => setForm((current) => ({ ...current, ...patch }))
 
@@ -81,7 +85,13 @@ export function ForwardView() {
   }
 
   const stopForward = async (forward: PortForwardInfo) => {
-    if (!window.confirm(`确认停止 ${forward.bindHost}:${forward.bindPort} 的端口转发？`)) return
+    const accepted = await confirmDialog({
+      title: '停止端口转发',
+      message: `确认停止 ${forward.bindHost}:${forward.bindPort} 的${forwardDirectionLabel(forward.direction)}转发？`,
+      confirmLabel: '停止',
+      danger: true
+    })
+    if (!accepted) return
     setBusy(true)
     setError(null)
     try {

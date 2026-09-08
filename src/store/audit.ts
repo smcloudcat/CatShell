@@ -15,6 +15,8 @@ interface AuditState {
 }
 
 let initPromise: Promise<void> | null = null
+let persistTimer: number | null = null
+const PERSIST_DEBOUNCE_MS = 1000
 
 async function persist(entries: AuditEntry[]) {
   try {
@@ -27,6 +29,21 @@ async function persist(entries: AuditEntry[]) {
     } catch {
       // Audit logging must never block the primary operation.
     }
+  }
+}
+
+function schedulePersist() {
+  if (persistTimer !== null) window.clearTimeout(persistTimer)
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null
+    void persist(useAudit.getState().entries)
+  }, PERSIST_DEBOUNCE_MS)
+}
+
+function cancelPersist() {
+  if (persistTimer !== null) {
+    window.clearTimeout(persistTimer)
+    persistTimer = null
   }
 }
 
@@ -71,11 +88,11 @@ export const useAudit = create<AuditState>((set, get) => ({
       result,
       detail: detail.slice(0, 1000)
     }
-    const entries = [...get().entries, entry].slice(-MAX_ENTRIES)
-    set({ entries })
-    await persist(entries)
+    set((state) => ({ entries: [...state.entries, entry].slice(-MAX_ENTRIES) }))
+    schedulePersist()
   },
   clear: async () => {
+    cancelPersist()
     set({ entries: [] })
     await persist([])
   }

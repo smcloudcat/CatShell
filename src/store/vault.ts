@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { recordAudit } from './audit'
+import { useSettings } from './settings'
 
 const STORE_FILE = 'credential-vault.json'
 const VAULT_KEY = 'vault'
-const PBKDF2_ITERATIONS = 210000
+const PBKDF2_ITERATIONS = 600000
+const AUTO_LOCK_CHECK_INTERVAL_MS = 30_000
 
 interface VaultRecord {
   version: 1
@@ -36,6 +38,31 @@ interface VaultState {
 let initPromise: Promise<void> | null = null
 let vaultRecord: VaultRecord | null = null
 let sessionKey: CryptoKey | null = null
+let autoLockTimer: number | null = null
+let lastVaultActivity = 0
+
+function touchVaultActivity() {
+  lastVaultActivity = Date.now()
+}
+
+function stopAutoLockTimer() {
+  if (autoLockTimer !== null) {
+    window.clearInterval(autoLockTimer)
+    autoLockTimer = null
+  }
+}
+
+function startAutoLockTimer() {
+  stopAutoLockTimer()
+  lastVaultActivity = Date.now()
+  autoLockTimer = window.setInterval(() => {
+    const minutes = useSettings.getState().vaultAutoLockMinutes
+    if (!minutes) return
+    if (Date.now() - lastVaultActivity >= minutes * 60_000) {
+      useVault.getState().lock()
+    }
+  }, AUTO_LOCK_CHECK_INTERVAL_MS)
+}
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -154,6 +181,7 @@ export const useVault = create<VaultState>((set, get) => ({
     vaultRecord = record
     sessionKey = await deriveKey(password, base64ToBytes(record.salt), record.iterations)
     set({ configured: true, unlocked: true, entries: {} })
+    startAutoLockTimer()
     recordAudit('vault.unlock', '凭据保险箱', 'success', '创建并解锁保险箱')
   },
   unlock: async (password) => {
@@ -165,26 +193,43 @@ export const useVault = create<VaultState>((set, get) => ({
     } catch {
       throw new Error('主密码错误或保险箱数据已损坏')
     }
-    sessionKey = await deriveKey(password, base64ToBytes(vaultRecord.salt), vaultRecord.iterations)
+    if (vaultRecord.iterations !== PBKDF2_ITERATIONS) {
+      const salt = crypto.getRandomValues(new Uint8Array(16))
+      const key = await deriveKey(password, salt, PBKDF2_ITERATIONS)
+      const upgraded = await encryptEntriesWithKey(key, salt, entries)
+      await writeRecord(upgraded)
+      vaultRecord = upgraded
+      sessionKey = key
+      recordAudit('vault.upgrade', '凭据保险箱', 'success', `密钥派生迭代数升级为 ${PBKDF2_ITERATIONS}`)
+    } else {
+      sessionKey = await deriveKey(password, base64ToBytes(vaultRecord.salt), vaultRecord.iterations)
+    }
     set({ unlocked: true, entries })
+    startAutoLockTimer()
     recordAudit('vault.unlock', '凭据保险箱', 'success', '解锁保险箱')
   },
   lock: () => {
+    stopAutoLockTimer()
     sessionKey = null
     set({ unlocked: false, entries: {} })
     recordAudit('vault.lock', '凭据保险箱', 'success', '锁定保险箱并清理内存凭据')
   },
   saveCredential: async (id, credential) => {
     if (!get().unlocked || !vaultRecord || !sessionKey) throw new Error('请先解锁凭据保险箱')
+    touchVaultActivity()
     const entries = { ...get().entries, [id]: credential }
     const record = await encryptEntriesWithKey(sessionKey, base64ToBytes(vaultRecord.salt), entries)
     await writeRecord(record)
     vaultRecord = record
     set({ entries })
   },
-  getCredential: (id) => get().entries[id] ?? null,
+  getCredential: (id) => {
+    if (get().unlocked) touchVaultActivity()
+    return get().entries[id] ?? null
+  },
   removeCredential: async (id) => {
     if (!get().unlocked || !vaultRecord || !sessionKey) return
+    touchVaultActivity()
     const entries = { ...get().entries }
     delete entries[id]
     const record = await encryptEntriesWithKey(sessionKey, base64ToBytes(vaultRecord.salt), entries)

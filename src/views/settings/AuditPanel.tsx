@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { useAudit } from '../../store/audit'
 import { AuditEntry } from '../../types/audit'
+import { confirmDialog } from '../../store/ui'
+
+const AUDIT_PAGE_SIZE = 100
 
 const ACTION_LABELS: Record<string, string> = {
   'session.connect': '连接',
@@ -26,7 +29,8 @@ const ACTION_LABELS: Record<string, string> = {
   'forward.start': '启动转发',
   'forward.stop': '停止转发',
   'vault.unlock': '解锁保险箱',
-  'vault.lock': '锁定保险箱'
+  'vault.lock': '锁定保险箱',
+  'vault.upgrade': '升级保险箱加密'
 }
 
 function exportEntries(entries: AuditEntry[]) {
@@ -45,10 +49,15 @@ export function AuditPanel() {
   const init = useAudit((state) => state.init)
   const clear = useAudit((state) => state.clear)
   const [query, setQuery] = useState('')
+  const [visibleCount, setVisibleCount] = useState(AUDIT_PAGE_SIZE)
 
   useEffect(() => {
     void init()
   }, [init])
+
+  useEffect(() => {
+    setVisibleCount(AUDIT_PAGE_SIZE)
+  }, [query])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -58,6 +67,8 @@ export function AuditPanel() {
     })
   }, [entries, query])
 
+  const visible = filtered.slice(0, visibleCount)
+
   return (
     <div className="settings-section audit-panel">
       <div className="settings-section-title"><Icon name="monitor" size={15} /> 操作审计</div>
@@ -65,14 +76,29 @@ export function AuditPanel() {
         <span className="section-tip">日志仅保存在本机，最多保留 5000 条，不记录密码、私钥口令或完整命令内容。</span>
         <div className="audit-actions">
           <button className="glass-btn" onClick={() => exportEntries(filtered)} disabled={!filtered.length}><Icon name="save" size={14} /> 导出</button>
-          <button className="glass-btn" onClick={() => { if (window.confirm('确认清空全部审计日志？')) void clear() }} disabled={!entries.length}>清空</button>
+          <button
+            className="glass-btn"
+            onClick={() => {
+              void confirmDialog({
+                title: '清空审计日志',
+                message: '确认清空全部审计日志？该操作不可恢复。',
+                confirmLabel: '清空',
+                danger: true
+              }).then((accepted) => {
+                if (accepted) void clear()
+              })
+            }}
+            disabled={!entries.length}
+          >
+            清空
+          </button>
         </div>
       </div>
       <input className="glass-input" placeholder="搜索动作、目标或结果" value={query} onChange={(event) => setQuery(event.target.value)} />
       {!ready && <div className="section-tip">正在读取审计日志…</div>}
       {ready && !filtered.length && <div className="snippet-empty">没有匹配的审计记录。</div>}
       <div className="audit-list">
-        {filtered.map((entry) => (
+        {visible.map((entry) => (
           <div className="audit-item" key={entry.id}>
             <span className={`audit-result audit-result-${entry.result}`} />
             <time>{new Date(entry.timestamp).toLocaleString()}</time>
@@ -82,6 +108,13 @@ export function AuditPanel() {
           </div>
         ))}
       </div>
+      {filtered.length > visibleCount && (
+        <div className="audit-more">
+          <button className="glass-btn" onClick={() => setVisibleCount((count) => count + AUDIT_PAGE_SIZE)}>
+            加载更多（已显示 {visibleCount} / {filtered.length} 条）
+          </button>
+        </div>
+      )}
     </div>
   )
 }

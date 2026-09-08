@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { useVault } from '../../store/vault'
+import { useSettings, VAULT_AUTO_LOCK_OPTIONS } from '../../store/settings'
+
+const AUTO_LOCK_LABELS: Record<number, string> = {
+  0: '关闭',
+  5: '5 分钟',
+  15: '15 分钟',
+  30: '30 分钟'
+}
 
 export function VaultPanel() {
   const ready = useVault((state) => state.ready)
@@ -15,6 +23,9 @@ export function VaultPanel() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const vaultAutoLockMinutes = useSettings((state) => state.vaultAutoLockMinutes)
+  const setVaultAutoLockMinutes = useSettings((state) => state.setVaultAutoLockMinutes)
+  const saveVaultAutoLockMinutes = useSettings((state) => state.saveVaultAutoLockMinutes)
 
   useEffect(() => {
     void init()
@@ -80,6 +91,24 @@ export function VaultPanel() {
           </button>
         </>
       )}
+      <label className="field vault-auto-lock">
+        <span className="field-label">闲置自动锁定</span>
+        <select
+          className="glass-input"
+          value={String(vaultAutoLockMinutes)}
+          onChange={(event) => {
+            setVaultAutoLockMinutes(Number(event.target.value))
+            void saveVaultAutoLockMinutes()
+          }}
+        >
+          {VAULT_AUTO_LOCK_OPTIONS.map((minutes) => (
+            <option key={minutes} value={String(minutes)}>
+              {AUTO_LOCK_LABELS[minutes] ?? `${minutes} 分钟`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="section-tip">保险箱解锁后，若在设定时长内没有任何凭据操作，将自动锁定并清除内存中的明文凭据。</div>
       {error && unlocked && <div className="form-error">{error}</div>}
       {notice && unlocked && <div className="form-notice">{notice}</div>}
     </div>

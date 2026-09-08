@@ -7,6 +7,7 @@ import { useHosts } from '../../store/hosts'
 import { useSnippets } from '../../store/snippets'
 import { DEFAULT_MONITOR_THRESHOLDS, MonitorThresholds, useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
+import { showToast } from '../../store/ui'
 
 interface BackupFile {
   version: 1
@@ -113,10 +114,10 @@ export function BackupPanel() {
       setMonitorThresholds(backup.monitorThresholds ?? DEFAULT_MONITOR_THRESHOLDS)
       await saveMonitorThresholds()
       recordAudit('config.import', '本地配置', 'success', `还原 ${backup.hosts.length} 条主机和 ${backup.snippets.length} 个片段`)
-      window.alert('配置还原完成。点击“保存主题”后主题设置将持久化。')
+      showToast('配置还原完成。点击“保存主题”后主题设置将持久化。', 'success')
     } catch {
       recordAudit('config.import', '本地配置', 'failure', '备份文件无效')
-      window.alert('还原失败，请选择有效的 CatShell 备份文件。')
+      showToast('还原失败，请选择有效的 CatShell 备份文件。', 'error')
     }
   }
 

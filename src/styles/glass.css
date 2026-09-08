@@ -1,16 +1,14 @@
-/* ============================================================
-   CatShell 设计系统 · 现代化基础层
-   ------------------------------------------------------------
-   1. 明暗双模式：深色为 :root 默认，浅色挂在 [data-mode='light']
-   2. 面板 = 半透明表面 + 细腻描边 + 分层柔和阴影
-   3. 强调色衍生态（accent-soft / accent-border）由 color-mix 推导
-   4. 统一焦点环、滚动条、选区与动效节奏
-   ============================================================ */
+﻿/* ============================================================
+   CatShell 璁捐绯荤粺 路 鐜颁唬鍖栧熀纭€灞?   ------------------------------------------------------------
+   1. 鏄庢殫鍙屾ā寮忥細娣辫壊涓?:root 榛樿锛屾祬鑹叉寕鍦?[data-mode='light']
+   2. 闈㈡澘 = 鍗婇€忔槑琛ㄩ潰 + 缁嗚吇鎻忚竟 + 鍒嗗眰鏌斿拰闃村奖
+   3. 寮鸿皟鑹茶鐢熸€侊紙accent-soft / accent-border锛夌敱 color-mix 鎺ㄥ
+   4. 缁熶竴鐒︾偣鐜€佹粴鍔ㄦ潯銆侀€夊尯涓庡姩鏁堣妭濂?   ============================================================ */
 
 :root {
   color-scheme: dark;
 
-  /* ---- 由 App.tsx 按用户主题注入 ---- */
+  /* ---- 鐢?App.tsx 鎸夌敤鎴蜂富棰樻敞鍏?---- */
   --glass-bg: 13 18 30;
   --glass-border: 255 255 255;
   --bg-opacity: 0.58;
@@ -20,28 +18,28 @@
   --accent: #6d7cff;
   --accent-contrast: #ffffff;
 
-  /* ---- 表面与文字 ---- */
+  /* ---- 琛ㄩ潰涓庢枃瀛?---- */
   --text-main: #eef2fb;
   --text-muted: rgba(226, 232, 244, 0.64);
   --text-faint: rgba(226, 232, 244, 0.42);
   --hover-bg: rgba(255, 255, 255, 0.07);
   --soft-bg: rgba(255, 255, 255, 0.055);
   --soft-bg-strong: rgba(255, 255, 255, 0.09);
-  --hairline: rgba(var(--glass-border), var(--border-opacity));
-  --hairline-strong: rgba(var(--glass-border), calc(var(--border-opacity) + 0.08));
+  --hairline: rgb(var(--glass-border) / var(--border-opacity));
+  --hairline-strong: rgb(var(--glass-border) / calc(var(--border-opacity) + 0.08));
 
-  /* ---- 语义色 ---- */
+  /* ---- 璇箟鑹?---- */
   --ok: #34d399;
   --warn: #fbbf24;
   --err: #f87171;
   --info: #38bdf8;
 
-  /* ---- 强调色衍生 ---- */
+  /* ---- 寮鸿皟鑹茶鐢?---- */
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 78%, #ffffff);
 
-  /* ---- 阴影 ---- */
+  /* ---- 闃村奖 ---- */
   --glass-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 1px 2px rgba(2, 6, 16, 0.28),
@@ -50,7 +48,7 @@
     0 2px 6px rgba(2, 6, 16, 0.3),
     0 28px 64px -24px rgba(2, 6, 16, 0.72);
 
-  /* ---- 动效 ---- */
+  /* ---- 鍔ㄦ晥 ---- */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -110,7 +108,7 @@ body {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
-/* 背景层：渐变 / 纯色 / 图片由 App.tsx 注入，这里提供默认与氛围光 */
+/* 鑳屾櫙灞傦細娓愬彉 / 绾壊 / 鍥剧墖鐢?App.tsx 娉ㄥ叆锛岃繖閲屾彁渚涢粯璁や笌姘涘洿鍏?*/
 #app-bg {
   position: fixed;
   inset: 0;
@@ -146,9 +144,9 @@ body {
   background-repeat: no-repeat;
 }
 
-/* 面板表面 */
+/* 闈㈡澘琛ㄩ潰 */
 .glass {
-  background: rgba(var(--glass-bg), var(--bg-opacity));
+  background: rgb(var(--glass-bg) / var(--bg-opacity));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
   border-radius: var(--glass-radius);
@@ -158,12 +156,12 @@ body {
 }
 
 .glass-strong {
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.16));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.16));
 }
 
-/* 按钮 */
+/* 鎸夐挳 */
 .glass-btn {
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.12));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.12));
   border: 1px solid var(--hairline);
   color: var(--text-main);
   border-radius: 10px;
@@ -234,9 +232,9 @@ body {
   box-shadow: none;
 }
 
-/* 输入 */
+/* 杈撳叆 */
 .glass-input {
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.1));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.1));
   border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 10px 12px;
@@ -262,7 +260,7 @@ body {
 .glass-input:focus {
   border-color: var(--accent-border);
   box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 15%, transparent);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.14));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.14));
 }
 
 select.glass-input {
@@ -290,7 +288,7 @@ input[type='range']::-webkit-slider-thumb {
   height: 15px;
   border-radius: 50%;
   background: var(--accent);
-  border: 2.5px solid rgba(var(--glass-bg), 1);
+  border: 2.5px solid rgb(var(--glass-bg) / 1);
   box-shadow: 0 1px 5px rgba(2, 6, 16, 0.4);
   cursor: pointer;
   transition: transform 0.14s var(--ease-out);
@@ -305,21 +303,21 @@ input[type='radio'] {
   accent-color: var(--accent);
 }
 
-/* 滚动条 */
+/* 婊氬姩鏉?*/
 ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(var(--glass-border), 0.2);
+  background: rgb(var(--glass-border) / 0.2);
   border-radius: 6px;
   border: 2.5px solid transparent;
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--glass-border), 0.38);
+  background: rgb(var(--glass-border) / 0.38);
   border: 2.5px solid transparent;
   background-clip: content-box;
 }
@@ -332,7 +330,7 @@ input[type='radio'] {
   background: transparent;
 }
 
-/* 动效可达性 */
+/* 鍔ㄦ晥鍙揪鎬?*/
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

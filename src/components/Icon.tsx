@@ -16,8 +16,25 @@ export type IconName =
   | 'key'
   | 'chevron-down'
   | 'upload'
+  | 'palette'
+  | 'database'
 
 const paths: Record<IconName, React.ReactNode> = {
+  palette: (
+    <>
+      <path d="M12 21a9 9 0 1 1 9-9c0 2-1.5 3-3 3h-2a2 2 0 0 0-1.5 3.3c.3.4.5.7.5 1.2 0 .8-.7 1.5-1.5 1.5Z" />
+      <circle cx="7.5" cy="11.5" r="1.1" />
+      <circle cx="10.5" cy="7.5" r="1.1" />
+      <circle cx="15" cy="8.5" r="1.1" />
+    </>
+  ),
+  database: (
+    <>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+      <path d="M3 12a9 3 0 0 0 18 0" />
+    </>
+  ),
   home: (
     <>
       <path d="M3 10.5 12 3l9 7.5" />

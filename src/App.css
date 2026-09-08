@@ -1,4 +1,4 @@
-/* ============ 布局 ============ */
+﻿/* ============ 甯冨眬 ============ */
 .app-shell {
   display: flex;
   height: 100vh;
@@ -129,6 +129,59 @@
   font-weight: 600;
 }
 
+/* 渚ф爮鎶樺彔 */
+.sidebar-toggle {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-start;
+}
+
+.sidebar-toggle-icon {
+  display: inline-flex;
+  transition: transform 0.2s var(--ease-out);
+  transform: rotate(90deg);
+}
+
+.sidebar.collapsed {
+  width: 68px;
+  padding: 16px 8px 12px;
+}
+
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.collapsed .sidebar-brand-copy,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .nav-item.active::after {
+  display: none;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.collapsed .nav-badge {
+  top: 5px;
+  right: 5px;
+  transform: none;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  font-size: 9px;
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  justify-content: center;
+  padding: 9px 0;
+}
+
+.sidebar.collapsed .sidebar-toggle-icon {
+  transform: rotate(-90deg);
+}
+
 .nav-badge {
   position: absolute;
   top: 50%;
@@ -159,7 +212,7 @@
   overflow: hidden;
 }
 
-/* ============ 通用视图 ============ */
+/* ============ 閫氱敤瑙嗗浘 ============ */
 .view {
   flex: 1;
   min-height: 0;
@@ -193,7 +246,7 @@
   margin-top: 5px;
 }
 
-/* ============ 概览页 ============ */
+/* ============ 姒傝椤?============ */
 .home-view {
   max-width: 1120px;
   width: 100%;
@@ -238,7 +291,7 @@
   pointer-events: none;
   background:
     radial-gradient(520px 240px at 8% 0%, var(--accent-soft), transparent 70%),
-    linear-gradient(115deg, rgba(var(--glass-bg), 0.1), transparent 55%);
+    linear-gradient(115deg, rgb(var(--glass-bg) / 0.1), transparent 55%);
 }
 
 .home-summary-intro {
@@ -288,7 +341,7 @@
   min-height: 84px;
   justify-content: center;
   padding: 15px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.05));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.05));
 }
 
 .home-stat strong {
@@ -392,7 +445,7 @@
   align-self: flex-start;
 }
 
-/* ============ 主机视图 ============ */
+/* ============ 涓绘満瑙嗗浘 ============ */
 .hosts-header {
   display: flex;
   align-items: center;
@@ -524,7 +577,7 @@
   height: 32px;
   border: 1px solid var(--hairline);
   border-radius: 9px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.06));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.06));
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
@@ -550,7 +603,7 @@
   background: color-mix(in srgb, var(--err) 10%, transparent);
 }
 
-/* ============ 主机指纹弹窗 ============ */
+/* ============ 涓绘満鎸囩汗寮圭獥 ============ */
 .host-key-modal {
   max-width: 560px;
 }
@@ -590,7 +643,7 @@
   line-height: 1.7;
 }
 
-/* ============ 服务器监控 ============ */
+/* ============ 鏈嶅姟鍣ㄧ洃鎺?============ */
 .monitor-view {
   overflow-y: auto;
 }
@@ -787,7 +840,7 @@
   margin-top: 10px;
   padding: 12px;
   border-radius: 10px;
-  border: 1px solid rgba(var(--glass-border), calc(var(--border-opacity) * 0.6));
+  border: 1px solid rgb(var(--glass-border) / calc(var(--border-opacity) * 0.6));
   background: rgba(4, 8, 18, 0.82);
   color: #d3e2fb;
   font: 11.5px/1.6 Consolas, 'Cascadia Mono', monospace;
@@ -921,7 +974,7 @@
   font-size: 12px;
 }
 
-/* ============ 端口转发 ============ */
+/* ============ 绔彛杞彂 ============ */
 .forward-view {
   overflow-y: auto;
 }
@@ -968,14 +1021,14 @@
   min-height: 44px;
   padding: 7px 11px;
   border-radius: 9px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.04));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.04));
   border: 1px solid transparent;
   transition: border-color 0.15s ease, background 0.13s ease;
 }
 
 .forward-row:hover {
   border-color: var(--hairline-strong);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.08));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.08));
 }
 
 .forward-route {
@@ -1020,7 +1073,7 @@
   white-space: nowrap;
 }
 
-/* ============ 空状态 ============ */
+/* ============ 绌虹姸鎬?============ */
 .empty-state {
   padding: 48px 24px;
   text-align: center;
@@ -1055,12 +1108,86 @@
   line-height: 1.7;
 }
 
-/* ============ 设置视图 ============ */
+/* ============ 璁剧疆瑙嗗浘 ============ */
 .settings-layout {
   display: grid;
-  grid-template-columns: 330px 1fr;
+  grid-template-columns: 188px minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
+  flex: 1;
+}
+
+.settings-nav {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.settings-nav-item svg {
+  flex-shrink: 0;
+}
+
+.settings-nav-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.settings-nav-text span {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-nav-text small {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-nav-item:hover {
+  background: var(--hover-bg);
+  color: var(--text-main);
+}
+
+.settings-nav-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+.settings-appearance {
+  display: grid;
+  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.settings-appearance .preview-area {
   flex: 1;
 }
 
@@ -1159,7 +1286,7 @@
 
 .seg-btn {
   border: 1px solid var(--hairline);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.05));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.05));
   color: var(--text-muted);
   padding: 7px 14px;
   border-radius: 9px;
@@ -1195,7 +1322,7 @@
   padding: 9px;
   border-radius: 12px;
   border: 1px solid var(--hairline);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.05));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.05));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1223,7 +1350,7 @@
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  border: 2px solid rgba(var(--glass-border), 0.28);
+  border: 2px solid rgb(var(--glass-border) / 0.28);
   box-shadow: inset 0 1px 3px rgba(2, 6, 16, 0.25);
 }
 
@@ -1237,7 +1364,7 @@
   font-weight: 600;
 }
 
-/* ============ 主题预览面板 ============ */
+/* ============ 涓婚棰勮闈㈡澘 ============ */
 .preview-area {
   display: flex;
   flex-direction: column;
@@ -1254,17 +1381,7 @@
   overflow: hidden;
   border: 1px solid var(--hairline);
   box-shadow: var(--glass-shadow);
-}
-
-.preview-window::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: linear-gradient(
-    var(--preview-gradient-angle, 135deg),
-    var(--preview-gradient-from, #05070d),
-    var(--preview-gradient-to, #131c31)
-  );
+  background-image: linear-gradient(135deg, #05070d, #131c31);
   background-size: cover;
   background-position: center;
 }
@@ -1393,7 +1510,7 @@
   flex-shrink: 0;
 }
 
-/* ============ 页脚提示 ============ */
+/* ============ 椤佃剼鎻愮ず ============ */
 .view-footer {
   font-size: 11px;
   color: var(--text-faint);
@@ -1401,7 +1518,7 @@
   padding: 4px 0 8px;
 }
 
-/* ============ 会话终端 ============ */
+/* ============ 浼氳瘽缁堢 ============ */
 .sessions-view {
   padding: 0 !important;
   gap: 8px;
@@ -1422,7 +1539,7 @@
   gap: 8px;
   padding: 8px 8px 8px 12px;
   border-radius: 10px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.06));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.06));
   border: 1px solid var(--hairline);
   cursor: pointer;
   color: var(--text-muted);
@@ -1438,12 +1555,12 @@
 
 .session-tab:hover {
   color: var(--text-main);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.12));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.12));
 }
 
 .session-tab.active {
   color: var(--text-main);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.15));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.15));
   border-color: var(--accent-border);
   box-shadow: 0 3px 12px -5px color-mix(in srgb, var(--accent) 34%, transparent);
 }
@@ -1541,7 +1658,7 @@
   flex-shrink: 0;
   border: 1px solid var(--hairline);
   border-radius: 11px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.04));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.04));
 }
 
 .session-tool .snippet-toolbar {
@@ -1565,7 +1682,7 @@
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: var(--glass-radius);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.08));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.08));
 }
 
 .session-monitor-panel .monitor-panel-body {
@@ -1599,7 +1716,7 @@
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: var(--glass-radius);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.08));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.08));
 }
 
 .session-sftp-panel .sftp-panel-body {
@@ -1673,13 +1790,13 @@
   padding: 9px 10px;
   border: 1px solid var(--hairline);
   border-radius: 10px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.04));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.04));
   transition: border-color 0.15s ease, background 0.13s ease;
 }
 
 .snippet-item:hover {
   border-color: var(--hairline-strong);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.07));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.07));
 }
 
 .snippet-item-info {
@@ -1727,7 +1844,7 @@
   padding: 12px;
   border: 1px solid var(--accent-border);
   border-radius: 11px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.05));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.05));
 }
 
 .snippet-command {
@@ -1799,7 +1916,7 @@
   gap: 8px;
   padding: 7px 9px;
   border-radius: 8px;
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.03));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.03));
   color: var(--text-muted);
   font-size: 11px;
 }
@@ -1821,7 +1938,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: rgba(var(--glass-border), 0.4);
+  background: rgb(var(--glass-border) / 0.4);
 }
 
 .audit-result-success {
@@ -1876,7 +1993,7 @@
   height: 100%;
 }
 
-/* ============ 弹窗 ============ */
+/* ============ 寮圭獥 ============ */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1904,7 +2021,8 @@
   max-height: calc(100vh - 80px);
   border-radius: 18px;
   border: 1px solid var(--hairline-strong);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.24));
+  /* 寮圭獥琛ㄩ潰涓嶉殢銆屽崱鐗囦笉閫忔槑搴︺€嶈缃彉鍖栵紝淇濊瘉浠讳綍鑳屾櫙璁剧疆涓嬫枃瀛楀彲璇?*/
+  background: rgb(var(--glass-bg) / 0.95);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
   backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
   box-shadow: var(--shadow-pop);
@@ -1913,6 +2031,17 @@
   flex-direction: column;
   overflow: hidden;
   animation: modal-in 0.22s var(--ease-out);
+}
+
+/* 寮圭獥鍐呯殑杈撳叆涓庢寜閽敼鐢ㄥ崐閫忔槑琛ㄩ潰鑹诧紝閬垮厤鐧藉簳鐧藉瓧/鐧藉簳鐧介挳 */
+.modal .glass-input,
+.modal .seg-btn:not(.active),
+.modal .glass-btn:not(.primary) {
+  background: var(--soft-bg-strong);
+}
+
+.modal .glass-input:focus {
+  background: var(--soft-bg-strong);
 }
 
 @keyframes modal-in {
@@ -2036,7 +2165,7 @@
   font-size: 12px;
 }
 
-/* ============ 主机页 ============ */
+/* ============ 涓绘満椤?============ */
 .quick-card {
   padding: 16px 18px;
   display: flex;
@@ -2072,7 +2201,7 @@
   padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid var(--hairline);
-  background: rgba(var(--glass-bg), calc(var(--bg-opacity) + 0.04));
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.04));
   color: var(--text-main);
   font-size: 13px;
   font-family: inherit;
@@ -2104,7 +2233,7 @@
   color: var(--text-muted);
 }
 
-/* ============ 响应式 ============ */
+/* ============ 鍝嶅簲寮?============ */
 @media (max-width: 900px) {
   .monitor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2223,6 +2352,10 @@
     display: none;
   }
 
+  .sidebar-toggle {
+    display: none;
+  }
+
   .sidebar-nav {
     flex: 1;
     flex-direction: row;
@@ -2332,5 +2465,129 @@
 
   .snippet-select {
     flex: 1;
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .settings-nav-item {
+    flex: 1 0 auto;
+    padding: 8px 10px;
+  }
+
+  .settings-nav-text small {
+    display: none;
+  }
+
+  .settings-appearance {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-window {
+    min-height: 220px;
+    max-height: 260px;
+  }
+}
+.confirm-modal {
+  max-width: 420px;
+}
+
+.glass-btn.danger {
+  color: #fff;
+  background: linear-gradient(135deg, #e5484d, #c62a2f);
+  border-color: rgba(229, 72, 77, 0.6);
+}
+
+.glass-btn.danger:hover {
+  filter: brightness(1.08);
+}
+
+.toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--glass-radius, 12px);
+  font-size: 13px;
+  color: var(--text, inherit);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+.toast-success {
+  border-left: 3px solid #46a758;
+}
+
+.toast-error {
+  border-left: 3px solid #e5484d;
+}
+
+.toast-warning {
+  border-left: 3px solid #f5a524;
+}
+
+.toast-info {
+  border-left: 3px solid var(--accent, #4c8dff);
+}
+
+.vault-auto-lock {
+  margin-top: 2px;
+}
+
+.audit-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 2px;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

@@ -7,6 +7,7 @@ import { useVault } from '../store/vault'
 import { HostProfile } from '../types/host'
 import { ConnectRequest } from '../types/session'
 import { recordAudit } from '../store/audit'
+import { confirmDialog, showToast } from '../store/ui'
 
 interface Props {
   onOpenSessions: () => void
@@ -106,13 +107,13 @@ export function HostsView({ onOpenSessions }: Props) {
         : Array.isArray(parsed) ? parsed : []
       if (!profiles.length) {
         recordAudit('host.import', '主机配置文件', 'failure', '文件中没有主机配置')
-        window.alert('导入失败，文件中没有主机配置。')
+        showToast('导入失败，文件中没有主机配置。', 'error')
         return
       }
       await importProfiles(profiles)
     } catch {
       recordAudit('host.import', '主机配置文件', 'failure', '文件无效或解析失败')
-      window.alert('导入失败，请选择有效的 CatShell 主机配置文件。')
+      showToast('导入失败，请选择有效的 CatShell 主机配置文件。', 'error')
     }
   }
 
@@ -182,7 +183,14 @@ export function HostsView({ onOpenSessions }: Props) {
                   <button
                     className="host-icon-btn danger"
                     onClick={() => {
-                      if (window.confirm(`确定删除主机“${host.name || host.host}”吗？`)) void removeHost(host.id)
+                      void confirmDialog({
+                        title: '删除主机',
+                        message: `确定删除主机“${host.name || host.host}”吗？已解锁保险箱中的对应凭据会一并清除。`,
+                        confirmLabel: '删除',
+                        danger: true
+                      }).then((accepted) => {
+                        if (accepted) void removeHost(host.id)
+                      })
                     }}
                     title="删除"
                   >

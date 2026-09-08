@@ -7,6 +7,7 @@ import { SessionSftpPanel } from './SessionSftpPanel'
 import { SessionMonitorPanel } from './SessionMonitorPanel'
 import { useSnippets } from '../../store/snippets'
 import { recordAudit } from '../../store/audit'
+import { confirmDialog, showToast } from '../../store/ui'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
 
 export function SessionsView() {
@@ -17,6 +18,7 @@ export function SessionsView() {
   const setActive = useSessions((s) => s.setActive)
   const closeTab = useSessions((s) => s.closeTab)
   const disconnect = useSessions((s) => s.disconnect)
+  const reconnect = useSessions((s) => s.reconnect)
   const write = useSessions((s) => s.write)
   const snippets = useSnippets((s) => s.snippets)
   const snippetsInit = useSnippets((s) => s.init)
@@ -98,7 +100,7 @@ export function SessionsView() {
       setBulkResult('没有已连接的目标会话')
       return
     }
-    if (!window.confirm(`将向 ${targets.length} 台服务器发送此命令，是否继续？`)) return
+    if (!(await confirmDialog({ title: '批量下发命令', message: `将向 ${targets.length} 台服务器发送此命令，是否继续？`, confirmLabel: '确认发送', danger: true }))) return
     setBulkBusy(true)
     setBulkResult(null)
     let success = 0
@@ -155,6 +157,18 @@ export function SessionsView() {
               <span className={`tab-dot tab-dot-${status}`} />
               <span className="tab-name">{info.name}</span>
               <span className="tab-status">{statusLabel(info.status, info.reason)}</span>
+              {(status === 'disconnected' || status === 'closed') && (
+                <button
+                  className="tab-close"
+                  title="重新连接"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    reconnect(id).catch(() => showToast('重连请求失败，请稍后重试', 'error'))
+                  }}
+                >
+                  <Icon name="refresh" size={12} />
+                </button>
+              )}
               <button
                 className="tab-close"
                 title="关闭标签并断开"

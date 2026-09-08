@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { createHostProfile, HostProfile } from '../types/host'
 import { recordAudit } from './audit'
+import { useVault } from './vault'
 
 const STORE_FILE = 'hosts.json'
 const HOSTS_KEY = 'hosts'
@@ -102,6 +103,7 @@ export const useHosts = create<HostsState>((set, get) => ({
     const hosts = get().hosts.filter((item) => item.id !== id)
     set({ hosts })
     await persist(hosts)
+    await useVault.getState().removeCredential(id)
     recordAudit('host.delete', removed ? `${removed.name} (${removed.host}:${removed.port})` : id, 'success', '删除主机配置')
   },
   importProfiles: async (profiles) => {

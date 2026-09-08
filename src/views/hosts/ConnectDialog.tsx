@@ -92,7 +92,10 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       const file = await open({
         multiple: false,
         title: '选择 SSH 私钥',
-        filters: [{ name: '私钥文件', extensions: ['pem', 'key', 'ppk', 'ed25519', '*'] }]
+        filters: [
+          { name: '私钥文件', extensions: ['pem', 'key', 'ppk', 'ed25519'] },
+          { name: '所有文件', extensions: ['*'] }
+        ]
       })
       if (typeof file === 'string') {
         set({ keyPath: file })

@@ -4,6 +4,7 @@ import { sftpList, sftpReadFile, sftpRemoveFile, sftpWriteFile } from '../../api
 import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
 import { recordAudit } from '../../store/audit'
+import { confirmDialog } from '../../store/ui'
 
 function formatSize(size: number): string {
   if (size < 1024) return `${size} B`
@@ -82,9 +83,28 @@ export function SessionSftpPanel({ sessionId }: Props) {
     setNotice(null)
     let uploaded = 0
     let retried = 0
+    let skipped = 0
     const failed: string[] = []
     try {
+      let existingNames = new Set<string>()
+      try {
+        existingNames = new Set((await sftpList(sessionId, path)).map((entry) => entry.name))
+      } catch {
+        existingNames = new Set()
+      }
       for (const file of files) {
+        if (existingNames.has(file.name)) {
+          const overwrite = await confirmDialog({
+            title: '覆盖远程文件',
+            message: `远程目录 ${path} 已存在同名文件“${file.name}”，上传将覆盖其内容。`,
+            confirmLabel: '覆盖',
+            danger: true
+          })
+          if (!overwrite) {
+            skipped += 1
+            continue
+          }
+        }
         const target = path === '/' ? `/${file.name}` : `${path.replace(/\/$/, '')}/${file.name}`
         try {
           const attempts = await uploadWithRetry(target, new Uint8Array(await file.arrayBuffer()), (filePath, data) => sftpWriteFile(sessionId, filePath, data))
@@ -96,8 +116,11 @@ export function SessionSftpPanel({ sessionId }: Props) {
           failed.push(file.name)
         }
       }
-      recordAudit('sftp.batch-upload', `${uploaded}/${files.length} 个文件`, failed.length ? 'failure' : 'success', `批量上传完成，重试成功 ${retried} 个，失败 ${failed.length} 个`)
-      setNotice(failed.length ? `已上传 ${uploaded}/${files.length} 个文件，失败：${failed.join('、')}` : `已上传 ${uploaded} 个文件`)
+      recordAudit('sftp.batch-upload', `${uploaded}/${files.length} 个文件`, failed.length ? 'failure' : 'success', `批量上传完成，重试成功 ${retried} 个，失败 ${failed.length} 个，跳过 ${skipped} 个`)
+      const parts = [`已上传 ${uploaded}/${files.length} 个文件`]
+      if (skipped) parts.push(`跳过 ${skipped} 个`)
+      if (failed.length) parts.push(`失败：${failed.join('、')}`)
+      setNotice(parts.join('，'))
       await loadDirectory(path)
     } catch (err) {
       setError(typeof err === 'string' ? err : '上传失败')
@@ -166,7 +189,13 @@ export function SessionSftpPanel({ sessionId }: Props) {
 
   const handleDelete = async (entry: SftpEntry) => {
     if (entry.kind !== 'file') return
-    if (!window.confirm(`确认删除远程文件“${entry.name}”？`)) return
+    const accepted = await confirmDialog({
+      title: '删除远程文件',
+      message: `确认删除远程文件“${entry.name}”？该操作不可恢复。`,
+      confirmLabel: '删除',
+      danger: true
+    })
+    if (!accepted) return
     setBusy(true)
     setError(null)
     setNotice(null)
