@@ -14,6 +14,8 @@ export type AuditAction =
   | 'sftp.download'
   | 'sftp.delete'
   | 'sftp.edit'
+  | 'sftp.mkdir'
+  | 'sftp.rename'
   | 'snippet.send'
   | 'command.bulk-send'
   | 'config.export'
@@ -23,6 +25,9 @@ export type AuditAction =
   | 'vault.unlock'
   | 'vault.lock'
   | 'vault.upgrade'
+  | 'vault.remove-credential'
+  | 'vault.change-password'
+  | 'knownhosts.delete'
 
 export interface AuditEntry {
   id: string

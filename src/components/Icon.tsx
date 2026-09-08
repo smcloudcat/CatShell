@@ -18,6 +18,8 @@ export type IconName =
   | 'upload'
   | 'palette'
   | 'database'
+  | 'edit'
+  | 'broadcast'
 
 const paths: Record<IconName, React.ReactNode> = {
   palette: (
@@ -125,6 +127,21 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <path d="m17 8-5-5-5 5M12 3v12" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="m15 5 4 4" />
+    </>
+  ),
+  broadcast: (
+    <>
+      <circle cx="12" cy="12" r="2" />
+      <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+      <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+      <path d="M16.24 16.24a6 6 0 0 0 0-8.49" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
     </>
   )
 }

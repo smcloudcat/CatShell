@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
-import { ConnectRequest, HostKeyPrompt, HostKeyWarning, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SessionOutputEvent, SessionStatusEvent, SftpEntry } from '../types/session'
+import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KnownHostsSnapshot, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SessionOutputEvent, SessionStatusEvent, SftpChunk, SftpEntry, SftpTransferStart, SshConfigEntry } from '../types/session'
 
 const BASE64_CHUNK = 0x8000
 
@@ -130,8 +130,52 @@ export async function sftpRemoveFile(id: number, path: string): Promise<void> {
   await invoke('sftp_remove_file', { id, path })
 }
 
+export async function sftpMkdir(id: number, path: string): Promise<void> {
+  await invoke('sftp_mkdir', { id, path })
+}
+
+export async function sftpRename(id: number, fromPath: string, toPath: string): Promise<void> {
+  await invoke('sftp_rename', { id, fromPath, toPath })
+}
+
+export async function sftpDownloadBegin(id: number, path: string): Promise<SftpTransferStart> {
+  return invoke<SftpTransferStart>('sftp_download_begin', { id, path })
+}
+
+export async function sftpDownloadChunk(transferId: number): Promise<SftpChunk> {
+  return invoke<SftpChunk>('sftp_download_chunk', { transferId })
+}
+
+export async function sftpUploadBegin(id: number, path: string, total: number): Promise<SftpTransferStart> {
+  return invoke<SftpTransferStart>('sftp_upload_begin', { id, path, total })
+}
+
+export async function sftpUploadChunk(transferId: number, offset: number, data: Uint8Array): Promise<void> {
+  await invoke('sftp_upload_chunk', { transferId, offset, data: bytesToBase64(data) })
+}
+
+export async function sftpUploadFinish(transferId: number): Promise<void> {
+  await invoke('sftp_upload_finish', { transferId })
+}
+
+export async function sftpTransferCancel(transferId: number): Promise<void> {
+  await invoke('sftp_transfer_cancel', { transferId })
+}
+
 export async function sshConfirmHostKey(token: string, accepted: boolean): Promise<void> {
   await invoke('ssh_confirm_host_key', { token, accepted })
+}
+
+export async function knownHostsList(): Promise<KnownHostsSnapshot> {
+  return invoke<KnownHostsSnapshot>('known_hosts_list')
+}
+
+export async function knownHostsRemove(pattern: string, keyType: string): Promise<number> {
+  return invoke<number>('known_hosts_remove', { pattern, keyType })
+}
+
+export async function sshConfigParse(): Promise<SshConfigEntry[]> {
+  return invoke<SshConfigEntry[]>('ssh_config_parse')
 }
 
 export interface SshEventHandlers {

@@ -91,7 +91,39 @@ export interface SftpEntry {
   modifiedAt: number | null
 }
 
-export type AuthMethod = 'password' | 'key' | 'keyboard-interactive'
+export interface SftpTransferStart {
+  transferId: number
+  total: number
+}
+
+export interface SftpChunk {
+  data: string
+  done: boolean
+  transferred: number
+  total: number
+}
+
+export interface KnownHostEntry {
+  pattern: string
+  keyType: string
+  fingerprint: string
+}
+
+export interface KnownHostsSnapshot {
+  path: string
+  entries: KnownHostEntry[]
+}
+
+export interface SshConfigEntry {
+  host: string
+  hostname: string | null
+  port: number | null
+  user: string | null
+  identityFile: string | null
+}
+
+export type { AuthMethod } from './host'
+import type { AuthMethod } from './host'
 
 export interface ConnectRequest {
   name: string

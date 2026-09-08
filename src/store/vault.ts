@@ -30,6 +30,7 @@ interface VaultState {
   setup: (password: string) => Promise<void>
   unlock: (password: string) => Promise<void>
   lock: () => void
+  changeMasterPassword: (oldPassword: string, newPassword: string) => Promise<void>
   saveCredential: (id: string, credential: VaultCredential) => Promise<void>
   getCredential: (id: string) => VaultCredential | null
   removeCredential: (id: string) => Promise<void>
@@ -214,6 +215,23 @@ export const useVault = create<VaultState>((set, get) => ({
     set({ unlocked: false, entries: {} })
     recordAudit('vault.lock', '凭据保险箱', 'success', '锁定保险箱并清理内存凭据')
   },
+  changeMasterPassword: async (oldPassword, newPassword) => {
+    validatePassword(newPassword)
+    if (!vaultRecord) throw new Error('请先设置保险箱主密码')
+    touchVaultActivity()
+    let entries: Record<string, VaultCredential>
+    try {
+      entries = await decryptEntries(oldPassword, vaultRecord)
+    } catch {
+      throw new Error('原主密码不正确')
+    }
+    const record = await encryptEntries(newPassword, entries)
+    await writeRecord(record)
+    vaultRecord = record
+    sessionKey = await deriveKey(newPassword, base64ToBytes(record.salt), record.iterations)
+    set({ unlocked: true, entries })
+    recordAudit('vault.change-password', '凭据保险箱', 'success', '使用新盐重新加密保险箱')
+  },
   saveCredential: async (id, credential) => {
     if (!get().unlocked || !vaultRecord || !sessionKey) throw new Error('请先解锁凭据保险箱')
     touchVaultActivity()
@@ -236,5 +254,6 @@ export const useVault = create<VaultState>((set, get) => ({
     await writeRecord(record)
     vaultRecord = record
     set({ entries })
+    recordAudit('vault.remove-credential', '凭据保险箱', 'success', '删除主机凭据')
   }
 }))

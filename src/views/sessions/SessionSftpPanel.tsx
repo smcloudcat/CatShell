@@ -1,16 +1,36 @@
-import { ChangeEvent, useEffect, useState } from 'react'
+import { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { sftpList, sftpReadFile, sftpRemoveFile, sftpWriteFile } from '../../api/ssh'
+import {
+  base64ToBytes,
+  sftpDownloadBegin,
+  sftpDownloadChunk,
+  sftpList,
+  sftpMkdir,
+  sftpReadFile,
+  sftpRemoveFile,
+  sftpRename,
+  sftpTransferCancel,
+  sftpUploadBegin,
+  sftpUploadChunk,
+  sftpUploadFinish,
+  sftpWriteFile
+} from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
+import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog } from '../../store/ui'
 
-function formatSize(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`
-  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`
+const SFTP_CHUNK_SIZE = 256 * 1024
+const SFTP_CHUNKED_THRESHOLD = 16 * 1024 * 1024
+const CANCELLED_MESSAGE = '已取消'
+
+interface TransferProgress {
+  id: number
+  name: string
+  kind: 'upload' | 'download'
+  transferred: number
+  total: number
 }
 
 function parentPath(path: string): string {
@@ -48,8 +68,90 @@ export function SessionSftpPanel({ sessionId }: Props) {
   const [editing, setEditing] = useState<SftpEntry | null>(null)
   const [editorText, setEditorText] = useState('')
   const [editorBusy, setEditorBusy] = useState(false)
+  const [transfers, setTransfers] = useState<TransferProgress[]>([])
+  const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename'; target: SftpEntry | null; value: string } | null>(null)
+  const [nameBusy, setNameBusy] = useState(false)
+  const cancelFlags = useRef<Set<number>>(new Set())
 
   const connected = sessions[sessionId]?.status === 'connected'
+
+  const updateTransfer = (id: number, transferred: number) => {
+    setTransfers((current) => current.map((item) => (item.id === id ? { ...item, transferred } : item)))
+  }
+
+  const removeTransfer = (id: number) => {
+    cancelFlags.current.delete(id)
+    setTransfers((current) => current.filter((item) => item.id !== id))
+  }
+
+  const requestCancel = (id: number) => {
+    cancelFlags.current.add(id)
+  }
+
+  const uploadChunked = async (target: string, file: File): Promise<void> => {
+    const { transferId } = await sftpUploadBegin(sessionId, target, file.size)
+    setTransfers((current) => [
+      ...current,
+      { id: transferId, name: file.name, kind: 'upload', transferred: 0, total: file.size }
+    ])
+    try {
+      let offset = 0
+      while (offset < file.size) {
+        if (cancelFlags.current.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+        const slice = await file.slice(offset, Math.min(offset + SFTP_CHUNK_SIZE, file.size)).arrayBuffer()
+        await sftpUploadChunk(transferId, offset, new Uint8Array(slice))
+        offset += slice.byteLength
+        updateTransfer(transferId, offset)
+      }
+      await sftpUploadFinish(transferId)
+      removeTransfer(transferId)
+    } catch (err) {
+      removeTransfer(transferId)
+      try {
+        await sftpTransferCancel(transferId)
+      } catch {
+        /* transfer already gone */
+      }
+      throw err
+    }
+  }
+
+  const downloadChunked = async (entry: SftpEntry): Promise<void> => {
+    const { transferId, total } = await sftpDownloadBegin(sessionId, entry.path)
+    setTransfers((current) => [
+      ...current,
+      { id: transferId, name: entry.name, kind: 'download', transferred: 0, total }
+    ])
+    const parts: BlobPart[] = []
+    let received = 0
+    try {
+      for (;;) {
+        if (cancelFlags.current.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+        const chunk = await sftpDownloadChunk(transferId)
+        if (chunk.done) break
+        const bytes = base64ToBytes(chunk.data)
+        const copy = new ArrayBuffer(bytes.byteLength)
+        new Uint8Array(copy).set(bytes)
+        parts.push(copy)
+        received += bytes.length
+        updateTransfer(transferId, received)
+      }
+      const anchor = document.createElement('a')
+      anchor.href = URL.createObjectURL(new Blob(parts))
+      anchor.download = entry.name
+      anchor.click()
+      URL.revokeObjectURL(anchor.href)
+      recordAudit('sftp.download', entry.path, 'success', '分块下载文件')
+      setNotice(`已下载 ${entry.name}`)
+    } finally {
+      removeTransfer(transferId)
+      try {
+        await sftpTransferCancel(transferId)
+      } catch {
+        /* transfer already gone */
+      }
+    }
+  }
 
   const loadDirectory = async (nextPath?: string) => {
     const target = nextPath ?? path
@@ -107,13 +209,24 @@ export function SessionSftpPanel({ sessionId }: Props) {
         }
         const target = path === '/' ? `/${file.name}` : `${path.replace(/\/$/, '')}/${file.name}`
         try {
+          if (file.size > SFTP_CHUNKED_THRESHOLD) {
+            await uploadChunked(target, file)
+            recordAudit('sftp.upload', target, 'success', '分块上传文件')
+            uploaded += 1
+            continue
+          }
           const attempts = await uploadWithRetry(target, new Uint8Array(await file.arrayBuffer()), (filePath, data) => sftpWriteFile(sessionId, filePath, data))
           if (attempts > 1) retried += 1
           recordAudit('sftp.upload', target, 'success', attempts > 1 ? `上传文件，第 ${attempts} 次尝试成功` : '上传文件')
           uploaded += 1
-        } catch {
-          recordAudit('sftp.upload', target, 'failure', '上传文件失败')
-          failed.push(file.name)
+        } catch (err) {
+          if (err instanceof Error && err.message === CANCELLED_MESSAGE) {
+            recordAudit('sftp.upload', target, 'failure', '上传已取消')
+            skipped += 1
+          } else {
+            recordAudit('sftp.upload', target, 'failure', '上传文件失败')
+            failed.push(file.name)
+          }
         }
       }
       recordAudit('sftp.batch-upload', `${uploaded}/${files.length} 个文件`, failed.length ? 'failure' : 'success', `批量上传完成，重试成功 ${retried} 个，失败 ${failed.length} 个，跳过 ${skipped} 个`)
@@ -165,6 +278,18 @@ export function SessionSftpPanel({ sessionId }: Props) {
 
   const handleDownload = async (entry: SftpEntry) => {
     if (entry.kind !== 'file') return
+    if (entry.size > SFTP_CHUNKED_THRESHOLD) {
+      setError(null)
+      try {
+        await downloadChunked(entry)
+      } catch (err) {
+        if (!(err instanceof Error && err.message === CANCELLED_MESSAGE)) {
+          recordAudit('sftp.download', entry.path, 'failure', '分块下载失败')
+          setError(typeof err === 'string' ? err : '下载失败')
+        }
+      }
+      return
+    }
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -184,6 +309,35 @@ export function SessionSftpPanel({ sessionId }: Props) {
       setError(typeof err === 'string' ? err : '下载失败')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const submitNameDialog = async () => {
+    if (!nameDialog) return
+    const value = nameDialog.value.trim()
+    if (!value || value.includes('/')) return
+    setNameBusy(true)
+    setError(null)
+    try {
+      if (nameDialog.mode === 'mkdir') {
+        const target = path === '/' ? `/${value}` : `${path.replace(/\/$/, '')}/${value}`
+        await sftpMkdir(sessionId, target)
+        recordAudit('sftp.mkdir', target, 'success', '创建远程目录')
+        setNotice(`已创建目录 ${value}`)
+      } else if (nameDialog.target) {
+        const parent = nameDialog.target.path.slice(0, nameDialog.target.path.lastIndexOf('/'))
+        const target = parent === '' ? `/${value}` : `${parent}/${value}`
+        await sftpRename(sessionId, nameDialog.target.path, target)
+        recordAudit('sftp.rename', `${nameDialog.target.path} -> ${target}`, 'success', '重命名远程文件')
+        setNotice(`已重命名为 ${value}`)
+      }
+      setNameDialog(null)
+      await loadDirectory(path)
+    } catch (err) {
+      recordAudit(nameDialog.mode === 'mkdir' ? 'sftp.mkdir' : 'sftp.rename', nameDialog.mode === 'rename' && nameDialog.target ? nameDialog.target.path : path, 'failure', '远程操作失败')
+      setError(typeof err === 'string' ? err : '远程操作失败')
+    } finally {
+      setNameBusy(false)
     }
   }
 
@@ -226,6 +380,7 @@ export function SessionSftpPanel({ sessionId }: Props) {
         <Icon name="folder" size={15} />
         <span className="sftp-heading">SFTP 文件</span>
         <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title="刷新目录"><Icon name="refresh" size={15} /></button>
+        <button className="glass-btn" onClick={() => setNameDialog({ mode: 'mkdir', target: null, value: '' })} title="新建目录"><Icon name="plus" size={15} /></button>
         <label className="glass-btn primary">
           <Icon name="upload" size={15} />
           上传文件
@@ -247,10 +402,11 @@ export function SessionSftpPanel({ sessionId }: Props) {
               <span>{entry.name}</span>
             </button>
             <span>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
-            <span>{entry.kind === 'file' ? formatSize(entry.size) : '-'}</span>
+            <span>{entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
             <span className="sftp-actions">
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
+              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title="重命名"><Icon name="edit" size={14} /></button>
               {entry.kind === 'file' && <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title="删除"><Icon name="trash" size={14} /></button>}
             </span>
           </div>
@@ -265,6 +421,47 @@ export function SessionSftpPanel({ sessionId }: Props) {
             <div className="modal-body sftp-editor-body"><textarea className="glass-input sftp-editor" value={editorText} onChange={(event) => setEditorText(event.target.value)} spellCheck={false} autoFocus /></div>
             <footer className="modal-footer"><button className="glass-btn" onClick={() => setEditing(null)} disabled={editorBusy}>取消</button><button className="glass-btn primary" onClick={() => void saveEditor()} disabled={editorBusy}>{editorBusy ? '保存中…' : '保存并回传'}</button></footer>
           </div>
+        </div>
+      )}
+      {nameDialog && (
+        <div className="modal-overlay" onClick={() => !nameBusy && setNameDialog(null)}>
+          <div className="modal glass" onClick={(event) => event.stopPropagation()}>
+            <header className="modal-header">
+              <div className="modal-title"><Icon name={nameDialog.mode === 'mkdir' ? 'plus' : 'edit'} size={17} />{nameDialog.mode === 'mkdir' ? '新建远程目录' : `重命名 ${nameDialog.target?.name ?? ''}`}</div>
+              <button className="modal-close" onClick={() => setNameDialog(null)} disabled={nameBusy}><Icon name="x" size={15} /></button>
+            </header>
+            <div className="modal-body">
+              {nameDialog.mode === 'mkdir' && <div className="section-tip">将在当前目录 {path} 下创建新目录。</div>}
+              <label className="field">
+                <span className="field-label">名称</span>
+                <input className="glass-input" value={nameDialog.value} onChange={(event) => setNameDialog({ ...nameDialog, value: event.target.value })} autoFocus onKeyDown={(event) => { if (event.key === 'Enter' && !nameBusy) void submitNameDialog() }} />
+              </label>
+            </div>
+            <footer className="modal-footer">
+              <button className="glass-btn" onClick={() => setNameDialog(null)} disabled={nameBusy}>取消</button>
+              <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? '处理中…' : '确认'}</button>
+            </footer>
+          </div>
+        </div>
+      )}
+      {transfers.length > 0 && (
+        <div className="sftp-transfers">
+          {transfers.map((transfer) => {
+            const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
+            return (
+              <div className="sftp-transfer" key={transfer.id}>
+                <Icon name={transfer.kind === 'upload' ? 'upload' : 'save'} size={14} />
+                <div className="sftp-transfer-body">
+                  <div className="sftp-transfer-meta">
+                    <span className="sftp-transfer-name" title={transfer.name}>{transfer.name}</span>
+                    <span>{formatBytes(transfer.transferred)} / {formatBytes(transfer.total)} · {percent}%</span>
+                  </div>
+                  <div className="metric-bar"><span style={{ width: `${percent}%` }} /></div>
+                </div>
+                <button className="host-icon-btn danger" onClick={() => requestCancel(transfer.id)} title="取消传输"><Icon name="x" size={13} /></button>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

@@ -30,7 +30,10 @@ const ACTION_LABELS: Record<string, string> = {
   'forward.stop': '停止转发',
   'vault.unlock': '解锁保险箱',
   'vault.lock': '锁定保险箱',
-  'vault.upgrade': '升级保险箱加密'
+  'vault.upgrade': '升级保险箱加密',
+  'vault.remove-credential': '删除保险箱凭据',
+  'vault.change-password': '修改保险箱主密码',
+  'knownhosts.delete': '删除 known_hosts 条目'
 }
 
 function exportEntries(entries: AuditEntry[]) {

@@ -81,6 +81,7 @@ export function BackupPanel() {
   const importSnippets = useSnippets((state) => state.importSnippets)
   const theme = useSettings((state) => state.theme)
   const replaceTheme = useSettings((state) => state.replaceTheme)
+  const saveTheme = useSettings((state) => state.saveTheme)
   const monitorThresholds = useSettings((state) => state.monitorThresholds)
   const setMonitorThresholds = useSettings((state) => state.setMonitorThresholds)
   const saveMonitorThresholds = useSettings((state) => state.saveMonitorThresholds)
@@ -111,13 +112,14 @@ export function BackupPanel() {
       await importProfiles(backup.hosts)
       await importSnippets(backup.snippets)
       replaceTheme(restoredTheme)
+      await saveTheme()
       setMonitorThresholds(backup.monitorThresholds ?? DEFAULT_MONITOR_THRESHOLDS)
       await saveMonitorThresholds()
       recordAudit('config.import', '本地配置', 'success', `还原 ${backup.hosts.length} 条主机和 ${backup.snippets.length} 个片段`)
-      showToast('配置还原完成。点击“保存主题”后主题设置将持久化。', 'success')
-    } catch {
+      showToast('配置还原完成，主题设置已持久化。', 'success')
+    } catch (err) {
       recordAudit('config.import', '本地配置', 'failure', '备份文件无效')
-      showToast('还原失败，请选择有效的 CatShell 备份文件。', 'error')
+      showToast(err instanceof Error ? `还原失败：${err.message}` : '还原失败，请选择有效的 CatShell 备份文件。', 'error')
     }
   }
 

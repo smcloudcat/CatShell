@@ -28,6 +28,8 @@ interface SessionsState {
   requests: Record<number, ConnectRequest>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
+  broadcastEnabled: boolean
+  broadcastTargets: number[]
   init: () => Promise<void>
   open: (request: ConnectRequest) => Promise<number>
   reconnect: (id: number) => Promise<number>
@@ -36,6 +38,8 @@ interface SessionsState {
   disconnect: (id: number) => Promise<void>
   closeTab: (id: number) => Promise<void>
   setActive: (id: number | null) => void
+  setBroadcastEnabled: (enabled: boolean) => void
+  toggleBroadcastTarget: (id: number) => void
   registerTerminal: (ref: TerminalRef) => void
   unregisterTerminal: (id: number) => void
   updateStatus: (event: SessionStatusEvent) => void
@@ -102,6 +106,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
   requests: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
+  broadcastEnabled: false,
+  broadcastTargets: [],
   init: async () => {
     if (get().ready) return
     if (initializationPromise) return initializationPromise
@@ -120,16 +126,21 @@ export const useSessions = create<SessionsState>((set, get) => ({
         order.push(info.id)
       }
       set({ sessions, order, ready: true, activeId: order[0] ?? null })
-      await subscribeSshEvents({
-        onStatus: (event) => get().updateStatus(event),
-        onOutput: (id, data) => {
-          appendSessionLog(id, data)
-          const term = get().terminals[id]
-          if (term) term.write(data)
-        },
-        onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
-        ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
-      })
+      try {
+        await subscribeSshEvents({
+          onStatus: (event) => get().updateStatus(event),
+          onOutput: (id, data) => {
+            appendSessionLog(id, data)
+            const term = get().terminals[id]
+            if (term) term.write(data)
+          },
+          onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
+          ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
+        })
+      } catch (err) {
+        // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级
+        console.warn('SSH 事件订阅不可用，当前仅浏览器预览模式', err)
+      }
     })()
 
     return initializationPromise
@@ -270,6 +281,20 @@ export const useSessions = create<SessionsState>((set, get) => ({
     })
   },
   setActive: (id) => set({ activeId: id }),
+  setBroadcastEnabled: (enabled) => {
+    if (!enabled) {
+      set({ broadcastEnabled: false, broadcastTargets: [] })
+      return
+    }
+    const connected = get().order.filter((id) => get().sessions[id]?.status === 'connected')
+    set({ broadcastEnabled: true, broadcastTargets: connected })
+  },
+  toggleBroadcastTarget: (id) =>
+    set((s) => ({
+      broadcastTargets: s.broadcastTargets.includes(id)
+        ? s.broadcastTargets.filter((item) => item !== id)
+        : [...s.broadcastTargets, id]
+    })),
   registerTerminal: (ref) => set((s) => ({ terminals: { ...s.terminals, [ref.id]: ref } })),
   unregisterTerminal: (id) =>
     set((s) => {

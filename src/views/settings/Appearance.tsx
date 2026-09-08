@@ -12,10 +12,20 @@ const ACCENT_SWATCHES = [
   { name: '石板', color: '#94a3b8' }
 ]
 
+const TERMINAL_FONT_OPTIONS = [
+  { label: 'Consolas（默认）', value: 'Consolas, "Cascadia Mono", "Courier New", monospace' },
+  { label: 'Cascadia Mono', value: '"Cascadia Mono", Consolas, "Courier New", monospace' },
+  { label: 'Courier New', value: '"Courier New", Consolas, monospace' },
+  { label: '系统等宽字体', value: 'ui-monospace, Consolas, "Cascadia Mono", monospace' }
+]
+
 export function Appearance() {
   const theme = useSettings((s) => s.theme)
   const setTheme = useSettings((s) => s.setTheme)
   const setAppearanceMode = useSettings((s) => s.setAppearanceMode)
+  const terminal = useSettings((s) => s.terminal)
+  const setTerminal = useSettings((s) => s.setTerminal)
+  const saveTerminal = useSettings((s) => s.saveTerminal)
 
   return (
     <div className="settings-section">
@@ -70,6 +80,57 @@ export function Appearance() {
       />
       <div className="section-tip">
         深浅模式默认跟随系统外观；强调色将应用于按钮、导航与状态高亮。
+      </div>
+      <div className="setting-row">
+        <div className="row-label">
+          <span>终端字体</span>
+        </div>
+        <select
+          className="glass-input"
+          value={terminal.fontFamily}
+          onChange={(event) => { setTerminal({ fontFamily: event.target.value }); void saveTerminal() }}
+        >
+          {TERMINAL_FONT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="setting-row">
+        <div className="row-label">
+          <span>终端字号</span>
+        </div>
+        <div className="seg-group">
+          {[12, 13, 14, 16, 18].map((size) => (
+            <button
+              key={size}
+              className={`seg-btn ${terminal.fontSize === size ? 'active' : ''}`}
+              onClick={() => { setTerminal({ fontSize: size }); void saveTerminal() }}
+            >
+              {size}px
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="row-label">
+          <span>回滚行数</span>
+        </div>
+        <div className="seg-group">
+          {[1000, 5000, 8000, 20000].map((lines) => (
+            <button
+              key={lines}
+              className={`seg-btn ${terminal.scrollback === lines ? 'active' : ''}`}
+              onClick={() => { setTerminal({ scrollback: lines }); void saveTerminal() }}
+            >
+              {lines.toLocaleString()}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="section-tip">
+        终端外观立即应用于所有已打开会话；终端配色随深浅模式自动切换。
       </div>
     </div>
   )

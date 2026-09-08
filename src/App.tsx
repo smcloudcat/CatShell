@@ -176,7 +176,7 @@ function App() {
           <span className="sidebar-toggle-icon">
             <Icon name="chevron-down" size={16} />
           </span>
-          <span className="nav-label">收起侧栏</span>
+          <span className="nav-label">{sidebarCollapsed ? '展开侧栏' : '收起侧栏'}</span>
         </button>
       </aside>
       <main className="main-area">

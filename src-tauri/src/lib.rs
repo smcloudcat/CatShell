@@ -5,8 +5,9 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use ssh_manager::{
-    ConnectRequest, EventSink, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics,
-    SessionInfo, SftpEntry, SshManager,
+    load_known_hosts_snapshot, remove_known_hosts_entry, ConnectRequest, EventSink,
+    NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SftpChunk,
+    SftpEntry, SftpTransferStart, SshConfigEntry, SshManager,
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -201,12 +202,105 @@ async fn sftp_remove_file(state: State<'_, AppState>, id: u64, path: String) -> 
 }
 
 #[tauri::command]
+async fn sftp_mkdir(state: State<'_, AppState>, id: u64, path: String) -> Result<(), String> {
+    state.ssh.sftp_mkdir(id, path).await
+}
+
+#[tauri::command]
+async fn sftp_rename(
+    state: State<'_, AppState>,
+    id: u64,
+    from_path: String,
+    to_path: String,
+) -> Result<(), String> {
+    state.ssh.sftp_rename(id, from_path, to_path).await
+}
+
+#[tauri::command]
+async fn sftp_download_begin(
+    state: State<'_, AppState>,
+    id: u64,
+    path: String,
+) -> Result<SftpTransferStart, String> {
+    state.ssh.sftp_download_begin(id, path).await
+}
+
+#[tauri::command]
+async fn sftp_download_chunk(
+    state: State<'_, AppState>,
+    transfer_id: u64,
+) -> Result<SftpChunk, String> {
+    state.ssh.sftp_download_chunk(transfer_id).await
+}
+
+#[tauri::command]
+async fn sftp_upload_begin(
+    state: State<'_, AppState>,
+    id: u64,
+    path: String,
+    total: u64,
+) -> Result<SftpTransferStart, String> {
+    state.ssh.sftp_upload_begin(id, path, total).await
+}
+
+#[tauri::command]
+async fn sftp_upload_chunk(
+    state: State<'_, AppState>,
+    transfer_id: u64,
+    offset: u64,
+    data: String,
+) -> Result<(), String> {
+    let data = decode_base64_payload(&data)?;
+    state.ssh.sftp_upload_chunk(transfer_id, offset, data).await
+}
+
+#[tauri::command]
+async fn sftp_upload_finish(
+    state: State<'_, AppState>,
+    transfer_id: u64,
+) -> Result<(), String> {
+    state.ssh.sftp_upload_finish(transfer_id).await
+}
+
+#[tauri::command]
+async fn sftp_transfer_cancel(
+    state: State<'_, AppState>,
+    transfer_id: u64,
+) -> Result<(), String> {
+    state.ssh.sftp_transfer_cancel(transfer_id).await
+}
+
+#[tauri::command]
 async fn ssh_confirm_host_key(
     state: State<'_, AppState>,
     token: String,
     accepted: bool,
 ) -> Result<(), String> {
     state.ssh.confirm_host_key(token, accepted).await
+}
+
+#[tauri::command]
+async fn known_hosts_list() -> Result<ssh_manager::KnownHostsSnapshot, String> {
+    load_known_hosts_snapshot(None)
+}
+
+#[tauri::command]
+async fn known_hosts_remove(pattern: String, key_type: String) -> Result<usize, String> {
+    if pattern.trim().is_empty() || key_type.trim().is_empty() {
+        return Err("主机指纹条目无效".to_string());
+    }
+    remove_known_hosts_entry(None, pattern.trim(), key_type.trim())
+}
+
+#[tauri::command]
+async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
+    let path = ssh_manager::ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    if !path.exists() {
+        return Err("未找到 ~/.ssh/config 文件".to_string());
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
+    Ok(ssh_manager::parse_ssh_config(&content))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -224,6 +318,9 @@ pub fn run() {
             ssh_remove,
             ssh_list,
             ssh_confirm_host_key,
+            known_hosts_list,
+            known_hosts_remove,
+            ssh_config_parse,
             ssh_monitor,
             ssh_processes,
             ssh_kill_process,
@@ -236,7 +333,15 @@ pub fn run() {
             sftp_list,
             sftp_read_file,
             sftp_write_file,
-            sftp_remove_file
+            sftp_remove_file,
+            sftp_mkdir,
+            sftp_rename,
+            sftp_download_begin,
+            sftp_download_chunk,
+            sftp_upload_begin,
+            sftp_upload_chunk,
+            sftp_upload_finish,
+            sftp_transfer_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

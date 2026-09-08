@@ -4,6 +4,7 @@ import { ThemeParams } from './settings/ThemeParams'
 import { Appearance } from './settings/Appearance'
 import { Icon, IconName } from '../components/Icon'
 import { VaultPanel } from './settings/VaultPanel'
+import { KnownHostsPanel } from './settings/KnownHostsPanel'
 import { SnippetPanel } from './settings/SnippetPanel'
 import { AuditPanel } from './settings/AuditPanel'
 import { BackupPanel } from './settings/BackupPanel'
@@ -125,6 +126,7 @@ export function SettingsView() {
             {tab === 'security' && (
               <>
                 <VaultPanel />
+                <KnownHostsPanel />
                 <AuditPanel />
               </>
             )}

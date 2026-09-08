@@ -22,6 +22,10 @@ export function SessionsView() {
   const write = useSessions((s) => s.write)
   const snippets = useSnippets((s) => s.snippets)
   const snippetsInit = useSnippets((s) => s.init)
+  const broadcastEnabled = useSessions((s) => s.broadcastEnabled)
+  const broadcastTargets = useSessions((s) => s.broadcastTargets)
+  const setBroadcastEnabled = useSessions((s) => s.setBroadcastEnabled)
+  const toggleBroadcastTarget = useSessions((s) => s.toggleBroadcastTarget)
   const [snippetId, setSnippetId] = useState('')
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCommand, setBulkCommand] = useState('')
@@ -117,6 +121,10 @@ export function SessionsView() {
     setBulkBusy(false)
   }
 
+  const connectedSessions = order.filter((id) => sessions[id]?.status === 'connected')
+  const broadcastActiveCount = broadcastTargets.filter((id) => sessions[id]?.status === 'connected').length
+  const allBroadcastSelected = connectedSessions.length > 0 && connectedSessions.every((id) => broadcastTargets.includes(id))
+
   if (order.length === 0) {
     return (
       <div className="view">
@@ -156,7 +164,7 @@ export function SessionsView() {
             >
               <span className={`tab-dot tab-dot-${status}`} />
               <span className="tab-name">{info.name}</span>
-              <span className="tab-status">{statusLabel(info.status, info.reason)}</span>
+              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason)}</span>
               {(status === 'disconnected' || status === 'closed') && (
                 <button
                   className="tab-close"
@@ -199,6 +207,15 @@ export function SessionsView() {
         <button className="glass-btn" onClick={() => setBulkOpen(true)} title="向所有已连接会话发送命令">
           批量下发
         </button>
+        <button
+          className={`glass-btn ${broadcastEnabled ? 'primary' : ''}`}
+          onClick={() => setBroadcastEnabled(!broadcastEnabled)}
+          disabled={!connectedSessions.length}
+          title="开启后，在当前终端键入的每个字符都会实时同步到勾选的会话"
+        >
+          <Icon name="broadcast" size={14} />
+          广播输入
+        </button>
         <button className="glass-btn" onClick={exportSessionLog} disabled={activeId === null} title="导出当前会话最近 2 MB 输出">
           <Icon name="save" size={14} />保存日志
         </button>
@@ -206,6 +223,40 @@ export function SessionsView() {
       </div>
        {snippetError && <div className="form-error">{snippetError}</div>}
        {bulkResult && <div className="form-notice">{bulkResult}</div>}
+      {broadcastEnabled && (
+        <div className="broadcast-bar glass">
+          <div className="broadcast-title">
+            <Icon name="broadcast" size={15} />
+            <span>广播输入已开启</span>
+            <small>在当前终端键入会实时同步到勾选的会话（{broadcastActiveCount} 个目标）</small>
+          </div>
+          <div className="broadcast-targets">
+            {connectedSessions.map((id) => (
+              <button
+                key={id}
+                className={`broadcast-chip ${broadcastTargets.includes(id) ? 'active' : ''}`}
+                onClick={() => toggleBroadcastTarget(id)}
+                title={sessions[id]?.name}
+              >
+                {sessions[id]?.name}
+              </button>
+            ))}
+            {!connectedSessions.length && <span className="section-tip">没有已连接的会话可作为广播目标。</span>}
+          </div>
+          <div className="broadcast-actions">
+            <button
+              className="glass-btn"
+              onClick={() => connectedSessions.forEach((id) => {
+                if (!broadcastTargets.includes(id)) toggleBroadcastTarget(id)
+              })}
+              disabled={allBroadcastSelected}
+            >
+              全选
+            </button>
+            <button className="glass-btn" onClick={() => setBroadcastEnabled(false)}>关闭广播</button>
+          </div>
+        </div>
+      )}
       <div className="session-workspace">
         <div className="terminal-stack">
           {order.map((id) => (

@@ -2,21 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshProcesses } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
-import { useSettings } from '../../store/settings'
+import { useSettings, MONITOR_INTERVAL_OPTIONS } from '../../store/settings'
 import { showToast, confirmDialog } from '../../store/ui'
 import { NetworkDiagnostic, ProcessInfo, ServerMetrics } from '../../types/session'
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, value)} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let amount = value
-  let unit = -1
-  while (amount >= 1024 && unit < units.length - 1) {
-    amount /= 1024
-    unit += 1
-  }
-  return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[unit]}`
-}
+import { formatBytes } from '../../utils/format'
 
 function formatMemory(kb: number): string {
   return formatBytes(kb * 1024)
@@ -31,10 +20,37 @@ interface Props {
   sessionId: number
 }
 
+const HISTORY_LIMIT = 60
+
+interface RateSample {
+  at: number
+  rx: number
+  tx: number
+}
+
+function sparkline(values: number[]): string {
+  if (values.length < 2) return ''
+  const width = 120
+  const height = 28
+  const max = Math.max(...values, 1)
+  const step = width / (values.length - 1)
+  return values
+    .map((value, index) => {
+      const x = (index * step).toFixed(1)
+      const y = (height - (value / max) * (height - 2) - 1).toFixed(1)
+      return `${index === 0 ? 'M' : 'L'}${x} ${y}`
+    })
+    .join(' ')
+}
+
 export function SessionMonitorPanel({ sessionId }: Props) {
   const monitorThresholds = useSettings((state) => state.monitorThresholds)
+  const monitorIntervalSeconds = useSettings((state) => state.monitorIntervalSeconds)
+  const setMonitorIntervalSeconds = useSettings((state) => state.setMonitorIntervalSeconds)
+  const saveMonitorIntervalSeconds = useSettings((state) => state.saveMonitorIntervalSeconds)
   const sessions = useSessions((state) => state.sessions)
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null)
+  const [history, setHistory] = useState<ServerMetrics[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -45,6 +61,7 @@ export function SessionMonitorPanel({ sessionId }: Props) {
   const [diagnosticTarget, setDiagnosticTarget] = useState('')
   const [diagnostic, setDiagnostic] = useState<NetworkDiagnostic | null>(null)
   const [alerts, setAlerts] = useState<string[]>([])
+  const lastRate = useRef<RateSample | null>(null)
   const alertState = useRef<Record<string, boolean>>({})
 
   const connected = sessions[sessionId]?.status === 'connected'
@@ -52,6 +69,7 @@ export function SessionMonitorPanel({ sessionId }: Props) {
   useEffect(() => {
     if (!connected) {
       setMetrics(null)
+      setHistory([])
       setProcesses([])
       setAlerts([])
       alertState.current = {}
@@ -59,6 +77,7 @@ export function SessionMonitorPanel({ sessionId }: Props) {
     }
     let cancelled = false
     setAlerts([])
+    lastRate.current = null
     const refresh = async () => {
       setBusy(true)
       setError(null)
@@ -66,6 +85,7 @@ export function SessionMonitorPanel({ sessionId }: Props) {
         const next = await sshMonitor(sessionId)
         if (!cancelled) {
           setMetrics(next)
+          setHistory((current) => [...current, next].slice(-HISTORY_LIMIT))
           const memoryPercent = percent(next.memoryTotalKb - next.memoryAvailableKb, next.memoryTotalKb)
           const diskPercent = percent(next.diskUsedKb, next.diskTotalKb)
           const checks = [
@@ -93,12 +113,12 @@ export function SessionMonitorPanel({ sessionId }: Props) {
       }
     }
     void refresh()
-    const timer = window.setInterval(refresh, 10000)
+    const timer = window.setInterval(refresh, monitorIntervalSeconds * 1000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [sessionId, connected, refreshKey, monitorThresholds])
+  }, [sessionId, connected, refreshKey, monitorThresholds, monitorIntervalSeconds])
 
   useEffect(() => {
     if (!connected) {
@@ -150,6 +170,26 @@ export function SessionMonitorPanel({ sessionId }: Props) {
   const diskUsedPercent = metrics ? percent(metrics.diskUsedKb, metrics.diskTotalKb) : 0
   const memoryUsedPercent = metrics ? percent(memoryUsed, metrics.memoryTotalKb) : 0
 
+  const rate = (() => {
+    if (!metrics) return null
+    const previous = lastRate.current
+    if (!previous || metrics.networkRxBytes < previous.rx || metrics.networkTxBytes < previous.tx) {
+      return null
+    }
+    const seconds = metrics.collectedAt - previous.at
+    if (seconds <= 0) return null
+    return {
+      rx: (metrics.networkRxBytes - previous.rx) / seconds,
+      tx: (metrics.networkTxBytes - previous.tx) / seconds
+    }
+  })()
+  if (metrics) {
+    lastRate.current = { at: metrics.collectedAt, rx: metrics.networkRxBytes, tx: metrics.networkTxBytes }
+  }
+
+  const memorySparkline = sparkline(history.map((item) => percent(item.memoryTotalKb - item.memoryAvailableKb, item.memoryTotalKb)))
+  const loadSparkline = sparkline(history.map((item) => Math.min(100, item.cpuCores ? (item.load1m / item.cpuCores) * 100 : 0)))
+
   if (!connected) {
     return (
       <div className="sftp-empty">
@@ -164,6 +204,18 @@ export function SessionMonitorPanel({ sessionId }: Props) {
       <div className="sftp-toolbar">
         <Icon name="monitor" size={15} />
         <span className="sftp-heading">服务器监控</span>
+        <label className="monitor-interval">
+          <span>间隔</span>
+          <select
+            className="glass-input"
+            value={monitorIntervalSeconds}
+            onChange={(event) => { setMonitorIntervalSeconds(Number(event.target.value)); void saveMonitorIntervalSeconds() }}
+          >
+            {MONITOR_INTERVAL_OPTIONS.map((seconds) => (
+              <option key={seconds} value={seconds}>{seconds}s</option>
+            ))}
+          </select>
+        </label>
         <button className="glass-btn" onClick={() => setRefreshKey((value) => value + 1)} disabled={busy} title="立即刷新">
           <Icon name="refresh" size={15} />
           {busy ? '采集中' : '刷新'}
@@ -182,11 +234,17 @@ export function SessionMonitorPanel({ sessionId }: Props) {
               <span className="monitor-label">CPU 负载</span>
               <strong>{metrics.load1m.toFixed(2)}</strong>
               <span>{metrics.cpuCores} 核 · 1 分钟</span>
+              {loadSparkline && (
+                <svg className="monitor-sparkline" viewBox="0 0 120 28" preserveAspectRatio="none"><path d={loadSparkline} /></svg>
+              )}
             </div>
             <div className="glass monitor-card">
               <span className="monitor-label">内存</span>
               <strong>{memoryUsedPercent.toFixed(0)}%</strong>
               <span>{formatMemory(memoryUsed)} / {formatMemory(metrics.memoryTotalKb)}</span>
+              {memorySparkline && (
+                <svg className="monitor-sparkline" viewBox="0 0 120 28" preserveAspectRatio="none"><path d={memorySparkline} /></svg>
+              )}
             </div>
             <div className="glass monitor-card">
               <span className="monitor-label">根分区</span>
@@ -212,12 +270,15 @@ export function SessionMonitorPanel({ sessionId }: Props) {
               <div className="monitor-panel-meta"><span>已用 {formatMemory(metrics.diskUsedKb)}</span><span>可用 {formatMemory(metrics.diskAvailableKb)}</span></div>
             </div>
             <div className="glass monitor-panel">
-              <div className="monitor-panel-title">网络累计流量</div>
-              <div className="network-values"><strong>↓ {formatBytes(metrics.networkRxBytes)}</strong><strong>↑ {formatBytes(metrics.networkTxBytes)}</strong></div>
-              <div className="monitor-panel-meta"><span>接收</span><span>发送</span></div>
+              <div className="monitor-panel-title">网络流量</div>
+              <div className="network-values">
+                <strong>↓ {rate ? `${formatBytes(rate.rx)}/s` : '—'}</strong>
+                <strong>↑ {rate ? `${formatBytes(rate.tx)}/s` : '—'}</strong>
+              </div>
+              <div className="monitor-panel-meta"><span>实时速率</span><span>累计 ↓ {formatBytes(metrics.networkRxBytes)} · ↑ {formatBytes(metrics.networkTxBytes)}</span></div>
             </div>
           </section>
-          <div className="monitor-updated">最近采集：{new Date(metrics.collectedAt * 1000).toLocaleString()}</div>
+          <div className="monitor-updated">最近采集：{new Date(metrics.collectedAt * 1000).toLocaleString()} · 已记录 {history.length} 次采样</div>
           <section className="monitor-panels monitor-extra-panels">
             <div className="glass monitor-panel process-panel">
               <div className="monitor-panel-title">进程管理</div>

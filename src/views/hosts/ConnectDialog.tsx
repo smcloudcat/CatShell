@@ -26,6 +26,8 @@ interface FormState {
   otpSecret: string
   keepalive: string
   autoReconnect: boolean
+  group: string
+  tags: string
 }
 
 const FORM_EMPTY: FormState = {
@@ -39,7 +41,9 @@ const FORM_EMPTY: FormState = {
   passphrase: '',
   otpSecret: '',
   keepalive: '30',
-  autoReconnect: true
+  autoReconnect: true,
+  group: '',
+  tags: ''
 }
 
 function formFromProfile(profile?: HostProfile | null): FormState {
@@ -55,8 +59,23 @@ function formFromProfile(profile?: HostProfile | null): FormState {
     passphrase: '',
     otpSecret: '',
     keepalive: String(profile.keepAliveInterval),
-    autoReconnect: profile.autoReconnect
+    autoReconnect: profile.autoReconnect,
+    group: profile.group ?? '',
+    tags: profile.tags.join(', ')
   }
+}
+
+function parseTagsInput(value: string): string[] {
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const item of value.split(/[,，、\s]+/)) {
+    const tag = item.trim().slice(0, 24)
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    tags.push(tag)
+    if (tags.length >= 10) break
+  }
+  return tags
 }
 
 export function ConnectDialog({ open: visible, onClose, onConnected, profile }: Props) {
@@ -161,10 +180,10 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           username: request.username,
           authMethod: request.authMethod,
            password: null,
-          keyPath: request.keyPath ?? null,
+           keyPath: request.keyPath ?? null,
            passphrase: null,
-          group: profile?.group ?? null,
-          tags: profile?.tags ?? [],
+          group: form.group.trim() ? form.group.trim().slice(0, 48) : (profile?.group ?? null),
+          tags: parseTagsInput(form.tags),
           description: profile?.description ?? '',
           keepAliveInterval: request.keepalive,
           autoReconnect: request.autoReconnect,
@@ -224,8 +243,8 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         password: null,
         keyPath: form.authMethod === 'key' ? form.keyPath.trim() : null,
         passphrase: null,
-        group: profile?.group ?? null,
-        tags: profile?.tags ?? [],
+        group: form.group.trim() ? form.group.trim().slice(0, 48) : null,
+        tags: parseTagsInput(form.tags),
         description: profile?.description ?? '',
         keepAliveInterval: Math.min(300, Math.max(5, Number(form.keepalive) || 30)),
         autoReconnect: form.autoReconnect,
@@ -397,6 +416,24 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                 max={300}
                 value={form.keepalive}
                 onChange={(e) => set({ keepalive: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">分组（可选）</span>
+              <input
+                className="glass-input"
+                placeholder="例如 生产环境"
+                value={form.group}
+                onChange={(e) => set({ group: e.target.value })}
+              />
+            </label>
+            <label className="field span-2">
+              <span className="field-label">标签（可选，逗号分隔）</span>
+              <input
+                className="glass-input"
+                placeholder="例如 web, linux, 部署目标"
+                value={form.tags}
+                onChange={(e) => set({ tags: e.target.value })}
               />
             </label>
             <label className="field checkbox-field">

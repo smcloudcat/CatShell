@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { sshForwardList, sshForwardStart, sshForwardStartDynamic, sshForwardStartRemote, sshForwardStop } from '../api/ssh'
 import { useSessions } from '../store/sessions'
@@ -30,9 +30,10 @@ export function ForwardView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const connectedSessions = order
-    .map((id) => sessions[id])
-    .filter((session) => session?.status === 'connected')
+  const connectedSessions = useMemo(
+    () => order.map((id) => sessions[id]).filter((session) => session?.status === 'connected'),
+    [order, sessions]
+  )
 
   useEffect(() => {
     if (!form.sessionId && connectedSessions[0]) {

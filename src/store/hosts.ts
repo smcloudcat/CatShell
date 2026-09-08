@@ -6,6 +6,10 @@ import { useVault } from './vault'
 
 const STORE_FILE = 'hosts.json'
 const HOSTS_KEY = 'hosts'
+const MAX_IMPORT_PROFILES = 1000
+const MAX_HOST_GROUP_LENGTH = 48
+const MAX_HOST_TAGS = 10
+const MAX_HOST_TAG_LENGTH = 24
 
 interface HostsState {
   ready: boolean
@@ -18,12 +22,34 @@ interface HostsState {
 
 let initializationPromise: Promise<void> | null = null
 
+function normalizeGroup(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const group = value.trim().slice(0, MAX_HOST_GROUP_LENGTH)
+  return group || null
+}
+
+function normalizeTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const tag = item.trim().slice(0, MAX_HOST_TAG_LENGTH)
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    tags.push(tag)
+    if (tags.length >= MAX_HOST_TAGS) break
+  }
+  return tags
+}
+
 function normalizeHost(value: Partial<HostProfile>): HostProfile {
   return createHostProfile({
     ...value,
     password: null,
     passphrase: null,
-    tags: Array.isArray(value.tags) ? value.tags : [],
+    group: normalizeGroup(value.group),
+    tags: normalizeTags(value.tags),
     port: Number(value.port) > 0 ? Number(value.port) : 22,
     keepAliveInterval: Number(value.keepAliveInterval) > 0 ? Number(value.keepAliveInterval) : 30,
     autoReconnect: value.autoReconnect !== false
@@ -107,6 +133,7 @@ export const useHosts = create<HostsState>((set, get) => ({
     recordAudit('host.delete', removed ? `${removed.name} (${removed.host}:${removed.port})` : id, 'success', '删除主机配置')
   },
   importProfiles: async (profiles) => {
+    if (profiles.length > MAX_IMPORT_PROFILES) throw new Error(`单次导入不能超过 ${MAX_IMPORT_PROFILES} 条主机配置`)
     const existing = new Map(get().hosts.map((host) => [host.id, host]))
     for (const profile of profiles) {
       const normalized = normalizeHost(profile)
