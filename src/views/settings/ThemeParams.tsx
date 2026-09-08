@@ -9,9 +9,9 @@ interface Props {
 export function ThemeParams({ theme, setTheme }: Props) {
   return (
     <div className="settings-section">
-      <div className="settings-section-title">玻璃参数</div>
+      <div className="settings-section-title">界面质感</div>
       <SliderRow
-        label="背景透明度"
+        label="卡片不透明度"
         value={theme.bgOpacity}
         min={0.1}
         max={1}
@@ -35,31 +35,15 @@ export function ThemeParams({ theme, setTheme }: Props) {
         onChange={(v) => setTheme({ borderRadius: v })}
       />
       <SliderRow
-        label="边框透明度"
+        label="描边透明度"
         value={theme.borderOpacity}
-        min={0.2}
+        min={0.05}
         max={0.4}
-        step={0.05}
+        step={0.01}
         onChange={(v) => setTheme({ borderOpacity: v })}
       />
 
-      <div className="settings-section-title">背景层</div>
-      <SegRow
-        label="文字配色"
-        value={theme.modeAuto ? 'auto' : theme.mode}
-        options={[
-          { value: 'auto', label: '自动' },
-          { value: 'light', label: '深文字' },
-          { value: 'dark', label: '浅文字' }
-        ]}
-        onChange={(v) => {
-          if (v === 'auto') {
-            setTheme({ modeAuto: true })
-          } else {
-            setTheme({ modeAuto: false, mode: v })
-          }
-        }}
-      />
+      <div className="settings-section-title">背景</div>
       <SegRow
         label="背景类型"
         value={theme.backgroundType}
@@ -112,13 +96,6 @@ export function ThemeParams({ theme, setTheme }: Props) {
           )}
         </div>
       )}
-
-      <div className="settings-section-title">强调色</div>
-      <ColorRow
-        label="强调色"
-        value={theme.accentColor}
-        onChange={(v) => setTheme({ accentColor: v })}
-      />
     </div>
   )
 }

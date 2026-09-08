@@ -1,7 +1,6 @@
-import { THEME_PRESETS } from '../types/theme'
 import { useSettings } from '../store/settings'
 import { ThemeParams } from './settings/ThemeParams'
-import { Presets } from './settings/Presets'
+import { Appearance } from './settings/Appearance'
 import { Icon } from '../components/Icon'
 import { VaultPanel } from './settings/VaultPanel'
 import { SnippetPanel } from './settings/SnippetPanel'
@@ -11,7 +10,7 @@ import { MonitorThresholdPanel } from './settings/MonitorThresholdPanel'
 
 export function SettingsView() {
   const theme = useSettings((s) => s.theme)
-  const setTheme = useSettings((s) => s.setTheme)
+  const resetTheme = useSettings((s) => s.resetTheme)
   const saveTheme = useSettings((s) => s.saveTheme)
 
   const previewStyle: React.CSSProperties = {
@@ -25,25 +24,22 @@ export function SettingsView() {
       <header className="view-header">
         <div>
           <div className="view-title">设置</div>
-          <div className="view-subtitle">界面主题实时调整 · 效果即时预览</div>
+          <div className="view-subtitle">外观实时调整 · 效果即时预览</div>
         </div>
       </header>
       <div className="settings-layout">
         <section className="glass settings-panel">
-          <Presets />
-          <ThemeParams theme={theme} setTheme={setTheme} />
+          <Appearance />
+          <ThemeParams theme={theme} setTheme={useSettings((s) => s.setTheme)} />
           <VaultPanel />
           <SnippetPanel />
-           <AuditPanel />
-           <BackupPanel />
-           <MonitorThresholdPanel />
+          <AuditPanel />
+          <BackupPanel />
+          <MonitorThresholdPanel />
         </section>
         <div className="preview-area">
           <section className="preview-window">
-            <div
-              className="preview-layout"
-              style={previewStyle}
-            >
+            <div className="preview-layout" style={previewStyle}>
               <div className="glass preview-sidebar">
                 <Icon name="terminal" size={22} />
                 <Icon name="server" size={20} />
@@ -74,7 +70,7 @@ export function SettingsView() {
             </div>
           </section>
           <div className="settings-actions">
-            <button className="glass-btn" onClick={() => applyPresetDefault()}>
+            <button className="glass-btn" onClick={resetTheme}>
               <Icon name="refresh" size={15} />
               恢复默认
             </button>
@@ -88,8 +84,4 @@ export function SettingsView() {
       </div>
     </div>
   )
-}
-
-function applyPresetDefault() {
-  useSettings.getState().applyPreset(THEME_PRESETS[0])
 }

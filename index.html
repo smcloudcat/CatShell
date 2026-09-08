@@ -8,6 +8,12 @@
 
   <body>
     <div id="root"></div>
+    <script>
+      // 首帧前设置外观模式，避免浅色系统用户看到深色令牌闪烁
+      document.documentElement.dataset.mode = window.matchMedia('(prefers-color-scheme: light)').matches
+        ? 'light'
+        : 'dark'
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

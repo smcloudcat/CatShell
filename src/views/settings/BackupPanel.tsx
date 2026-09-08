@@ -17,26 +17,51 @@ interface BackupFile {
   monitorThresholds: MonitorThresholds
 }
 
-function isThemeConfig(value: unknown): value is ThemeConfig {
-  if (!value || typeof value !== 'object') return false
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+/** CSS url() 值只允许本地路径中出现的安全字符，拒绝引号、逗号、分号等可逃逸字符 */
+function isSafeBackgroundImage(value: string): boolean {
+  return value.length > 0 && value.length <= 500 && !/["`,;()\n\r\\]/.test(value)
+}
+
+/** 校验并归一化主题：兼容旧版（modeAuto + 字面量 mode）与新版（auto/light/dark）结构。
+ *  旧版 modeAuto 的语义是按背景亮度推导出的字面量 mode，保留该字面量即可还原当时的实际外观。 */
+function normalizeTheme(value: unknown): ThemeConfig | null {
+  if (!value || typeof value !== 'object') return null
   const theme = value as Partial<ThemeConfig>
-  return (
-    typeof theme.bgOpacity === 'number' &&
-    typeof theme.blurRadius === 'number' &&
-    typeof theme.borderRadius === 'number' &&
-    typeof theme.borderOpacity === 'number' &&
-    (theme.backgroundType === 'gradient' || theme.backgroundType === 'solid' || theme.backgroundType === 'image') &&
-    typeof theme.solidColor === 'string' &&
-    typeof theme.gradient === 'object' &&
-    theme.gradient !== null &&
-    typeof theme.gradient.from === 'string' &&
-    typeof theme.gradient.to === 'string' &&
-    typeof theme.gradient.angle === 'number' &&
-    (theme.backgroundImage === null || typeof theme.backgroundImage === 'string') &&
-    typeof theme.accentColor === 'string' &&
-    (theme.mode === 'light' || theme.mode === 'dark') &&
-    typeof theme.modeAuto === 'boolean'
-  )
+  if (
+    typeof theme.bgOpacity !== 'number' || !Number.isFinite(theme.bgOpacity) ||
+    typeof theme.blurRadius !== 'number' || !Number.isFinite(theme.blurRadius) ||
+    typeof theme.borderRadius !== 'number' || !Number.isFinite(theme.borderRadius) ||
+    typeof theme.borderOpacity !== 'number' || !Number.isFinite(theme.borderOpacity) ||
+    (theme.backgroundType !== 'gradient' && theme.backgroundType !== 'solid' && theme.backgroundType !== 'image') ||
+    typeof theme.solidColor !== 'string' || !HEX_COLOR.test(theme.solidColor) ||
+    !theme.gradient ||
+    typeof theme.gradient.from !== 'string' || !HEX_COLOR.test(theme.gradient.from) ||
+    typeof theme.gradient.to !== 'string' || !HEX_COLOR.test(theme.gradient.to) ||
+    typeof theme.gradient.angle !== 'number' || !Number.isFinite(theme.gradient.angle) ||
+    (theme.backgroundImage !== null && (typeof theme.backgroundImage !== 'string' || !isSafeBackgroundImage(theme.backgroundImage))) ||
+    typeof theme.accentColor !== 'string' || !HEX_COLOR.test(theme.accentColor) ||
+    (theme.mode !== 'auto' && theme.mode !== 'light' && theme.mode !== 'dark')
+  ) {
+    return null
+  }
+  return {
+    mode: theme.mode,
+    accentColor: theme.accentColor,
+    backgroundType: theme.backgroundType,
+    solidColor: theme.solidColor,
+    gradient: {
+      from: theme.gradient.from,
+      to: theme.gradient.to,
+      angle: Math.min(360, Math.max(0, theme.gradient.angle))
+    },
+    backgroundImage: theme.backgroundImage,
+    bgOpacity: Math.min(1, Math.max(0.1, theme.bgOpacity)),
+    blurRadius: Math.round(Math.min(20, Math.max(2, theme.blurRadius))),
+    borderRadius: Math.round(Math.min(24, Math.max(0, theme.borderRadius))),
+    borderOpacity: Math.min(0.4, Math.max(0.05, theme.borderOpacity))
+  }
 }
 
 function isMonitorThresholds(value: unknown): value is MonitorThresholds {
@@ -79,11 +104,12 @@ export function BackupPanel() {
       const parsed: unknown = JSON.parse(await file.text())
       if (!parsed || typeof parsed !== 'object' || !('version' in parsed) || parsed.version !== 1) throw new Error('格式不支持')
       const backup = parsed as Partial<BackupFile>
-      if (!Array.isArray(backup.hosts) || !Array.isArray(backup.snippets) || !isThemeConfig(backup.theme)) throw new Error('内容不完整')
+      const restoredTheme = normalizeTheme(backup.theme)
+      if (!Array.isArray(backup.hosts) || !Array.isArray(backup.snippets) || !restoredTheme) throw new Error('内容不完整')
       if (backup.monitorThresholds !== undefined && !isMonitorThresholds(backup.monitorThresholds)) throw new Error('告警设置无效')
       await importProfiles(backup.hosts)
       await importSnippets(backup.snippets)
-      replaceTheme(backup.theme)
+      replaceTheme(restoredTheme)
       setMonitorThresholds(backup.monitorThresholds ?? DEFAULT_MONITOR_THRESHOLDS)
       await saveMonitorThresholds()
       recordAudit('config.import', '本地配置', 'success', `还原 ${backup.hosts.length} 条主机和 ${backup.snippets.length} 个片段`)

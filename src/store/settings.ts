@@ -1,10 +1,9 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
-import { ThemeConfig, ThemePreset, THEME_PRESETS, autoMode } from '../types/theme'
+import { ThemeConfig, DEFAULT_THEME, withModeBackgrounds } from '../types/theme'
 
 const STORE_FILE = 'app-settings.json'
 const THEME_KEY = 'theme'
-const ACTIVE_PRESET_KEY = 'activePreset'
 const MONITOR_THRESHOLDS_KEY = 'monitorThresholds'
 
 export interface MonitorThresholds {
@@ -23,11 +22,11 @@ export const DEFAULT_MONITOR_THRESHOLDS: MonitorThresholds = {
 
 interface SettingsState {
   theme: ThemeConfig
-  activePresetId: string | null
   monitorThresholds: MonitorThresholds
   ready: boolean
   setTheme: (patch: Partial<ThemeConfig>) => void
-  applyPreset: (preset: ThemePreset) => void
+  setAppearanceMode: (mode: ThemeConfig['mode']) => void
+  resetTheme: () => void
   saveTheme: () => Promise<void>
   replaceTheme: (theme: ThemeConfig) => void
   setMonitorThresholds: (patch: Partial<MonitorThresholds>) => void
@@ -35,46 +34,33 @@ interface SettingsState {
   init: () => Promise<void>
 }
 
-const AFFECTS_BACKGROUND = ['backgroundType', 'gradient', 'solidColor', 'backgroundImage'] as const
-
-function resolveMode(patch: Partial<ThemeConfig>, prev: ThemeConfig): ThemeConfig {
-  const next = { ...prev, ...patch }
-  if (patch.modeAuto === false) {
-    next.mode = patch.mode ?? autoMode(next)
-    return next
-  }
-  const touchesBg = (AFFECTS_BACKGROUND as readonly string[]).some((k) => k in patch)
-  if (touchesBg || patch.modeAuto === true) {
-    next.mode = autoMode(next)
-  } else if ('mode' in patch) {
-    next.mode = patch.mode as ThemeConfig['mode']
-  }
-  return next
+/** 旧版主题字段（四预设时代），检测到时整体迁移为新默认主题 */
+function isLegacyTheme(saved: unknown): boolean {
+  if (!saved || typeof saved !== 'object') return true
+  const record = saved as Record<string, unknown>
+  return !('mode' in record) || 'modeAuto' in record || typeof record.mode !== 'string'
 }
 
 export const useSettings = create<SettingsState>((set, get) => ({
-  theme: { ...THEME_PRESETS[0].theme },
-  activePresetId: THEME_PRESETS[0].id,
+  theme: { ...DEFAULT_THEME, gradient: { ...DEFAULT_THEME.gradient } },
   monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS },
   ready: false,
-  setTheme: (patch) => {
-    const next = resolveMode(patch, get().theme)
-    set({ theme: next, activePresetId: null })
-  },
-  applyPreset: (preset) => set({ theme: { ...preset.theme }, activePresetId: preset.id }),
+  setTheme: (patch) => set((state) => ({ theme: { ...state.theme, ...patch } })),
+  setAppearanceMode: (mode) =>
+    set((state) => ({ theme: withModeBackgrounds({ ...state.theme, mode }, mode) })),
+  resetTheme: () => set({ theme: { ...DEFAULT_THEME, gradient: { ...DEFAULT_THEME.gradient } } }),
   saveTheme: async () => {
-    const { theme, activePresetId } = get()
+    const { theme } = get()
     try {
       const store = await load(STORE_FILE)
       await store.set(THEME_KEY, theme)
-      await store.set(ACTIVE_PRESET_KEY, activePresetId)
       await store.save()
     } catch (err) {
       console.warn('保存主题设置失败（非 Tauri 环境）', err)
       localStorage.setItem(THEME_KEY, JSON.stringify(theme))
     }
   },
-  replaceTheme: (theme) => set({ theme: { ...theme, gradient: { ...theme.gradient } }, activePresetId: null }),
+  replaceTheme: (theme) => set({ theme: { ...theme, gradient: { ...theme.gradient } } }),
   setMonitorThresholds: (patch) =>
     set((state) => ({
       monitorThresholds: {
@@ -100,10 +86,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
     try {
       const store = await load(STORE_FILE)
       const saved = await store.get<ThemeConfig>(THEME_KEY)
-      const presetId = await store.get<string>(ACTIVE_PRESET_KEY)
       const thresholds = await store.get<Partial<MonitorThresholds>>(MONITOR_THRESHOLDS_KEY)
-      if (saved) {
-        set({ theme: { ...get().theme, ...saved }, activePresetId: presetId ?? null })
+      if (saved && !isLegacyTheme(saved)) {
+        set({ theme: { ...get().theme, ...saved, gradient: { ...get().theme.gradient, ...saved.gradient } } })
       }
       if (thresholds) {
         set({ monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS, ...thresholds } })
@@ -114,7 +99,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const savedThresholds = localStorage.getItem(MONITOR_THRESHOLDS_KEY)
       if (saved) {
         try {
-          set({ theme: { ...get().theme, ...JSON.parse(saved) } })
+          const parsed: unknown = JSON.parse(saved)
+          if (!isLegacyTheme(parsed)) {
+            const legacy = parsed as ThemeConfig
+            set({
+              theme: {
+                ...get().theme,
+                ...legacy,
+                gradient: { ...get().theme.gradient, ...(legacy.gradient ?? {}) }
+              }
+            })
+          }
         } catch {
           /* ignore corrupt stored theme */
         }

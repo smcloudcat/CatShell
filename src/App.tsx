@@ -11,6 +11,7 @@ import { HostsView } from './views/HostsView'
 import { SessionsView } from './views/sessions/SessionsView'
 import { SettingsView } from './views/SettingsView'
 import { ForwardView } from './views/ForwardView'
+import { accentContrastOf, resolveMode, withModeBackgrounds } from './types/theme'
 import './styles/glass.css'
 import './App.css'
 
@@ -51,40 +52,54 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement.style
-    const dark = theme.mode === 'dark'
     root.setProperty('--bg-opacity', String(theme.bgOpacity))
     root.setProperty('--glass-blur', `${theme.blurRadius}px`)
     root.setProperty('--glass-radius', `${theme.borderRadius}px`)
     root.setProperty('--border-opacity', String(theme.borderOpacity))
     root.setProperty('--accent', theme.accentColor)
-    root.setProperty('--glass-bg', dark ? '15 23 42' : '255 255 255')
-    root.setProperty('--glass-border', dark ? '255 255 255' : '148 163 184')
-    root.setProperty('--text-main', dark ? '#e2e8f0' : '#1e293b')
-    root.setProperty(
-      '--text-muted',
-      dark ? 'rgba(226, 232, 240, 0.65)' : 'rgba(30, 41, 59, 0.6)'
-    )
-    root.setProperty('--hover-bg', dark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.35)')
-    root.setProperty('--soft-bg', dark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(148, 163, 184, 0.18)')
-    root.setProperty(
-      '--glass-shadow',
-      dark ? '0 8px 32px rgba(0, 0, 0, 0.42)' : '0 8px 32px rgba(2, 6, 23, 0.18)'
-    )
+    root.setProperty('--accent-contrast', accentContrastOf(theme.accentColor))
 
-    const bg = document.getElementById('app-bg')
-    if (!bg) return
-    if (theme.backgroundType === 'gradient') {
-      bg.classList.remove('has-image')
-      bg.style.backgroundImage = `linear-gradient(${theme.gradient.angle}deg, ${theme.gradient.from}, ${theme.gradient.to})`
-    } else if (theme.backgroundType === 'solid') {
-      bg.classList.remove('has-image')
-      bg.style.background = theme.solidColor
-    } else {
-      bg.classList.add('has-image')
-      bg.style.background = 'none'
-      if (theme.backgroundImage) {
-        bg.style.setProperty('--app-bg-image', `url("${theme.backgroundImage}")`)
+    const applyMode = () => {
+      const effective = resolveMode(theme.mode)
+      document.documentElement.dataset.mode = effective
+      return effective
+    }
+    const resolved = applyMode()
+
+    let media: MediaQueryList | null = null
+    let listener: (() => void) | null = null
+    if (theme.mode === 'auto') {
+      media = window.matchMedia('(prefers-color-scheme: light)')
+      listener = () => {
+        const effective = resolveMode(theme.mode)
+        document.documentElement.dataset.mode = effective
+        paintBackground(effective)
       }
+      media.addEventListener('change', listener)
+    }
+
+    const paintBackground = (effective: 'light' | 'dark') => {
+      const bgTheme = withModeBackgrounds(theme, effective)
+      const bg = document.getElementById('app-bg')
+      if (!bg) return
+      if (bgTheme.backgroundType === 'gradient') {
+        bg.classList.remove('has-image')
+        bg.style.backgroundImage = `linear-gradient(${bgTheme.gradient.angle}deg, ${bgTheme.gradient.from}, ${bgTheme.gradient.to})`
+      } else if (bgTheme.backgroundType === 'solid') {
+        bg.classList.remove('has-image')
+        bg.style.background = bgTheme.solidColor
+      } else {
+        bg.classList.add('has-image')
+        bg.style.background = 'none'
+        if (bgTheme.backgroundImage) {
+          bg.style.setProperty('--app-bg-image', `url("${bgTheme.backgroundImage}")`)
+        }
+      }
+    }
+    paintBackground(resolved)
+
+    return () => {
+      if (media && listener) media.removeEventListener('change', listener)
     }
   }, [theme])
 
