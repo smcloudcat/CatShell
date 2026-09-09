@@ -34,7 +34,8 @@ interface SessionsState {
   connectedAt: Record<number, number>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
-  kbiPrompt: KbiPromptEvent | null
+  /** 交互式认证弹窗队列：多个会话同时追问时逐个应答，避免覆盖丢失。 */
+  kbiPrompts: KbiPromptEvent[]
   broadcastEnabled: boolean
   broadcastTargets: number[]
   init: () => Promise<void>
@@ -138,7 +139,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   connectedAt: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
-  kbiPrompt: null,
+  kbiPrompts: [],
   broadcastEnabled: false,
   broadcastTargets: [],
   init: async () => {
@@ -169,7 +170,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
           },
           onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
           ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
-          ,onKbiPrompt: (event) => set({ kbiPrompt: event })
+          ,onKbiPrompt: (event) => set((s) => ({ kbiPrompts: [...s.kbiPrompts, event] }))
         })
       } catch (err) {
         // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级
@@ -326,9 +327,9 @@ export const useSessions = create<SessionsState>((set, get) => ({
       delete terminals[id]
       const connectedAt = { ...s.connectedAt }
       delete connectedAt[id]
-      const activeId = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
-      const splitId = s.splitId === id ? null : s.splitId
-      return { sessions, requests, order, terminals, connectedAt, activeId, splitId }
+      const nextActive = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
+      const splitId = s.splitId === id ? null : nextActive === s.splitId ? null : s.splitId
+      return { sessions, requests, order, terminals, connectedAt, activeId: nextActive, splitId }
     })
   },
   renameSession: async (id, name) => {
@@ -342,7 +343,12 @@ export const useSessions = create<SessionsState>((set, get) => ({
       requests: request ? { ...s.requests, [id]: { ...request, name: trimmed } } : s.requests
     }))
   },
-  setActive: (id) => set({ activeId: id }),
+  setActive: (id) =>
+    set((s) => ({
+      activeId: id,
+      // 激活的标签即分屏会话时退出分屏，保持"分屏两侧必须是不同会话"的不变式
+      splitId: id !== null && id === s.splitId ? null : s.splitId
+    })),
   setSplit: (id) =>
     set((s) => {
       if (id === null) return { splitId: null }
@@ -351,18 +357,18 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return { splitId: id }
     }),
   answerKbi: async (answers) => {
-    const prompt = get().kbiPrompt
+    const prompt = get().kbiPrompts[0]
     if (!prompt) return
     try {
       await kbiRespond(prompt.sessionId, answers)
     } finally {
-      set({ kbiPrompt: null })
+      set((s) => ({ kbiPrompts: s.kbiPrompts.slice(1) }))
     }
   },
   cancelKbi: () => {
-    const prompt = get().kbiPrompt
+    const prompt = get().kbiPrompts[0]
     if (!prompt) return
-    set({ kbiPrompt: null })
+    set((s) => ({ kbiPrompts: s.kbiPrompts.slice(1) }))
     // 发送空应答让后端立即结束（oneshot 关闭视为取消）
     void kbiRespond(prompt.sessionId, []).catch(() => undefined)
   },

@@ -27,7 +27,8 @@ pub use config::{
     remove_known_hosts_entries, remove_known_hosts_entry, ssh_config_path,
 };
 pub use sftp::{
-    SftpChunk, SftpDiskTransferInfo, SftpDiskTransferStart, SftpEntry, SftpTransferStart,
+    validate_sftp_path, SftpChunk, SftpDiskTransferInfo, SftpDiskTransferStart, SftpDiskUploadPick,
+    SftpEntry, SftpTransferStart,
 };
 pub use types::{
     ConnectRequest, KnownHostEntry, KnownHostsSnapshot, NetworkDiagnostic, PartitionMetric,
@@ -77,6 +78,9 @@ pub struct SshManager {
     pub sftp_disk_transfers: Mutex<HashMap<u64, Arc<sftp::SftpDiskTransfer>>>,
     next_transfer_id: AtomicU64,
     next_disk_transfer_id: AtomicU64,
+    /// 磁盘上传路径令牌：本地路径只能经 Rust 侧文件对话框选取，webview 仅持有一次性令牌。
+    pub sftp_upload_path_tokens: Mutex<HashMap<u64, sftp::UploadPathToken>>,
+    next_upload_token: AtomicU64,
 }
 
 impl Default for SshManager {
@@ -96,6 +100,8 @@ impl Default for SshManager {
             sftp_disk_transfers: Mutex::new(HashMap::new()),
             next_transfer_id: AtomicU64::new(1),
             next_disk_transfer_id: AtomicU64::new(1),
+            sftp_upload_path_tokens: Mutex::new(HashMap::new()),
+            next_upload_token: AtomicU64::new(1),
         }
     }
 }

@@ -3,7 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { useSessions } from '../../store/sessions'
 import { AuthMethod, ConnectRequest } from '../../types/session'
-import { HostProfile, HOST_ICON_OPTIONS, normalizeHostIcon } from '../../types/host'
+import { HostProfile, HOST_ICON_OPTIONS, normalizeHostIcon, HostProxyProfile } from '../../types/host'
 import { HostIconName } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
@@ -186,6 +186,19 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     }
   }
 
+  /** 主机配置只持久化跳板机非敏感字段；payload 与 buildProxy 同源，连接与保存两条路径不再分叉。 */
+  const buildPersistedProxy = (proxy: ConnectRequest['proxy'], fallback: HostProxyProfile): HostProxyProfile => {
+    if (!proxy) return fallback
+    return {
+      enabled: true,
+      host: proxy.host,
+      port: proxy.port,
+      username: proxy.username,
+      authMethod: proxy.authMethod,
+      keyPath: proxy.keyPath ?? null
+    }
+  }
+
   const submit = async () => {
     setError(null)
     const host = form.host.trim()
@@ -251,14 +264,14 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           description: profile?.description ?? '',
           keepAliveInterval: request.keepalive,
           autoReconnect: request.autoReconnect,
-          proxy: {
-            enabled: form.proxyEnabled,
-            host: form.proxyHost.trim(),
-            port: Number(form.proxyPort) || 22,
-            username: form.proxyUsername.trim(),
-            authMethod: form.proxyAuthMethod,
-            keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null
-          },
+          proxy: buildPersistedProxy(proxy.proxy, {
+            enabled: false,
+            host: '',
+            port: 22,
+            username: '',
+            authMethod: 'password',
+            keyPath: null
+          }),
           createdAt: profile?.createdAt ?? now,
           updatedAt: now
         })
@@ -268,10 +281,10 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
             passphrase: request.passphrase ?? undefined
           })
         }
-        if (vaultUnlocked && form.proxyEnabled && (request.proxy?.password || request.proxy?.passphrase)) {
+        if (vaultUnlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
           await saveCredential(`proxy:${hostId}`, {
-            password: request.proxy?.password ?? undefined,
-            passphrase: request.proxy?.passphrase ?? undefined
+            password: proxy.proxy.password ?? undefined,
+            passphrase: proxy.proxy.passphrase ?? undefined
           })
         }
         setForm(FORM_EMPTY)
@@ -305,6 +318,11 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setError('请选择私钥文件')
       return
     }
+    const proxy = buildProxy()
+    if (!proxy.ok) {
+      setError(proxy.error)
+      return
+    }
 
     const now = Date.now()
     const hostId = profile?.id ?? crypto.randomUUID()
@@ -326,14 +344,14 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         description: profile?.description ?? '',
         keepAliveInterval: Math.min(300, Math.max(5, Number(form.keepalive) || 30)),
         autoReconnect: form.autoReconnect,
-        proxy: {
-          enabled: form.proxyEnabled,
-          host: form.proxyHost.trim(),
-          port: Number(form.proxyPort) || 22,
-          username: form.proxyUsername.trim(),
-          authMethod: form.proxyAuthMethod,
-          keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null
-        },
+        proxy: buildPersistedProxy(proxy.proxy, {
+          enabled: false,
+          host: '',
+          port: 22,
+          username: '',
+          authMethod: 'password',
+          keyPath: null
+        }),
         createdAt: profile?.createdAt ?? now,
         updatedAt: now
         })
@@ -343,10 +361,10 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           passphrase: form.passphrase || undefined
         })
       }
-      if (vaultUnlocked && form.proxyEnabled && (form.proxyPassword || form.proxyPassphrase)) {
+      if (vaultUnlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
         await saveCredential(`proxy:${hostId}`, {
-          password: form.proxyPassword || undefined,
-          passphrase: form.proxyPassphrase || undefined
+          password: proxy.proxy.password ?? undefined,
+          passphrase: proxy.proxy.passphrase ?? undefined
         })
       }
       setForm(FORM_EMPTY)

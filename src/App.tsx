@@ -10,6 +10,7 @@ import { useVault } from './store/vault'
 import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
 import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
+import { useT } from './i18n'
 import { HomeView } from './views/HomeView'
 import { HostsView } from './views/HostsView'
 import { SessionsView } from './views/sessions/SessionsView'
@@ -23,12 +24,12 @@ type ViewId = 'home' | 'sessions' | 'hosts' | 'forward' | 'settings'
 
 export type { ViewId }
 
-const NAV_ITEMS: { id: ViewId; icon: IconName; label: string }[] = [
-  { id: 'home', icon: 'home', label: '概览' },
-  { id: 'sessions', icon: 'terminal', label: '会话' },
-  { id: 'hosts', icon: 'server', label: '主机' },
-  { id: 'forward', icon: 'link', label: '转发' },
-  { id: 'settings', icon: 'settings', label: '设置' }
+const NAV_ITEMS: { id: ViewId; icon: IconName; labelKey: string; fallback: string }[] = [
+  { id: 'home', icon: 'home', labelKey: 'nav.home', fallback: '概览' },
+  { id: 'sessions', icon: 'terminal', labelKey: 'nav.sessions', fallback: '会话' },
+  { id: 'hosts', icon: 'server', labelKey: 'nav.hosts', fallback: '主机' },
+  { id: 'forward', icon: 'link', labelKey: 'nav.forward', fallback: '转发' },
+  { id: 'settings', icon: 'settings', labelKey: 'nav.settings', fallback: '设置' }
 ]
 
 const LAST_VIEW_IDS: ViewId[] = ['home', 'sessions', 'hosts', 'forward', 'settings']
@@ -56,11 +57,18 @@ function App() {
   const confirmHostKey = useSessions((s) => s.confirmHostKey)
   const hostKeyWarning = useSessions((s) => s.hostKeyWarning)
   const clearHostKeyWarning = () => useSessions.setState({ hostKeyWarning: null })
-  const kbiPrompt = useSessions((s) => s.kbiPrompt)
+  const kbiPrompt = useSessions((s) => s.kbiPrompts[0] ?? null)
+  const kbiQueueLength = useSessions((s) => s.kbiPrompts.length)
   const answerKbi = useSessions((s) => s.answerKbi)
   const cancelKbi = useSessions((s) => s.cancelKbi)
+  const translate = useT()
   const [view, setView] = useState<ViewId>('home')
   const [kbiValues, setKbiValues] = useState<string[]>([])
+
+  // 新一轮弹窗到达时清空上一轮的应答，避免陈旧凭据被静默重提
+  useEffect(() => {
+    setKbiValues([])
+  }, [kbiPrompt])
 
   useEffect(() => {
     init()
@@ -260,20 +268,23 @@ function App() {
           </div>
         </div>
         <nav className="sidebar-nav">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item ${view === item.id ? 'active' : ''}`}
-              onClick={() => setView(item.id)}
-              title={item.label}
-            >
-              <Icon name={item.icon} size={22} />
-              <span className="nav-label">{item.label}</span>
-              {item.id === 'sessions' && sessionCount > 0 && (
-                <span className="nav-badge">{sessionCount}</span>
-              )}
-            </button>
-          ))}
+          {NAV_ITEMS.map((item) => {
+            const label = translate(item.labelKey) || item.fallback
+            return (
+              <button
+                key={item.id}
+                className={`nav-item ${view === item.id ? 'active' : ''}`}
+                onClick={() => setView(item.id)}
+                title={label}
+              >
+                <Icon name={item.icon} size={22} />
+                <span className="nav-label">{label}</span>
+                {item.id === 'sessions' && sessionCount > 0 && (
+                  <span className="nav-badge">{sessionCount}</span>
+                )}
+              </button>
+            )
+          })}
         </nav>
         <button
           className="glass-btn sidebar-toggle"
@@ -350,6 +361,7 @@ function App() {
               <div className="modal-title">
                 <Icon name="key" size={18} />
                 {kbiPrompt.name || '服务器要求交互式验证'}
+                {kbiQueueLength > 1 && <span className="nav-badge">{kbiQueueLength - 1}</span>}
               </div>
             </header>
             <div className="modal-body">
@@ -373,6 +385,7 @@ function App() {
                       if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                         e.preventDefault()
                         void answerKbi(kbiPrompt.prompts.map((_, i) => kbiValues[i] ?? ''))
+                        setKbiValues([])
                       }
                     }}
                     autoFocus

@@ -17,6 +17,7 @@ import {
   SftpDiskProgress,
   SftpDiskTransferInfo,
   SftpDiskTransferStart,
+  SftpDiskUploadPick,
   SftpEntry,
   SshConfigEntry
 } from '../types/session'
@@ -213,24 +214,30 @@ export async function sftpTransferCancel(transferId: number): Promise<void> {
   await invoke('sftp_transfer_cancel', { transferId })
 }
 
-/** 磁盘级下载：远端文件直接写入本地磁盘，存在半成品时自动断点续传。 */
-export async function sftpDiskDownloadStart(
+/**
+ * 磁盘级下载：打开 Rust 侧保存对话框并启动传输，本地路径不出 Rust 边界；
+ * 目标存在 `.catshell-part` 半成品时自动断点续传。用户取消对话框返回 null。
+ */
+export async function sftpDiskDownloadPick(
   id: number,
   remotePath: string,
-  localPath: string,
   resume: boolean
-): Promise<SftpDiskTransferStart> {
-  return invoke<SftpDiskTransferStart>('sftp_disk_download_start', { id, remotePath, localPath, resume })
+): Promise<SftpDiskTransferStart | null> {
+  return invoke<SftpDiskTransferStart | null>('sftp_disk_download_pick', { id, remotePath, resume })
 }
 
-/** 磁盘级上传：本地文件在 Rust 侧读盘直传远端，支持按远端已有大小断点续传。 */
-export async function sftpDiskUploadStart(
+/** 磁盘级上传：打开 Rust 侧文件对话框并登记一次性上传令牌（真实本地路径不出 Rust 边界）。 */
+export async function sftpDiskUploadPick(id: number, remoteDir: string): Promise<SftpDiskUploadPick[]> {
+  return invoke<SftpDiskUploadPick[]>('sftp_disk_upload_pick', { id, remoteDir })
+}
+
+/** 凭一次性令牌启动磁盘级上传；远端半成品存在时自动断点续传。 */
+export async function sftpDiskUploadStartToken(
   id: number,
-  localPath: string,
-  remotePath: string,
+  token: number,
   resume: boolean
 ): Promise<SftpDiskTransferStart> {
-  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start', { id, localPath, remotePath, resume })
+  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start_token', { id, token, resume })
 }
 
 export async function sftpDiskTransferCancel(transferId: number): Promise<void> {

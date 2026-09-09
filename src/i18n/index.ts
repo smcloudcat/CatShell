@@ -63,11 +63,8 @@ export function t(key: string): string {
   return dictionaries[language]?.[key] ?? zh[key] ?? key
 }
 
-/** 响应语言设置的 t()，供组件内使用 */
+/** 响应语言设置的 t()，供组件内使用；订阅语言状态，切换语言时触发重渲染。 */
 export function useT(): (key: string) => string {
+  useSettings((s) => s.language)
   return t
-}
-
-export function hasTranslation(key: string): boolean {
-  return key in zh
 }

@@ -1,12 +1,11 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import {
   base64ToBytes,
   sftpChmod,
-  sftpDiskDownloadStart,
-  sftpDiskTransferCancel,
-  sftpDiskUploadStart,
+  sftpDiskDownloadPick,
+  sftpDiskUploadPick,
+  sftpDiskUploadStartToken,
   sftpDownloadBegin,
   sftpDownloadChunk,
   sftpList,
@@ -19,9 +18,10 @@ import {
   sftpUploadBegin,
   sftpUploadChunk,
   sftpUploadFinish,
-  sftpWriteFile,
-  subscribeSftpDiskProgress
+  sftpWriteFile
 } from '../../api/ssh'
+import { beginTransfer, cancelFlags, removeTransfer, updateTransfer } from './sftpTransferStore'
+import { SftpTransferList } from './SftpTransferList'
 import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
 import { shellQuote } from '../../types/snippet'
@@ -33,15 +33,6 @@ const SFTP_CHUNK_SIZE = 256 * 1024
 const SFTP_CHUNKED_THRESHOLD = 16 * 1024 * 1024
 const CANCELLED_MESSAGE = '已取消'
 const CHMOD_PRESETS = ['644', '600', '755', '700', '777']
-
-interface TransferProgress {
-  id: number
-  name: string
-  kind: 'upload' | 'download'
-  transferred: number
-  total: number
-  disk?: boolean
-}
 
 function parentPath(path: string): string {
   const normalized = path.replace(/\/+$|^$/, '') || '/'
@@ -113,7 +104,6 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [editing, setEditing] = useState<SftpEntry | null>(null)
   const [editorText, setEditorText] = useState('')
   const [editorBusy, setEditorBusy] = useState(false)
-  const [transfers, setTransfers] = useState<TransferProgress[]>([])
   const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename' | 'move'; target: SftpEntry | null; value: string } | null>(null)
   const [nameBusy, setNameBusy] = useState(false)
   const [chmodDialog, setChmodDialog] = useState<{ target: SftpEntry; value: string } | null>(null)
@@ -123,7 +113,6 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [showHidden, setShowHidden] = useState(false)
   const [nameFilter, setNameFilter] = useState('')
   const [dragOver, setDragOver] = useState(false)
-  const cancelFlags = useRef<Set<number>>(new Set())
   const dragDepth = useRef(0)
 
   const connected = sessions[sessionId]?.status === 'connected'
@@ -161,42 +150,22 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     })
   }, [entries, sortKey, sortAsc, showHidden, nameFilter])
 
-  const updateTransfer = (id: number, transferred: number) => {
-    setTransfers((current) => current.map((item) => (item.id === id ? { ...item, transferred } : item)))
-  }
-
-  const removeTransfer = (id: number) => {
-    cancelFlags.current.delete(id)
-    setTransfers((current) => current.filter((item) => item.id !== id))
-  }
-
-  const requestCancel = (id: number, disk?: boolean) => {
-    if (disk) {
-      void sftpDiskTransferCancel(id).catch(() => undefined)
-      return
-    }
-    cancelFlags.current.add(id)
-  }
-
   const uploadChunked = async (target: string, file: File): Promise<void> => {
     const { transferId } = await sftpUploadBegin(sessionId, target, file.size)
-    setTransfers((current) => [
-      ...current,
-      { id: transferId, name: file.name, kind: 'upload', transferred: 0, total: file.size }
-    ])
+    beginTransfer(sessionId, { id: transferId, name: file.name, kind: 'upload', transferred: 0, total: file.size })
     try {
       let offset = 0
       while (offset < file.size) {
-        if (cancelFlags.current.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+        if (cancelFlags.has(transferId)) throw new Error(CANCELLED_MESSAGE)
         const slice = await file.slice(offset, Math.min(offset + SFTP_CHUNK_SIZE, file.size)).arrayBuffer()
         await sftpUploadChunk(transferId, offset, new Uint8Array(slice))
         offset += slice.byteLength
-        updateTransfer(transferId, offset)
+        updateTransfer(sessionId, transferId, offset)
       }
       await sftpUploadFinish(transferId)
-      removeTransfer(transferId)
+      removeTransfer(sessionId, transferId)
     } catch (err) {
-      removeTransfer(transferId)
+      removeTransfer(sessionId, transferId)
       try {
         await sftpTransferCancel(transferId)
       } catch {
@@ -208,15 +177,12 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
 
   const downloadChunked = async (entry: SftpEntry): Promise<void> => {
     const { transferId, total } = await sftpDownloadBegin(sessionId, entry.path)
-    setTransfers((current) => [
-      ...current,
-      { id: transferId, name: entry.name, kind: 'download', transferred: 0, total }
-    ])
+    beginTransfer(sessionId, { id: transferId, name: entry.name, kind: 'download', transferred: 0, total })
     const parts: BlobPart[] = []
     let received = 0
     try {
       for (;;) {
-        if (cancelFlags.current.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+        if (cancelFlags.has(transferId)) throw new Error(CANCELLED_MESSAGE)
         const chunk = await sftpDownloadChunk(transferId)
         if (chunk.done) break
         const bytes = base64ToBytes(chunk.data)
@@ -224,7 +190,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         new Uint8Array(copy).set(bytes)
         parts.push(copy)
         received += bytes.length
-        updateTransfer(transferId, received)
+        updateTransfer(sessionId, transferId, received)
       }
       const anchor = document.createElement('a')
       anchor.href = URL.createObjectURL(new Blob(parts))
@@ -234,7 +200,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       recordAudit('sftp.download', entry.path, 'success', '分块下载文件')
       setNotice(`已下载 ${entry.name}`)
     } finally {
-      removeTransfer(transferId)
+      removeTransfer(sessionId, transferId)
       try {
         await sftpTransferCancel(transferId)
       } catch {
@@ -243,28 +209,20 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }
 
-  const saveDialogUnavailable = () => {
-    setError('当前环境无法打开保存对话框，请改用浏览器下载或启动桌面应用')
-  }
-
   const handleDiskDownload = async (entry: SftpEntry) => {
     if (entry.kind !== 'file') return
-    if (!('__TAURI_INTERNALS__' in window)) {
-      saveDialogUnavailable()
-      return
-    }
     setError(null)
     try {
-      const target = await save({
-        title: '保存到本地磁盘',
-        defaultPath: entry.name
+      const start = await sftpDiskDownloadPick(sessionId, entry.path, true)
+      if (!start) return
+      beginTransfer(sessionId, {
+        id: start.transferId,
+        name: entry.name,
+        kind: 'download',
+        transferred: 0,
+        total: start.total,
+        disk: true
       })
-      if (typeof target !== 'string' || !target.trim()) return
-      const start = await sftpDiskDownloadStart(sessionId, entry.path, target, true)
-      setTransfers((current) => [
-        ...current.filter((item) => item.id !== start.transferId),
-        { id: start.transferId, name: entry.name, kind: 'download', transferred: 0, total: start.total, disk: true }
-      ])
       recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? '磁盘级下载（断点续传）' : '磁盘级下载开始')
     } catch (err) {
       recordAudit('sftp.disk-download', entry.path, 'failure', '磁盘级下载启动失败')
@@ -273,48 +231,40 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   }
 
   const handleDiskUpload = async () => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      saveDialogUnavailable()
-      return
-    }
     setError(null)
     try {
-      const picked = await open({
-        multiple: true,
-        title: '选择要上传的本地文件'
-      })
-      const files = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter((item): item is string => typeof item === 'string')
-      if (!files.length) return
-      let existingNames = new Set<string>()
-      try {
-        existingNames = new Set((await sftpList(sessionId, path)).map((entry) => entry.name))
-      } catch {
-        existingNames = new Set()
+      const picks = await sftpDiskUploadPick(sessionId, path)
+      if (!picks.length) return
+      const existing = picks.filter((pick) => entries.some((entry) => entry.name === pick.fileName))
+      let targets = picks
+      if (existing.length) {
+        const accepted = await confirmDialog({
+          title: '替换远端文件',
+          message: `远端目录 ${path} 已存在同名文件：${existing.map((pick) => pick.fileName).join('、')}。上传将在传输完成后替换这些文件；同名半成品存在时从断点续传。继续？`,
+          confirmLabel: '继续上传',
+          danger: true
+        })
+        if (!accepted) {
+          targets = picks.filter((pick) => !existing.some((item) => item.token === pick.token))
+        }
       }
       let started = 0
-      for (const localPath of files) {
-        const name = localPath.replace(/\\/g, '/').split('/').pop() ?? localPath
-        const target = joinRemotePath(path, name)
-        if (existingNames.has(name)) {
-          const accepted = await confirmDialog({
-            title: '覆盖或续传远程文件',
-            message: `远程目录 ${path} 已存在同名文件“${name}”。续传模式下较小文件从断点续写，其余将被覆盖。继续？`,
-            confirmLabel: '继续传输',
-            danger: true
-          })
-          if (!accepted) continue
-        }
+      for (const pick of targets) {
         try {
-          const start = await sftpDiskUploadStart(sessionId, localPath, target, true)
-          setTransfers((current) => [
-            ...current.filter((item) => item.id !== start.transferId),
-            { id: start.transferId, name, kind: 'upload', transferred: 0, total: start.total, disk: true }
-          ])
-          recordAudit('sftp.disk-upload', target, 'success', start.resumed ? '磁盘级上传（断点续传）' : '磁盘级上传开始')
+          const start = await sftpDiskUploadStartToken(sessionId, pick.token, true)
+          beginTransfer(sessionId, {
+            id: start.transferId,
+            name: pick.fileName,
+            kind: 'upload',
+            transferred: 0,
+            total: start.total,
+            disk: true
+          })
+          recordAudit('sftp.disk-upload', pick.remotePath, 'success', start.resumed ? '磁盘级上传（断点续传）' : '磁盘级上传开始')
           started += 1
         } catch (err) {
-          recordAudit('sftp.disk-upload', target, 'failure', '磁盘级上传启动失败')
-          setError(typeof err === 'string' ? err : `磁盘级上传启动失败：${name}`)
+          recordAudit('sftp.disk-upload', pick.remotePath, 'failure', '磁盘级上传启动失败')
+          setError(typeof err === 'string' ? err : `磁盘级上传启动失败：${pick.fileName}`)
         }
       }
       if (started > 0) setNotice(`磁盘级上传已开始 ${started} 个文件`)
@@ -344,58 +294,6 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (connected) void loadDirectory()
     // Directory loading is intentionally triggered only when the session changes.
   }, [sessionId, connected])
-
-  useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return
-    let disposed = false
-    let unlisten: (() => Promise<void>) | null = null
-    void subscribeSftpDiskProgress((progress) => {
-      if (progress.sessionId !== sessionId) return
-      setTransfers((current) => {
-        const known = current.some((item) => item.id === progress.transferId)
-        if (!known) {
-          // 后端可能自行续传/列出进行中任务，前端未登记时补录
-          if (progress.done) return current
-          return [
-            ...current,
-            {
-              id: progress.transferId,
-              name: progress.fileName,
-              kind: progress.direction === 'upload' ? 'upload' : 'download',
-              transferred: progress.transferred,
-              total: progress.total,
-              disk: true
-            }
-          ]
-        }
-        if (progress.done) {
-          return current.map((item) => (item.id === progress.transferId ? { ...item, transferred: progress.transferred, total: progress.total } : item))
-        }
-        return current.map((item) => (item.id === progress.transferId ? { ...item, transferred: progress.transferred, total: progress.total } : item))
-      })
-      if (progress.done) {
-        if (progress.cancelled) {
-          setNotice(`已取消 ${progress.fileName}`)
-        } else if (progress.error) {
-          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'failure', progress.error)
-          setError(`磁盘${progress.direction === 'upload' ? '上传' : '下载'}失败：${progress.error}`)
-        } else {
-          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'success', '磁盘级传输完成')
-          setNotice(`磁盘${progress.direction === 'upload' ? '上传' : '下载'}完成：${progress.fileName}`)
-        }
-        window.setTimeout(() => {
-          setTransfers((current) => current.filter((item) => item.id !== progress.transferId))
-        }, 1200)
-      }
-    }).then((dispose) => {
-      if (disposed) void dispose()
-      else unlisten = dispose
-    })
-    return () => {
-      disposed = true
-      void unlisten?.()
-    }
-  }, [sessionId])
 
   const uploadFiles = async (files: File[]) => {
     if (!files.length) return
@@ -879,26 +777,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           </div>
         </div>
       )}
-      {transfers.length > 0 && (
-        <div className="sftp-transfers">
-          {transfers.map((transfer) => {
-            const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
-            return (
-              <div className="sftp-transfer" key={transfer.id}>
-                <Icon name={transfer.kind === 'upload' ? 'upload' : 'save'} size={14} />
-                <div className="sftp-transfer-body">
-                  <div className="sftp-transfer-meta">
-                    <span className="sftp-transfer-name" title={transfer.name}>{transfer.name}</span>
-                    <span>{formatBytes(transfer.transferred)} / {formatBytes(transfer.total)} · {percent}%</span>
-                  </div>
-                  <div className="metric-bar"><span style={{ width: `${percent}%` }} /></div>
-                </div>
-                <button className="host-icon-btn danger" onClick={() => requestCancel(transfer.id, transfer.disk)} title="取消传输"><Icon name="x" size={13} /></button>
-              </div>
-            )
-          })}
-        </div>
-      )}
+      <SftpTransferList sessionId={sessionId} />
     </div>
   )
 }

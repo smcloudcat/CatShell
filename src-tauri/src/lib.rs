@@ -302,35 +302,113 @@ async fn sftp_transfer_cancel(state: State<'_, AppState>, transfer_id: u64) -> R
     state.ssh.sftp_transfer_cancel(transfer_id).await
 }
 
+/// 打开保存对话框选择本地目标路径并启动磁盘级下载（本地路径不出 Rust 边界）。
 #[tauri::command]
-async fn sftp_disk_download_start(
+async fn sftp_disk_download_pick(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u64,
     remote_path: String,
-    local_path: String,
     resume: bool,
-) -> Result<ssh_manager::SftpDiskTransferStart, String> {
+) -> Result<Option<ssh_manager::SftpDiskTransferStart>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_name = std::path::Path::new(&remote_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| "远程路径无效".to_string())?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&file_name)
+        .save_file(move |file_path| {
+            let picked = file_path.and_then(|path| path.into_path().ok());
+            let _ = tx.send(picked);
+        });
+    let picked = rx.await.map_err(|_| "保存对话框已关闭".to_string())?;
+    let Some(local_path) = picked else {
+        return Ok(None);
+    };
+    let local_path = local_path.to_string_lossy().to_string();
     let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
     state
         .ssh
         .sftp_disk_download_start(state.ssh.clone(), sink, id, remote_path, local_path, resume)
         .await
+        .map(Some)
 }
 
+/// 打开文件对话框选择要上传的本地文件并登记一次性令牌（真实路径不出 Rust 边界）。
 #[tauri::command]
-async fn sftp_disk_upload_start(
+async fn sftp_disk_upload_pick(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u64,
-    local_path: String,
-    remote_path: String,
+    remote_dir: String,
+) -> Result<Vec<ssh_manager::SftpDiskUploadPick>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_files(move |file_paths| {
+        let picked = file_paths
+            .map(|paths| {
+                paths
+                    .into_iter()
+                    .filter_map(|path| path.into_path().ok())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(picked);
+    });
+    let picked = rx.await.map_err(|_| "文件对话框已关闭".to_string())?;
+    if picked.is_empty() {
+        return Ok(Vec::new());
+    }
+    let remote_dir = remote_dir.trim_end_matches('/').to_string();
+    let remote_dir = if remote_dir.is_empty() {
+        "/".to_string()
+    } else {
+        remote_dir
+    };
+    let files = picked
+        .into_iter()
+        .filter_map(|path| {
+            let file_name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())?;
+            let remote_path = format!("{remote_dir}/{file_name}");
+            ssh_manager::validate_sftp_path(remote_path)
+                .ok()
+                .map(|remote_path| (path.to_string_lossy().to_string(), remote_path, file_name))
+        })
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return Err("所选文件路径无效".to_string());
+    }
+    Ok(state.ssh.register_upload_tokens(id, files).await)
+}
+
+/// 凭一次性令牌启动磁盘级上传（本地路径仅存于 Rust 侧）。
+#[tauri::command]
+async fn sftp_disk_upload_start_token(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    token: u64,
     resume: bool,
 ) -> Result<ssh_manager::SftpDiskTransferStart, String> {
+    let picked = state.ssh.consume_upload_token(id, token).await?;
     let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
     state
         .ssh
-        .sftp_disk_upload_start(state.ssh.clone(), sink, id, local_path, remote_path, resume)
+        .sftp_disk_upload_start(
+            state.ssh.clone(),
+            sink,
+            id,
+            picked.local_path,
+            picked.remote_path,
+            resume,
+        )
         .await
 }
 
@@ -549,8 +627,9 @@ pub fn run() {
             sftp_upload_chunk,
             sftp_upload_finish,
             sftp_transfer_cancel,
-            sftp_disk_download_start,
-            sftp_disk_upload_start,
+            sftp_disk_download_pick,
+            sftp_disk_upload_pick,
+            sftp_disk_upload_start_token,
             sftp_disk_transfer_cancel,
             sftp_disk_transfer_list,
             tray_set_active_count

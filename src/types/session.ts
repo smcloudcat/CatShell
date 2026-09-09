@@ -117,6 +117,12 @@ export interface SftpDiskTransferStart {
   resumed: boolean
 }
 
+export interface SftpDiskUploadPick {
+  token: number
+  fileName: string
+  remotePath: string
+}
+
 export interface SftpDiskProgress {
   transferId: number
   sessionId: number

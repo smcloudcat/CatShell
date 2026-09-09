@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshProcesses } from '../../api/ssh'
+import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshPing, sshProcesses } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { useSettings, MONITOR_INTERVAL_OPTIONS } from '../../store/settings'
 import { showToast, confirmDialog } from '../../store/ui'
@@ -64,6 +64,8 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
   const [diagnostic, setDiagnostic] = useState<NetworkDiagnostic | null>(null)
   const [alerts, setAlerts] = useState<string[]>([])
   const [killSignal, setKillSignal] = useState<'TERM' | 'KILL'>('TERM')
+  const [rtt, setRtt] = useState<number | null>(null)
+  const [rttBusy, setRttBusy] = useState(false)
   const lastRate = useRef<RateSample | null>(null)
   const alertState = useRef<Record<string, boolean>>({})
 
@@ -228,6 +230,24 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
         <button className="glass-btn" onClick={() => setRefreshKey((value) => value + 1)} disabled={busy} title="立即刷新">
           <Icon name="refresh" size={15} />
           {busy ? '采集中' : '刷新'}
+        </button>
+        <button
+          className="glass-btn"
+          disabled={rttBusy || !connected}
+          onClick={() => {
+            setRttBusy(true)
+            void sshPing(sessionId)
+              .then((ms) => setRtt(ms))
+              .catch((err) => {
+                setRtt(null)
+                setError(typeof err === 'string' ? err : 'RTT 探测失败')
+              })
+              .finally(() => setRttBusy(false))
+          }}
+          title="通过 SSH exec 空命令测量一次往返耗时"
+        >
+          <Icon name="arrow-right" size={15} />
+          {rttBusy ? '测量中' : rtt != null ? `RTT ${rtt}ms` : '测 RTT'}
         </button>
       </div>
       {error && <div className="form-error">{error}</div>}

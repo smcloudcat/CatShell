@@ -212,13 +212,19 @@ impl SshManager {
             .exec(true, ":")
             .await
             .map_err(|error| format!("执行探测命令失败: {error}"))?;
-        while let Some(message) = channel.wait().await {
-            match message {
-                ChannelMsg::Close | ChannelMsg::Eof => break,
-                _ => {}
+        // 整体限时，避免无响应服务器让通道排水循环永久持有连接锁
+        let drain = async {
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Close | ChannelMsg::Eof => break,
+                    _ => {}
+                }
             }
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(10), drain).await {
+            Ok(()) => Ok(started.elapsed().as_millis() as u64),
+            Err(_) => Err("RTT 探测超时：服务器未在 10 秒内响应".to_string()),
         }
-        Ok(started.elapsed().as_millis() as u64)
     }
 
     pub async fn list_processes(&self, id: u64) -> Result<Vec<ProcessInfo>, String> {

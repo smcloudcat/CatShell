@@ -55,6 +55,32 @@ pub struct SftpDiskTransferStart {
     pub resumed: bool,
 }
 
+/// 一次性上传路径令牌：webview 仅凭令牌发起磁盘上传，无法指定任意本地路径。
+#[derive(Clone, Debug)]
+pub struct UploadPathToken {
+    pub session_id: u64,
+    pub local_path: String,
+    pub remote_path: String,
+    pub file_name: String,
+    pub created: std::time::Instant,
+}
+
+impl UploadPathToken {
+    const TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+    fn expired(&self) -> bool {
+        self.created.elapsed() > Self::TTL
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpDiskUploadPick {
+    pub token: u64,
+    pub file_name: String,
+    pub remote_path: String,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SftpDiskTransferInfo {
@@ -86,12 +112,14 @@ struct SftpDiskProgress {
 }
 
 /// 落盘流式传输任务：数据完全在 Rust 侧读写本地磁盘，不经过前端内存。
-/// 进度以节流事件（≥300ms）推送给前端；`.catshell-part` 半成品文件支持断点续传。
+/// 进度以节流事件（≥300ms）推送给前端；半成品文件支持断点续传
+/// （下载为本地 `{target}.catshell-part`，上传为远端 `{target}.catshell-part`，完成后原子的 rename 还原目标名）。
 pub struct SftpDiskTransfer {
     pub id: u64,
     pub session_id: u64,
     pub remote_path: String,
     pub local_path: String,
+    pub part_path: String,
     pub file_name: String,
     pub direction: &'static str,
     pub total: u64,
@@ -161,7 +189,7 @@ fn emit_disk_progress(sink: &dyn EventSink, transfer: &SftpDiskTransfer, force: 
     );
 }
 
-fn validate_local_path(path: &str) -> Result<String, String> {
+pub fn validate_local_path(path: &str) -> Result<String, String> {
     let path = path.trim().to_string();
     if path.is_empty() || path.contains('\0') {
         return Err("本地路径无效".to_string());
@@ -241,7 +269,7 @@ async fn remove_remote_dir_recursive(
     Ok(())
 }
 
-fn validate_sftp_path(path: String) -> Result<String, String> {
+pub fn validate_sftp_path(path: String) -> Result<String, String> {
     let path = path.trim().to_string();
     if path.is_empty() || path.contains('\0') {
         return Err("远程路径无效".to_string());
@@ -708,6 +736,7 @@ impl SshManager {
             session_id: id,
             remote_path,
             local_path,
+            part_path: part_path.clone(),
             file_name,
             direction: "download",
             total,
@@ -794,7 +823,8 @@ impl SshManager {
     }
 
     /// 磁盘级上传：本地文件在 Rust 侧读盘直接写入远端，不经前端内存。
-    /// 远端已存在更小的同名文件且 resume=true 时从远端断点续写。
+    /// 先写远端半成品 `{target}.catshell-part`，成功后 rename 还原目标名：
+    /// 断点续传只发生在半成品上，绝不会把新内容追加到无关的已存在文件里。
     pub async fn sftp_disk_upload_start(
         &self,
         manager: Arc<SshManager>,
@@ -817,15 +847,16 @@ impl SshManager {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .ok_or_else(|| "本地路径无效".to_string())?;
+        let part_path = format!("{remote_path}{DISK_PART_SUFFIX}");
 
         let sftp = self.open_sftp_channel(id).await?;
         let mut start_offset: u64 = 0;
         let mut resumed = false;
         if resume {
-            if let Ok(remote_meta) = sftp.metadata(&remote_path).await {
-                let remote_len = remote_meta.size.unwrap_or(0);
-                if remote_len > 0 && remote_len < total {
-                    start_offset = remote_len;
+            if let Ok(part_meta) = sftp.metadata(&part_path).await {
+                let part_len = part_meta.size.unwrap_or(0);
+                if part_len > 0 && part_len < total {
+                    start_offset = part_len;
                     resumed = true;
                 }
             }
@@ -833,17 +864,17 @@ impl SshManager {
 
         let mut remote_file = if resumed {
             let mut file = sftp
-                .open_with_flags(&remote_path, OpenFlags::WRITE | OpenFlags::CREATE)
+                .open_with_flags(&part_path, OpenFlags::WRITE | OpenFlags::CREATE)
                 .await
-                .map_err(|error| format!("打开远程文件失败: {error}"))?;
+                .map_err(|error| format!("打开远程半成品文件失败: {error}"))?;
             file.seek(std::io::SeekFrom::Start(start_offset))
                 .await
                 .map_err(|error| format!("远程文件定位断点失败: {error}"))?;
             file
         } else {
-            sftp.create(&remote_path)
+            sftp.create(&part_path)
                 .await
-                .map_err(|error| format!("创建远程文件失败: {error}"))?
+                .map_err(|error| format!("创建远程半成品文件失败: {error}"))?
         };
         let mut local_file = tokio::fs::File::open(&local_path)
             .await
@@ -861,6 +892,7 @@ impl SshManager {
             session_id: id,
             remote_path,
             local_path,
+            part_path: part_path.clone(),
             file_name,
             direction: "upload",
             total,
@@ -901,6 +933,20 @@ impl SshManager {
                             transfer.finish_with_error(format!("完成远程写入失败: {error}"));
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
+                        }
+                        // 半成品还原为目标名；SSH_FXP_RENAME 不允许覆盖时先移除旧目标文件。
+                        if sftp
+                            .rename(&part_path, &transfer.remote_path)
+                            .await
+                            .is_err()
+                        {
+                            let _ = sftp.remove_file(&transfer.remote_path).await;
+                            if let Err(error) = sftp.rename(&part_path, &transfer.remote_path).await
+                            {
+                                transfer.finish_with_error(format!("保存远程文件失败: {error}"));
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
                         }
                         let _ = sftp.close().await;
                         transfer.done.store(true, Ordering::SeqCst);
@@ -964,6 +1010,57 @@ impl SshManager {
         // 循环下一轮读到取消标记后自行收尾；这里同步推送一次状态。
         emit_disk_progress(sink.as_ref(), &transfer, true);
         Ok(())
+    }
+
+    /// 为 Rust 侧文件对话框选中的本地上传文件登记一次性令牌（webview 不接触真实路径）。
+    pub async fn register_upload_tokens(
+        &self,
+        session_id: u64,
+        files: Vec<(String, String, String)>,
+    ) -> Vec<SftpDiskUploadPick> {
+        let mut tokens = self.sftp_upload_path_tokens.lock().await;
+        tokens.retain(|_, token| !token.expired());
+        files
+            .into_iter()
+            .map(|(local_path, remote_path, file_name)| {
+                let token = self.next_upload_token.fetch_add(1, Ordering::SeqCst);
+                let pick = SftpDiskUploadPick {
+                    token,
+                    file_name: file_name.clone(),
+                    remote_path: remote_path.clone(),
+                };
+                tokens.insert(
+                    token,
+                    UploadPathToken {
+                        session_id,
+                        local_path,
+                        remote_path,
+                        file_name,
+                        created: std::time::Instant::now(),
+                    },
+                );
+                pick
+            })
+            .collect()
+    }
+
+    /// 消费一次性上传令牌（绑定会话、过期即失效）。
+    pub async fn consume_upload_token(
+        &self,
+        session_id: u64,
+        token: u64,
+    ) -> Result<UploadPathToken, String> {
+        let mut tokens = self.sftp_upload_path_tokens.lock().await;
+        let entry = tokens
+            .remove(&token)
+            .ok_or_else(|| "上传令牌无效或已过期，请重新选择文件".to_string())?;
+        if entry.session_id != session_id {
+            return Err("上传令牌与会话不匹配".to_string());
+        }
+        if entry.expired() {
+            return Err("上传令牌无效或已过期，请重新选择文件".to_string());
+        }
+        Ok(entry)
     }
 
     /// 列出会话中仍在进行的磁盘传输（用于面板重新挂载时恢复进度行）。
