@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { knownHostsList, knownHostsRemove } from '../../api/ssh'
+import { knownHostsList, knownHostsRemove, knownHostsSetMode } from '../../api/ssh'
 import { KnownHostsSnapshot } from '../../types/session'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
+import { useSettings } from '../../store/settings'
 
 export function KnownHostsPanel() {
   const [snapshot, setSnapshot] = useState<KnownHostsSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const knownHostsMode = useSettings((state) => state.knownHostsMode)
+  const setKnownHostsMode = useSettings((state) => state.setKnownHostsMode)
+  const saveKnownHostsMode = useSettings((state) => state.saveKnownHostsMode)
 
   const reload = async () => {
     setError(null)
@@ -22,6 +26,22 @@ export function KnownHostsPanel() {
   useEffect(() => {
     void reload()
   }, [])
+
+  const changeMode = async (mode: 'openssh' | 'appdata') => {
+    setError(null)
+    try {
+      await knownHostsSetMode(mode)
+      setKnownHostsMode(mode)
+      await saveKnownHostsMode()
+      recordAudit('knownhosts.mode', mode, 'success', mode === 'openssh' ? '切换为 OpenSSH known_hosts 存储' : '切换为应用数据目录独立存储')
+      await reload()
+      showToast(mode === 'openssh' ? '已切换为 OpenSSH known_hosts 存储，之后的首次连接将重新确认指纹' : '已切换为应用数据目录独立存储，之后的首次连接将重新确认指纹', 'info')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      recordAudit('knownhosts.mode', mode, 'failure', message)
+      setError(message)
+    }
+  }
 
   const removeEntry = async (pattern: string, keyType: string) => {
     const accepted = await confirmDialog({
@@ -56,6 +76,18 @@ export function KnownHostsPanel() {
       <div className="section-tip">
         首次连接时确认过的主机指纹保存在本机 known_hosts 文件中，连接时严格匹配；指纹变化会被阻断。删除条目即撤销信任。
       </div>
+      <label className="field">
+        <span className="field-label">指纹存储位置</span>
+        <select
+          className="glass-input"
+          value={knownHostsMode}
+          onChange={(event) => void changeMode(event.target.value as 'openssh' | 'appdata')}
+        >
+          <option value="openssh">OpenSSH 兼容（~/.ssh/known_hosts）</option>
+          <option value="appdata">应用数据目录独立存储</option>
+        </select>
+      </label>
+      <div className="section-tip">切换存储位置后，新位置的指纹为空，之后的首次连接将重新弹出指纹确认；已建立会话不受影响。</div>
       {error && <div className="form-error">{error}</div>}
       {snapshot && (
         <div className="knownhosts-path" title={snapshot.path}>

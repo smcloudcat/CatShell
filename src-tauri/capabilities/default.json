@@ -8,6 +8,7 @@
     "core:window:allow-destroy",
     "dialog:default",
     "opener:default",
-    "store:default"
+    "store:default",
+    "notification:default"
   ]
 }

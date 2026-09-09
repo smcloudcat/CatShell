@@ -2,6 +2,7 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 're
 import { Icon } from '../../components/Icon'
 import {
   base64ToBytes,
+  sftpChmod,
   sftpDownloadBegin,
   sftpDownloadChunk,
   sftpList,
@@ -26,6 +27,7 @@ import { confirmDialog } from '../../store/ui'
 const SFTP_CHUNK_SIZE = 256 * 1024
 const SFTP_CHUNKED_THRESHOLD = 16 * 1024 * 1024
 const CANCELLED_MESSAGE = '已取消'
+const CHMOD_PRESETS = ['644', '600', '755', '700', '777']
 
 interface TransferProgress {
   id: number
@@ -40,6 +42,32 @@ function parentPath(path: string): string {
   if (normalized === '/') return '/'
   const index = normalized.lastIndexOf('/')
   return index <= 0 ? '/' : normalized.slice(0, index)
+}
+
+function permissionText(mode: number): string {
+  const bits = mode & 0o777
+  const chars = ['r', 'w', 'x']
+  let text = ''
+  for (let shift = 6; shift >= 0; shift -= 3) {
+    const triad = (bits >> shift) & 0o7
+    for (let bit = 2; bit >= 0; bit -= 1) {
+      text += (triad >> bit) & 1 ? chars[2 - bit] : '-'
+    }
+  }
+  return text
+}
+
+function formatMode(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(3, '0')
+}
+
+function entryTitle(entry: SftpEntry): string {
+  const parts: string[] = []
+  if (entry.permissions !== null) parts.push(`权限 ${formatMode(entry.permissions)}（${permissionText(entry.permissions)}）`)
+  if (entry.owner) parts.push(`属主 ${entry.owner}`)
+  if (entry.group) parts.push(`组 ${entry.group}`)
+  if (entry.modifiedAt) parts.push(`修改于 ${new Date(entry.modifiedAt * 1000).toLocaleString()}`)
+  return parts.join(' · ')
 }
 
 async function uploadWithRetry(target: string, data: Uint8Array, writeFile: (path: string, data: Uint8Array) => Promise<void>): Promise<number> {
@@ -82,6 +110,8 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [transfers, setTransfers] = useState<TransferProgress[]>([])
   const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename' | 'move'; target: SftpEntry | null; value: string } | null>(null)
   const [nameBusy, setNameBusy] = useState(false)
+  const [chmodDialog, setChmodDialog] = useState<{ target: SftpEntry; value: string } | null>(null)
+  const [chmodBusy, setChmodBusy] = useState(false)
   const [sortKey, setSortKey] = useState<SftpSortKey>('name')
   const [sortAsc, setSortAsc] = useState(true)
   const [showHidden, setShowHidden] = useState(false)
@@ -424,6 +454,30 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }
 
+  const submitChmodDialog = async () => {
+    if (!chmodDialog) return
+    const raw = chmodDialog.value.trim()
+    if (!/^[0-7]{3,4}$/.test(raw)) {
+      setError('权限必须是 3~4 位八进制数字，例如 644')
+      return
+    }
+    setChmodBusy(true)
+    setError(null)
+    try {
+      const mode = parseInt(raw, 8)
+      await sftpChmod(sessionId, chmodDialog.target.path, mode)
+      recordAudit('sftp.chmod', `${chmodDialog.target.path} -> ${formatMode(mode)}`, 'success', '修改远程文件权限')
+      setNotice(`已将 ${chmodDialog.target.name} 权限修改为 ${raw}`)
+      setChmodDialog(null)
+      await loadDirectory(path)
+    } catch (err) {
+      recordAudit('sftp.chmod', chmodDialog.target.path, 'failure', '修改远程文件权限失败')
+      setError(typeof err === 'string' ? err : '修改权限失败')
+    } finally {
+      setChmodBusy(false)
+    }
+  }
+
   const submitNameDialog = async () => {
     if (!nameDialog) return
     if (nameDialog.mode === 'move') {
@@ -582,13 +636,16 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               <Icon name={entry.kind === 'directory' ? 'folder' : 'save'} size={15} />
               <span>{entry.name}</span>
             </button>
-            <span>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
+            <span title={entryTitle(entry)}>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
             <span>{entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
             <span className="sftp-actions">
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
               <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title="重命名"><Icon name="edit" size={14} /></button>
               <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'move', target: entry, value: path })} title="移动到其他目录"><Icon name="arrow-right" size={14} /></button>
+              {(entry.kind === 'file' || entry.kind === 'directory') && entry.permissions !== null && (
+                <button className="host-icon-btn" onClick={() => setChmodDialog({ target: entry, value: formatMode(entry.permissions ?? 0o644) })} title="修改权限（chmod）"><Icon name="key" size={14} /></button>
+              )}
               <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title={entry.kind === 'directory' ? '递归删除目录' : '删除'}><Icon name="trash" size={14} /></button>
             </span>
           </div>
@@ -633,6 +690,44 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               ) : (
                 <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? '处理中…' : '确认'}</button>
               )}
+            </footer>
+          </div>
+        </div>
+      )}
+      {chmodDialog && (
+        <div className="modal-overlay" onClick={() => !chmodBusy && setChmodDialog(null)}>
+          <div className="modal glass" onClick={(event) => event.stopPropagation()}>
+            <header className="modal-header">
+              <div className="modal-title"><Icon name="key" size={17} />修改权限 {chmodDialog.target.name}</div>
+              <button className="modal-close" onClick={() => setChmodDialog(null)} disabled={chmodBusy}><Icon name="x" size={15} /></button>
+            </header>
+            <div className="modal-body">
+              <div className="section-tip">
+                当前权限：{formatMode(chmodDialog.target.permissions ?? 0)}（{permissionText(chmodDialog.target.permissions ?? 0)}）
+                {chmodDialog.target.owner && <> · 属主 {chmodDialog.target.owner}</>}
+                {chmodDialog.target.group && <> / 组 {chmodDialog.target.group}</>}
+              </div>
+              <label className="field">
+                <span className="field-label">八进制权限（3~4 位，例如 644）</span>
+                <input
+                  className="glass-input"
+                  value={chmodDialog.value}
+                  onChange={(event) => setChmodDialog({ ...chmodDialog, value: event.target.value })}
+                  autoFocus
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !chmodBusy) void submitChmodDialog() }}
+                />
+              </label>
+              <div className="chmod-presets">
+                {CHMOD_PRESETS.map((preset) => (
+                  <button key={preset} className="glass-btn" onClick={() => setChmodDialog({ ...chmodDialog, value: preset })}>
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <footer className="modal-footer">
+              <button className="glass-btn" onClick={() => setChmodDialog(null)} disabled={chmodBusy}>取消</button>
+              <button className="glass-btn primary" onClick={() => void submitChmodDialog()} disabled={chmodBusy}>{chmodBusy ? '处理中…' : '应用'}</button>
             </footer>
           </div>
         </div>

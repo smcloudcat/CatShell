@@ -142,6 +142,10 @@ export async function sftpRename(id: number, fromPath: string, toPath: string): 
   await invoke('sftp_rename', { id, fromPath, toPath })
 }
 
+export async function sftpChmod(id: number, path: string, mode: number): Promise<void> {
+  await invoke('sftp_chmod', { id, path, mode })
+}
+
 export async function sftpDownloadBegin(id: number, path: string): Promise<SftpTransferStart> {
   return invoke<SftpTransferStart>('sftp_download_begin', { id, path })
 }
@@ -180,6 +184,10 @@ export async function knownHostsRemove(pattern: string, keyType: string): Promis
 
 export async function sshConfigParse(): Promise<SshConfigEntry[]> {
   return invoke<SshConfigEntry[]>('ssh_config_parse')
+}
+
+export async function knownHostsSetMode(mode: 'openssh' | 'appdata'): Promise<void> {
+  await invoke('known_hosts_set_mode', { mode })
 }
 
 export interface SshEventHandlers {

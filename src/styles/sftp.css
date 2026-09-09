@@ -40,6 +40,16 @@
   font-size: 12px;
 }
 
+.sftp-pathbar .host-icon-btn {
+  margin-left: auto;
+}
+
+.chmod-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .sftp-filterbar {
   display: flex;
   align-items: center;

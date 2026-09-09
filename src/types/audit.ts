@@ -18,6 +18,7 @@ export type AuditAction =
   | 'sftp.mkdir'
   | 'sftp.rename'
   | 'sftp.move'
+  | 'sftp.chmod'
   | 'sftp.rmdir'
   | 'sftp.open-in-terminal'
   | 'snippet.send'
@@ -32,6 +33,7 @@ export type AuditAction =
   | 'vault.remove-credential'
   | 'vault.change-password'
   | 'knownhosts.delete'
+  | 'knownhosts.mode'
 
 export interface AuditEntry {
   id: string

@@ -227,6 +227,16 @@ async fn sftp_rename(
 }
 
 #[tauri::command]
+async fn sftp_chmod(
+    state: State<'_, AppState>,
+    id: u64,
+    path: String,
+    mode: u32,
+) -> Result<(), String> {
+    state.ssh.sftp_chmod(id, path, mode).await
+}
+
+#[tauri::command]
 async fn sftp_download_begin(
     state: State<'_, AppState>,
     id: u64,
@@ -284,16 +294,52 @@ async fn ssh_confirm_host_key(
 }
 
 #[tauri::command]
-async fn known_hosts_list() -> Result<ssh_manager::KnownHostsSnapshot, String> {
-    load_known_hosts_snapshot(None)
+async fn known_hosts_list(
+    state: State<'_, AppState>,
+) -> Result<ssh_manager::KnownHostsSnapshot, String> {
+    load_known_hosts_snapshot(state.ssh.effective_known_hosts_path().as_deref())
 }
 
 #[tauri::command]
-async fn known_hosts_remove(pattern: String, key_type: String) -> Result<usize, String> {
+async fn known_hosts_remove(
+    state: State<'_, AppState>,
+    pattern: String,
+    key_type: String,
+) -> Result<usize, String> {
     if pattern.trim().is_empty() || key_type.trim().is_empty() {
         return Err("主机指纹条目无效".to_string());
     }
-    remove_known_hosts_entry(None, pattern.trim(), key_type.trim())
+    remove_known_hosts_entry(
+        state.ssh.effective_known_hosts_path().as_deref(),
+        pattern.trim(),
+        key_type.trim(),
+    )
+}
+
+/// 切换 known_hosts 存储策略：openssh = ~/.ssh/known_hosts（默认），appdata = 应用数据目录独立存储。
+#[tauri::command]
+async fn known_hosts_set_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
+    match mode.as_str() {
+        "openssh" => {
+            state.ssh.set_known_hosts_path(None);
+        }
+        "appdata" => {
+            let dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|_| "无法定位应用数据目录".to_string())?;
+            std::fs::create_dir_all(&dir).map_err(|err| format!("创建应用数据目录失败: {err}"))?;
+            state
+                .ssh
+                .set_known_hosts_path(Some(&dir.join("known_hosts")));
+        }
+        other => return Err(format!("未知的 known_hosts 存储模式: {other}")),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -305,6 +351,15 @@ async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     let content =
         std::fs::read_to_string(&path).map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
     Ok(ssh_manager::parse_ssh_config(&content))
+}
+
+#[cfg(desktop)]
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -323,6 +378,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -335,6 +391,7 @@ pub fn run() {
             ssh_confirm_host_key,
             known_hosts_list,
             known_hosts_remove,
+            known_hosts_set_mode,
             ssh_config_parse,
             ssh_monitor,
             ssh_processes,
@@ -352,6 +409,7 @@ pub fn run() {
             sftp_remove_dir,
             sftp_mkdir,
             sftp_rename,
+            sftp_chmod,
             sftp_download_begin,
             sftp_download_chunk,
             sftp_upload_begin,
@@ -359,6 +417,40 @@ pub fn run() {
             sftp_upload_finish,
             sftp_transfer_cancel
         ])
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出 CatShell", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show, &quit])?;
+                let mut tray = TrayIconBuilder::with_id("main-tray")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .tooltip("CatShell");
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
+                }
+                tray.on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            }
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {

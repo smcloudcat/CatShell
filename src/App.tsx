@@ -15,6 +15,7 @@ import { SessionsView } from './views/sessions/SessionsView'
 import { SettingsView } from './views/SettingsView'
 import { ForwardView } from './views/ForwardView'
 import { accentContrastOf, resolveMode, withModeBackgrounds } from './types/theme'
+import { knownHostsSetMode } from './api/ssh'
 import './styles/glass.css'
 import './App.css'
 
@@ -53,6 +54,17 @@ function App() {
     void vaultInit()
     void snippetsInit()
     void auditInit()
+    void (async () => {
+      const { knownHostsMode, ready } = useSettings.getState()
+      if (!ready) return
+      if (knownHostsMode === 'appdata' && '__TAURI_INTERNALS__' in window) {
+        try {
+          await knownHostsSetMode('appdata')
+        } catch {
+          /* 浏览器预览模式或后端不可用时保持默认路径 */
+        }
+      }
+    })()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
 
   useEffect(() => {

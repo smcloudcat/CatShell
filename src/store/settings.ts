@@ -8,6 +8,7 @@ const MONITOR_THRESHOLDS_KEY = 'monitorThresholds'
 const SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed'
 const VAULT_AUTO_LOCK_KEY = 'vaultAutoLockMinutes'
 const VAULT_BLUR_LOCK_KEY = 'vaultBlurLock'
+const KNOWN_HOSTS_MODE_KEY = 'knownHostsMode'
 const TERMINAL_KEY = 'terminal'
 const MONITOR_INTERVAL_KEY = 'monitorIntervalSeconds'
 const SESSION_PANELS_KEY = 'sessionPanelsCollapsed'
@@ -77,6 +78,7 @@ interface SettingsState {
   sidebarCollapsed: boolean
   vaultAutoLockMinutes: number
   vaultBlurLock: boolean
+  knownHostsMode: 'openssh' | 'appdata'
   terminal: TerminalSettings
   monitorIntervalSeconds: number
   sessionPanels: SessionPanelState
@@ -93,6 +95,8 @@ interface SettingsState {
   saveVaultAutoLockMinutes: () => Promise<void>
   setVaultBlurLock: (enabled: boolean) => void
   saveVaultBlurLock: () => Promise<void>
+  setKnownHostsMode: (mode: 'openssh' | 'appdata') => void
+  saveKnownHostsMode: () => Promise<void>
   setTerminal: (patch: Partial<TerminalSettings>) => void
   saveTerminal: () => Promise<void>
   setMonitorIntervalSeconds: (seconds: number) => void
@@ -114,6 +118,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   sidebarCollapsed: false,
   vaultAutoLockMinutes: DEFAULT_VAULT_AUTO_LOCK_MINUTES,
   vaultBlurLock: false,
+  knownHostsMode: 'openssh',
   terminal: { ...DEFAULT_TERMINAL_SETTINGS },
   monitorIntervalSeconds: DEFAULT_MONITOR_INTERVAL_SECONDS,
   sessionPanels: { ...DEFAULT_SESSION_PANELS },
@@ -190,6 +195,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
       localStorage.setItem(VAULT_BLUR_LOCK_KEY, JSON.stringify(enabled))
     }
   },
+  setKnownHostsMode: (mode) => set({ knownHostsMode: mode === 'appdata' ? 'appdata' : 'openssh' }),
+  saveKnownHostsMode: async () => {
+    const mode = get().knownHostsMode
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(KNOWN_HOSTS_MODE_KEY, mode)
+      await store.save()
+    } catch {
+      localStorage.setItem(KNOWN_HOSTS_MODE_KEY, JSON.stringify(mode))
+    }
+  },
   setTerminal: (patch) =>
     set((state) => ({ terminal: normalizeTerminalSettings({ ...state.terminal, ...patch }) })),
   saveTerminal: async () => {
@@ -243,6 +259,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const sidebarCollapsed = await store.get<boolean>(SIDEBAR_COLLAPSED_KEY)
       const vaultAutoLockMinutes = await store.get<number>(VAULT_AUTO_LOCK_KEY)
       const vaultBlurLock = await store.get<boolean>(VAULT_BLUR_LOCK_KEY)
+      const knownHostsMode = await store.get<'openssh' | 'appdata'>(KNOWN_HOSTS_MODE_KEY)
       const savedTerminal = await store.get<Partial<TerminalSettings>>(TERMINAL_KEY)
       const savedInterval = await store.get<number>(MONITOR_INTERVAL_KEY)
       const savedPanels = await store.get<Partial<SessionPanelState>>(SESSION_PANELS_KEY)
@@ -260,6 +277,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (typeof vaultBlurLock === 'boolean') {
         set({ vaultBlurLock })
+      }
+      if (knownHostsMode === 'openssh' || knownHostsMode === 'appdata') {
+        set({ knownHostsMode })
       }
       if (savedTerminal && typeof savedTerminal === 'object') {
         set({ terminal: normalizeTerminalSettings(savedTerminal) })
@@ -321,6 +341,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const savedVaultBlurLock = localStorage.getItem(VAULT_BLUR_LOCK_KEY)
       if (savedVaultBlurLock === 'true' || savedVaultBlurLock === 'false') {
         set({ vaultBlurLock: savedVaultBlurLock === 'true' })
+      }
+      const savedKnownHostsMode = localStorage.getItem(KNOWN_HOSTS_MODE_KEY)
+      if (savedKnownHostsMode === 'openssh' || savedKnownHostsMode === 'appdata') {
+        set({ knownHostsMode: savedKnownHostsMode })
       }
       const savedTerminalRaw = localStorage.getItem(TERMINAL_KEY)
       if (savedTerminalRaw) {

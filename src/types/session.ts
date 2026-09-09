@@ -99,6 +99,9 @@ export interface SftpEntry {
   kind: 'file' | 'directory' | 'symlink'
   size: number
   modifiedAt: number | null
+  permissions: number | null
+  owner: string | null
+  group: string | null
 }
 
 export interface SftpTransferStart {

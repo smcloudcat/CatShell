@@ -4,6 +4,7 @@ import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshProcesses } from '
 import { useSessions } from '../../store/sessions'
 import { useSettings, MONITOR_INTERVAL_OPTIONS } from '../../store/settings'
 import { showToast, confirmDialog } from '../../store/ui'
+import { sendSystemNotification } from '../../utils/notify'
 import { NetworkDiagnostic, ProcessInfo, ServerMetrics } from '../../types/session'
 import { formatBytes } from '../../utils/format'
 
@@ -105,6 +106,7 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
             const wasExceeded = state[alertKey] ?? false
             if (exceeded && !wasExceeded) {
               showToast(`${next.hostname}：${check.label} ${check.value.toFixed(0)}% 已超过 ${check.threshold}%`, 'warning')
+              void sendSystemNotification('CatShell 监控告警', `${next.hostname}：${check.label} ${check.value.toFixed(0)}% 已超过 ${check.threshold}%`)
             }
             state[alertKey] = exceeded
           }

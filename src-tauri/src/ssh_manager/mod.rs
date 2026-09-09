@@ -51,7 +51,7 @@ pub struct ActiveSession {
 pub struct SshManager {
     pub sessions: Mutex<HashMap<u64, Arc<ActiveSession>>>,
     pub host_key_confirmations: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-    known_hosts_path: Option<PathBuf>,
+    known_hosts_path: std::sync::RwLock<Option<PathBuf>>,
     next_id: AtomicU64,
     pub forwards: Mutex<HashMap<u64, JoinHandle<()>>>,
     pub forward_info: Mutex<HashMap<u64, PortForwardInfo>>,
@@ -67,7 +67,7 @@ impl Default for SshManager {
         SshManager {
             sessions: Mutex::new(HashMap::new()),
             host_key_confirmations: Arc::new(Mutex::new(HashMap::new())),
-            known_hosts_path: None,
+            known_hosts_path: std::sync::RwLock::new(None),
             next_id: AtomicU64::new(1),
             forwards: Mutex::new(HashMap::new()),
             forward_info: Mutex::new(HashMap::new()),
@@ -507,7 +507,7 @@ async fn run_session(
             id,
             sink.clone(),
             manager.host_key_confirmations.clone(),
-            manager.known_hosts_path.clone(),
+            manager.effective_known_hosts_path(),
             manager.remote_routes.clone(),
         )
         .await
@@ -588,9 +588,24 @@ async fn run_session(
 impl SshManager {
     pub fn with_known_hosts_path(path: PathBuf) -> Self {
         Self {
-            known_hosts_path: Some(path),
+            known_hosts_path: std::sync::RwLock::new(Some(path)),
             ..Self::default()
         }
+    }
+
+    /// 运行时切换 known_hosts 存储位置（None = OpenSSH 兼容的 ~/.ssh/known_hosts）。
+    /// 只影响之后建立的新连接，已建立会话不受影响。
+    pub fn set_known_hosts_path(&self, path: Option<&std::path::Path>) {
+        *self.known_hosts_path.write().expect("known_hosts_path 锁") =
+            path.map(std::path::Path::to_path_buf);
+    }
+
+    /// 当前生效的 known_hosts 路径（None 表示使用默认 ~/.ssh/known_hosts）。
+    pub fn effective_known_hosts_path(&self) -> Option<PathBuf> {
+        self.known_hosts_path
+            .read()
+            .expect("known_hosts_path 锁")
+            .clone()
     }
 
     pub(super) async fn session_ref(&self, id: u64) -> Result<Arc<ActiveSession>, String> {

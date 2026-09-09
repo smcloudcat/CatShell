@@ -21,6 +21,9 @@ pub struct SftpEntry {
     pub kind: String,
     pub size: u64,
     pub modified_at: Option<i64>,
+    pub permissions: Option<u32>,
+    pub owner: Option<String>,
+    pub group: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -143,6 +146,15 @@ impl SshManager {
                 kind: kind.to_string(),
                 size: metadata.size.unwrap_or(0),
                 modified_at: metadata.mtime.map(|value| value as i64),
+                permissions: metadata.permissions,
+                owner: metadata
+                    .user
+                    .clone()
+                    .or_else(|| metadata.uid.map(|value| value.to_string())),
+                group: metadata
+                    .group
+                    .clone()
+                    .or_else(|| metadata.gid.map(|value| value.to_string())),
             });
         }
         result.sort_by(|left, right| {
@@ -243,6 +255,28 @@ impl SshManager {
         sftp.rename(&from, &to)
             .await
             .map_err(|error| format!("重命名远程文件失败: {error}"))?;
+        sftp.close()
+            .await
+            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+    }
+
+    /// 修改远程文件/目录权限（八进制 mode，例如 0o644）。只传 permissions，
+    /// 其余元数据字段保持默认值，避免覆盖远端属主/时间戳。
+    pub async fn sftp_chmod(&self, id: u64, path: String, mode: u32) -> Result<(), String> {
+        let path = validate_sftp_path(path)?;
+        if mode > 0o7777 {
+            return Err("权限值无效（应为 3~4 位八进制，例如 644）".to_string());
+        }
+        let sftp = self.open_sftp_channel(id).await?;
+        sftp.set_metadata(
+            &path,
+            russh_sftp::protocol::FileAttributes {
+                permissions: Some(mode),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|error| format!("修改远程权限失败: {error}"))?;
         sftp.close()
             .await
             .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
