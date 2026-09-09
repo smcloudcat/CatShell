@@ -28,6 +28,7 @@ import { shellQuote } from '../../types/snippet'
 import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog } from '../../store/ui'
+import { useT } from '../../i18n'
 
 const SFTP_CHUNK_SIZE = 256 * 1024
 const SFTP_CHUNKED_THRESHOLD = 16 * 1024 * 1024
@@ -95,6 +96,7 @@ const SFTP_SORT_LABELS: Record<SftpSortKey, string> = {
 }
 
 export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
+  const t = useT()
   const sessions = useSessions((state) => state.sessions)
   const [path, setPath] = useState('/')
   const [entries, setEntries] = useState<SftpEntry[]>([])
@@ -124,10 +126,10 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     try {
       await write(sessionId, new TextEncoder().encode(`cd ${shellQuote(path)}\n`))
       terminals[sessionId]?.focus()
-      recordAudit('sftp.open-in-terminal', path, 'success', '在终端中打开此目录')
+      recordAudit('sftp.open-in-terminal', path, 'success', t('在终端中打开此目录'))
     } catch (err) {
-      recordAudit('sftp.open-in-terminal', path, 'failure', '在终端中打开此目录失败')
-      setError(typeof err === 'string' ? err : '发送 cd 命令失败')
+      recordAudit('sftp.open-in-terminal', path, 'failure', t('在终端中打开此目录失败'))
+      setError(typeof err === 'string' ? err : t('发送 cd 命令失败'))
     }
   }
 
@@ -197,8 +199,8 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       anchor.download = entry.name
       anchor.click()
       URL.revokeObjectURL(anchor.href)
-      recordAudit('sftp.download', entry.path, 'success', '分块下载文件')
-      setNotice(`已下载 ${entry.name}`)
+      recordAudit('sftp.download', entry.path, 'success', t('分块下载文件'))
+      setNotice(`${t('已下载 ')}${entry.name}`)
     } finally {
       removeTransfer(sessionId, transferId)
       try {
@@ -223,10 +225,10 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         total: start.total,
         disk: true
       })
-      recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? '磁盘级下载（断点续传）' : '磁盘级下载开始')
+      recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? t('磁盘级下载（断点续传）') : t('磁盘级下载开始'))
     } catch (err) {
-      recordAudit('sftp.disk-download', entry.path, 'failure', '磁盘级下载启动失败')
-      setError(typeof err === 'string' ? err : '磁盘级下载启动失败')
+      recordAudit('sftp.disk-download', entry.path, 'failure', t('磁盘级下载启动失败'))
+      setError(typeof err === 'string' ? err : t('磁盘级下载启动失败'))
     }
   }
 
@@ -239,9 +241,9 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       let targets = picks
       if (existing.length) {
         const accepted = await confirmDialog({
-          title: '替换远端文件',
-          message: `远端目录 ${path} 已存在同名文件：${existing.map((pick) => pick.fileName).join('、')}。上传将在传输完成后替换这些文件；同名半成品存在时从断点续传。继续？`,
-          confirmLabel: '继续上传',
+          title: t('替换远端文件'),
+          message: t('远端目录 ') + path + t(' 已存在同名文件：') + existing.map((pick) => pick.fileName).join('、') + t('。上传将在传输完成后替换这些文件；同名半成品存在时从断点续传。继续？'),
+          confirmLabel: t('继续上传'),
           danger: true
         })
         if (!accepted) {
@@ -260,16 +262,16 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
             total: start.total,
             disk: true
           })
-          recordAudit('sftp.disk-upload', pick.remotePath, 'success', start.resumed ? '磁盘级上传（断点续传）' : '磁盘级上传开始')
+          recordAudit('sftp.disk-upload', pick.remotePath, 'success', start.resumed ? t('磁盘级上传（断点续传）') : t('磁盘级上传开始'))
           started += 1
         } catch (err) {
-          recordAudit('sftp.disk-upload', pick.remotePath, 'failure', '磁盘级上传启动失败')
-          setError(typeof err === 'string' ? err : `磁盘级上传启动失败：${pick.fileName}`)
+          recordAudit('sftp.disk-upload', pick.remotePath, 'failure', t('磁盘级上传启动失败'))
+          setError(typeof err === 'string' ? err : `${t('磁盘级上传启动失败：')}${pick.fileName}`)
         }
       }
-      if (started > 0) setNotice(`磁盘级上传已开始 ${started} 个文件`)
+      if (started > 0) setNotice(`${t('磁盘级上传已开始 ')}${started}${t(' 个文件')}`)
     } catch (err) {
-      setError(typeof err === 'string' ? err : '磁盘级上传失败')
+      setError(typeof err === 'string' ? err : t('磁盘级上传失败'))
     }
   }
 
@@ -280,11 +282,11 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setNotice(null)
     try {
       setEntries(await sftpList(sessionId, target))
-      recordAudit('sftp.list', target, 'success', '读取远程目录')
+      recordAudit('sftp.list', target, 'success', t('读取远程目录'))
       setPath(target)
     } catch (err) {
-      recordAudit('sftp.list', target, 'failure', '读取远程目录失败')
-      setError(typeof err === 'string' ? err : '无法读取远程目录')
+      recordAudit('sftp.list', target, 'failure', t('读取远程目录失败'))
+      setError(typeof err === 'string' ? err : t('无法读取远程目录'))
     } finally {
       setBusy(false)
     }
@@ -314,9 +316,9 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       for (const file of files) {
         if (existingNames.has(file.name)) {
           const overwrite = await confirmDialog({
-            title: '覆盖远程文件',
-            message: `远程目录 ${path} 已存在同名文件“${file.name}”，上传将覆盖其内容。`,
-            confirmLabel: '覆盖',
+            title: t('覆盖远程文件'),
+            message: t('远程目录 ') + path + t(' 已存在同名文件“') + file.name + t('”，上传将覆盖其内容。'),
+            confirmLabel: t('覆盖'),
             danger: true
           })
           if (!overwrite) {
@@ -328,32 +330,32 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         try {
           if (file.size > SFTP_CHUNKED_THRESHOLD) {
             await uploadChunked(target, file)
-            recordAudit('sftp.upload', target, 'success', '分块上传文件')
+            recordAudit('sftp.upload', target, 'success', t('分块上传文件'))
             uploaded += 1
             continue
           }
           const attempts = await uploadWithRetry(target, new Uint8Array(await file.arrayBuffer()), (filePath, data) => sftpWriteFile(sessionId, filePath, data))
           if (attempts > 1) retried += 1
-          recordAudit('sftp.upload', target, 'success', attempts > 1 ? `上传文件，第 ${attempts} 次尝试成功` : '上传文件')
+          recordAudit('sftp.upload', target, 'success', attempts > 1 ? `${t('上传文件，第 ')}${attempts}${t(' 次尝试成功')}` : t('上传文件'))
           uploaded += 1
         } catch (err) {
           if (err instanceof Error && err.message === CANCELLED_MESSAGE) {
-            recordAudit('sftp.upload', target, 'failure', '上传已取消')
+            recordAudit('sftp.upload', target, 'failure', t('上传已取消'))
             skipped += 1
           } else {
-            recordAudit('sftp.upload', target, 'failure', '上传文件失败')
+            recordAudit('sftp.upload', target, 'failure', t('上传文件失败'))
             failed.push(file.name)
           }
         }
       }
-      recordAudit('sftp.batch-upload', `${uploaded}/${files.length} 个文件`, failed.length ? 'failure' : 'success', `批量上传完成，重试成功 ${retried} 个，失败 ${failed.length} 个，跳过 ${skipped} 个`)
-      const parts = [`已上传 ${uploaded}/${files.length} 个文件`]
-      if (skipped) parts.push(`跳过 ${skipped} 个`)
-      if (failed.length) parts.push(`失败：${failed.join('、')}`)
-      setNotice(parts.join('，'))
+      recordAudit('sftp.batch-upload', `${uploaded}/${files.length}`, failed.length ? 'failure' : 'success', `${t('批量上传完成，重试成功 ')}${retried}${t(' 个，失败 ')}${failed.length}${t(' 个，跳过 ')}${skipped}${t(' 个')}`)
+      const parts = [`${t('已上传 ')}${uploaded}/${files.length}${t(' 个文件')}`]
+      if (skipped) parts.push(`${t('跳过 ')}${skipped}${t(' 个')}`)
+      if (failed.length) parts.push(`${t('失败：')}${failed.join('、')}`)
+      setNotice(parts.join(t('，')))
       await loadDirectory(path)
     } catch (err) {
-      setError(typeof err === 'string' ? err : '上传失败')
+      setError(typeof err === 'string' ? err : t('上传失败'))
     } finally {
       setBusy(false)
     }
@@ -396,7 +398,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       setEditorText(text)
       setEditing(entry)
     } catch {
-      setError('无法作为 UTF-8 文本打开该文件，请使用下载操作处理二进制文件。')
+      setError(t('无法作为 UTF-8 文本打开该文件，请使用下载操作处理二进制文件。'))
     } finally {
       setBusy(false)
     }
@@ -408,13 +410,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       await sftpWriteFile(sessionId, editing.path, new TextEncoder().encode(editorText))
-      recordAudit('sftp.edit', editing.path, 'success', '编辑并回传远程文件')
-      setNotice(`已保存 ${editing.name}`)
+      recordAudit('sftp.edit', editing.path, 'success', t('编辑并回传远程文件'))
+      setNotice(`${t('已保存 ')}${editing.name}`)
       setEditing(null)
       await loadDirectory(path)
     } catch (err) {
-      recordAudit('sftp.edit', editing.path, 'failure', '编辑远程文件失败')
-      setError(typeof err === 'string' ? err : '保存远程文件失败')
+      recordAudit('sftp.edit', editing.path, 'failure', t('编辑远程文件失败'))
+      setError(typeof err === 'string' ? err : t('保存远程文件失败'))
     } finally {
       setEditorBusy(false)
     }
@@ -443,7 +445,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setNotice(null)
     try {
       const data = await sftpReadFile(sessionId, entry.path)
-      recordAudit('sftp.download', entry.path, 'success', '下载文件')
+      recordAudit('sftp.download', entry.path, 'success', t('下载文件'))
       const downloadBuffer = new ArrayBuffer(data.byteLength)
       new Uint8Array(downloadBuffer).set(data)
       const anchor = document.createElement('a')
@@ -451,10 +453,10 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       anchor.download = entry.name
       anchor.click()
       URL.revokeObjectURL(anchor.href)
-      setNotice(`已下载 ${entry.name}`)
+      setNotice(`${t('已下载 ')}${entry.name}`)
     } catch (err) {
-      recordAudit('sftp.download', entry.path, 'failure', '下载文件失败')
-      setError(typeof err === 'string' ? err : '下载失败')
+      recordAudit('sftp.download', entry.path, 'failure', t('下载文件失败'))
+      setError(typeof err === 'string' ? err : t('下载失败'))
     } finally {
       setBusy(false)
     }
@@ -470,29 +472,29 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     const entry = nameDialog.target
     const dir = nameDialog.value.trim()
     if (!dir.startsWith('/') || dir.includes('//')) {
-      setError('目标目录必须是绝对路径（以 / 开头）')
+      setError(t('目标目录必须是绝对路径（以 / 开头）'))
       return
     }
     const target = joinRemotePath(dir.replace(/\/+$/, '') || '/', entry.name)
     if (target === entry.path) {
-      setError('目标目录与当前位置相同')
+      setError(t('目标目录与当前位置相同'))
       return
     }
     if (entry.kind === 'directory' && (target.startsWith(`${entry.path}/`) || entry.path === dir.replace(/\/+$/, ''))) {
-      setError('不能把目录移动到其自身或其子目录中')
+      setError(t('不能把目录移动到其自身或其子目录中'))
       return
     }
     setNameBusy(true)
     setError(null)
     try {
       await sftpRename(sessionId, entry.path, target)
-      recordAudit('sftp.move', `${entry.path} -> ${target}`, 'success', '移动远程文件')
-      setNotice(`已移动到 ${dir}`)
+      recordAudit('sftp.move', `${entry.path} -> ${target}`, 'success', t('移动远程文件'))
+      setNotice(`${t('已移动到 ')}${dir}`)
       setNameDialog(null)
       await loadDirectory(path)
     } catch (err) {
-      recordAudit('sftp.move', entry.path, 'failure', '移动远程文件失败')
-      setError(typeof err === 'string' ? err : '移动失败')
+      recordAudit('sftp.move', entry.path, 'failure', t('移动远程文件失败'))
+      setError(typeof err === 'string' ? err : t('移动失败'))
     } finally {
       setNameBusy(false)
     }
@@ -502,7 +504,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (!chmodDialog) return
     const raw = chmodDialog.value.trim()
     if (!/^[0-7]{3,4}$/.test(raw)) {
-      setError('权限必须是 3~4 位八进制数字，例如 644')
+      setError(t('权限必须是 3~4 位八进制数字，例如 644'))
       return
     }
     setChmodBusy(true)
@@ -510,13 +512,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     try {
       const mode = parseInt(raw, 8)
       await sftpChmod(sessionId, chmodDialog.target.path, mode)
-      recordAudit('sftp.chmod', `${chmodDialog.target.path} -> ${formatMode(mode)}`, 'success', '修改远程文件权限')
-      setNotice(`已将 ${chmodDialog.target.name} 权限修改为 ${raw}`)
+      recordAudit('sftp.chmod', `${chmodDialog.target.path} -> ${formatMode(mode)}`, 'success', t('修改远程文件权限'))
+      setNotice(`${t('已将 ')}${chmodDialog.target.name}${t(' 权限修改为 ')}${raw}`)
       setChmodDialog(null)
       await loadDirectory(path)
     } catch (err) {
-      recordAudit('sftp.chmod', chmodDialog.target.path, 'failure', '修改远程文件权限失败')
-      setError(typeof err === 'string' ? err : '修改权限失败')
+      recordAudit('sftp.chmod', chmodDialog.target.path, 'failure', t('修改远程文件权限失败'))
+      setError(typeof err === 'string' ? err : t('修改权限失败'))
     } finally {
       setChmodBusy(false)
     }
@@ -536,20 +538,20 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       if (nameDialog.mode === 'mkdir') {
         const target = path === '/' ? `/${value}` : `${path.replace(/\/$/, '')}/${value}`
         await sftpMkdir(sessionId, target)
-        recordAudit('sftp.mkdir', target, 'success', '创建远程目录')
-        setNotice(`已创建目录 ${value}`)
+        recordAudit('sftp.mkdir', target, 'success', t('创建远程目录'))
+        setNotice(`${t('已创建目录 ')}${value}`)
       } else if (nameDialog.target) {
         const parent = nameDialog.target.path.slice(0, nameDialog.target.path.lastIndexOf('/'))
         const target = parent === '' ? `/${value}` : `${parent}/${value}`
         await sftpRename(sessionId, nameDialog.target.path, target)
-        recordAudit('sftp.rename', `${nameDialog.target.path} -> ${target}`, 'success', '重命名远程文件')
-        setNotice(`已重命名为 ${value}`)
+        recordAudit('sftp.rename', `${nameDialog.target.path} -> ${target}`, 'success', t('重命名远程文件'))
+        setNotice(`${t('已重命名为 ')}${value}`)
       }
       setNameDialog(null)
       await loadDirectory(path)
     } catch (err) {
-      recordAudit(nameDialog.mode === 'mkdir' ? 'sftp.mkdir' : 'sftp.rename', nameDialog.mode === 'rename' && nameDialog.target ? nameDialog.target.path : path, 'failure', '远程操作失败')
-      setError(typeof err === 'string' ? err : '远程操作失败')
+      recordAudit(nameDialog.mode === 'mkdir' ? 'sftp.mkdir' : 'sftp.rename', nameDialog.mode === 'rename' && nameDialog.target ? nameDialog.target.path : path, 'failure', t('远程操作失败'))
+      setError(typeof err === 'string' ? err : t('远程操作失败'))
     } finally {
       setNameBusy(false)
     }
@@ -559,9 +561,9 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (entry.kind !== 'file' && entry.kind !== 'directory') return
     if (entry.kind === 'directory') {
       const accepted = await confirmDialog({
-        title: '递归删除远程目录',
-        message: `目录“${entry.name}”及其全部子目录和文件将被删除，该操作不可恢复。确认继续？`,
-        confirmLabel: '全部删除',
+        title: t('递归删除远程目录'),
+        message: t('目录“') + entry.name + t('”及其全部子目录和文件将被删除，该操作不可恢复。确认继续？'),
+        confirmLabel: t('全部删除'),
         danger: true
       })
       if (!accepted) return
@@ -570,21 +572,21 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       setNotice(null)
       try {
         await sftpRemoveDir(sessionId, entry.path)
-        recordAudit('sftp.rmdir', entry.path, 'success', '递归删除远程目录')
-        setNotice(`已删除目录 ${entry.name}`)
+        recordAudit('sftp.rmdir', entry.path, 'success', t('递归删除远程目录'))
+        setNotice(`${t('已删除目录 ')}${entry.name}`)
         await loadDirectory(path)
       } catch (err) {
-        recordAudit('sftp.rmdir', entry.path, 'failure', '递归删除远程目录失败')
-        setError(typeof err === 'string' ? err : '递归删除目录失败')
+        recordAudit('sftp.rmdir', entry.path, 'failure', t('递归删除远程目录失败'))
+        setError(typeof err === 'string' ? err : t('递归删除目录失败'))
       } finally {
         setBusy(false)
       }
       return
     }
     const accepted = await confirmDialog({
-      title: '删除远程文件',
-      message: `确认删除远程文件“${entry.name}”？该操作不可恢复。`,
-      confirmLabel: '删除',
+      title: t('删除远程文件'),
+      message: t('确认删除远程文件“') + entry.name + t('”？该操作不可恢复。'),
+      confirmLabel: t('删除'),
       danger: true
     })
     if (!accepted) return
@@ -593,12 +595,12 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setNotice(null)
     try {
       await sftpRemoveFile(sessionId, entry.path)
-      recordAudit('sftp.delete', entry.path, 'success', '删除文件')
-      setNotice(`已删除 ${entry.name}`)
+      recordAudit('sftp.delete', entry.path, 'success', t('删除文件'))
+      setNotice(`${t('已删除 ')}${entry.name}`)
       await loadDirectory(path)
     } catch (err) {
-      recordAudit('sftp.delete', entry.path, 'failure', '删除文件失败')
-      setError(typeof err === 'string' ? err : '删除失败')
+      recordAudit('sftp.delete', entry.path, 'failure', t('删除文件失败'))
+      setError(typeof err === 'string' ? err : t('删除失败'))
       setBusy(false)
     }
   }
@@ -607,7 +609,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     return (
       <div className="sftp-empty">
         <Icon name="folder" size={44} />
-        <p>会话未连接，连接成功后即可在此浏览和传输远程文件。</p>
+        <p>{t('会话未连接，连接成功后即可在此浏览和传输远程文件。')}</p>
       </div>
     )
   }
@@ -620,60 +622,60 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       onDragLeave={handleDragLeave}
       onDrop={handleDropUpload}
     >
-      {dragOver && <div className="sftp-drop-hint">松开以上传到 {path}</div>}
+      {dragOver && <div className="sftp-drop-hint">{t('松开以上传到 ')}{path}</div>}
       <div className="sftp-toolbar">
         <Icon name="folder" size={15} />
-        <span className="sftp-heading">SFTP 文件</span>
-        {onCollapse && <button className="host-icon-btn" onClick={onCollapse} title="折叠面板"><Icon name="chevron-down" size={14} /></button>}
-        <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title="刷新目录"><Icon name="refresh" size={15} /></button>
-        <button className="glass-btn" onClick={() => setNameDialog({ mode: 'mkdir', target: null, value: '' })} title="新建目录"><Icon name="plus" size={15} /></button>
+        <span className="sftp-heading">{t('SFTP 文件')}</span>
+        {onCollapse && <button className="host-icon-btn" onClick={onCollapse} title={t('折叠面板')}><Icon name="chevron-down" size={14} /></button>}
+        <button className="glass-btn" onClick={() => void loadDirectory()} disabled={busy} title={t('刷新目录')}><Icon name="refresh" size={15} /></button>
+        <button className="glass-btn" onClick={() => setNameDialog({ mode: 'mkdir', target: null, value: '' })} title={t('新建目录')}><Icon name="plus" size={15} /></button>
         <label className="glass-btn primary">
           <Icon name="upload" size={15} />
-          上传文件
+          {t('上传文件')}
           <input className="sr-only" type="file" multiple onChange={handleUpload} disabled={busy} />
         </label>
-        <button className="glass-btn" onClick={() => void handleDiskUpload()} disabled={busy} title="磁盘级上传：本地文件经 Rust 直传远端，支持断点续传"><Icon name="save" size={15} /></button>
+        <button className="glass-btn" onClick={() => void handleDiskUpload()} disabled={busy} title={t('磁盘级上传：本地文件经 Rust 直传远端，支持断点续传')}><Icon name="save" size={15} /></button>
       </div>
       <div className="sftp-pathbar">
-        <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
+        <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title={t('返回上级')}><Icon name="chevron-down" size={15} /></button>
         <code>{path}</code>
-        <button className="host-icon-btn" onClick={() => void openInTerminal()} title="在终端中打开此目录（发送 cd 命令）"><Icon name="terminal" size={15} /></button>
+        <button className="host-icon-btn" onClick={() => void openInTerminal()} title={t('在终端中打开此目录（发送 cd 命令）')}><Icon name="terminal" size={15} /></button>
       </div>
       <div className="sftp-filterbar">
         <select
           className="glass-input sftp-sort-select"
           value={sortKey}
           onChange={(event) => setSortKey(event.target.value as SftpSortKey)}
-          title="排序方式"
+          title={t('排序方式')}
         >
           {(Object.keys(SFTP_SORT_LABELS) as SftpSortKey[]).map((key) => (
-            <option key={key} value={key}>{SFTP_SORT_LABELS[key]}</option>
+            <option key={key} value={key}>{t(SFTP_SORT_LABELS[key])}</option>
           ))}
         </select>
         <button
           className="host-icon-btn"
           onClick={() => setSortAsc((current) => !current)}
-          title={sortAsc ? '当前升序，点击切换为降序' : '当前降序，点击切换为升序'}
+          title={sortAsc ? t('当前升序，点击切换为降序') : t('当前降序，点击切换为升序')}
         >
           <Icon name={sortAsc ? 'chevron-up' : 'chevron-down'} size={14} />
         </button>
         <button
           className={`host-icon-btn ${showHidden ? 'active' : ''}`}
           onClick={() => setShowHidden((current) => !current)}
-          title={showHidden ? '显示隐藏文件中，点击隐藏' : '显示以 . 开头的隐藏文件'}
+          title={showHidden ? t('显示隐藏文件中，点击隐藏') : t('显示以 . 开头的隐藏文件')}
         >
           <Icon name={showHidden ? 'eye' : 'eye-off'} size={14} />
         </button>
         <input
           className="glass-input sftp-filter-input"
-          placeholder="筛选当前目录"
+          placeholder={t('筛选当前目录')}
           value={nameFilter}
           onChange={(event) => setNameFilter(event.target.value)}
         />
       </div>
       {error && <div className="form-error">{error}</div>}
       {notice && <div className="form-notice">{notice}</div>}
-      <div className="sftp-table-head"><span>名称</span><span>类型</span><span>大小</span><span>操作</span></div>
+      <div className="sftp-table-head"><span>{t('名称')}</span><span>{t('类型')}</span><span>{t('大小')}</span><span>{t('操作')}</span></div>
       <div className="sftp-entries">
         {visibleEntries.map((entry) => (
           <div className="sftp-entry" key={entry.path}>
@@ -681,29 +683,29 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               <Icon name={entry.kind === 'directory' ? 'folder' : 'save'} size={15} />
               <span>{entry.name}</span>
             </button>
-            <span title={entryTitle(entry)}>{entry.kind === 'directory' ? '目录' : entry.kind === 'symlink' ? '链接' : '文件'}</span>
+            <span title={entryTitle(entry)}>{entry.kind === 'directory' ? t('目录') : entry.kind === 'symlink' ? t('链接') : t('文件')}</span>
             <span>{entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
             <span className="sftp-actions">
-              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
-              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
-              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title="重命名"><Icon name="edit" size={14} /></button>
-              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'move', target: entry, value: path })} title="移动到其他目录"><Icon name="arrow-right" size={14} /></button>
+              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title={t('下载')}><Icon name="save" size={14} /></button>}
+              {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title={t('编辑文本文件')}><Icon name="settings" size={14} /></button>}
+              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title={t('重命名')}><Icon name="edit" size={14} /></button>
+              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'move', target: entry, value: path })} title={t('移动到其他目录')}><Icon name="arrow-right" size={14} /></button>
               {(entry.kind === 'file' || entry.kind === 'directory') && entry.permissions !== null && (
-                <button className="host-icon-btn" onClick={() => setChmodDialog({ target: entry, value: formatMode(entry.permissions ?? 0o644) })} title="修改权限（chmod）"><Icon name="key" size={14} /></button>
+                <button className="host-icon-btn" onClick={() => setChmodDialog({ target: entry, value: formatMode(entry.permissions ?? 0o644) })} title={t('修改权限（chmod）')}><Icon name="key" size={14} /></button>
               )}
-              <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title={entry.kind === 'directory' ? '递归删除目录' : '删除'}><Icon name="trash" size={14} /></button>
+              <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title={entry.kind === 'directory' ? t('递归删除目录') : t('删除')}><Icon name="trash" size={14} /></button>
             </span>
           </div>
         ))}
-        {!busy && visibleEntries.length === 0 && <div className="sftp-empty">{entries.length ? '没有匹配的文件' : '目录为空'}</div>}
-        {busy && <div className="sftp-empty">读取中…</div>}
+        {!busy && visibleEntries.length === 0 && <div className="sftp-empty">{entries.length ? t('没有匹配的文件') : t('目录为空')}</div>}
+        {busy && <div className="sftp-empty">{t('读取中…')}</div>}
       </div>
       {editing && (
         <div className="modal-overlay" onClick={() => !editorBusy && setEditing(null)}>
           <div className="modal glass sftp-editor-modal" onClick={(event) => event.stopPropagation()}>
-            <header className="modal-header"><div className="modal-title"><Icon name="settings" size={17} />编辑 {editing.name}</div><button className="modal-close" onClick={() => setEditing(null)} disabled={editorBusy}><Icon name="x" size={15} /></button></header>
+            <header className="modal-header"><div className="modal-title"><Icon name="settings" size={17} />{t('编辑 ')}{editing.name}</div><button className="modal-close" onClick={() => setEditing(null)} disabled={editorBusy}><Icon name="x" size={15} /></button></header>
             <div className="modal-body sftp-editor-body"><textarea className="glass-input sftp-editor" value={editorText} onChange={(event) => setEditorText(event.target.value)} spellCheck={false} autoFocus /></div>
-            <footer className="modal-footer"><button className="glass-btn" onClick={() => setEditing(null)} disabled={editorBusy}>取消</button><button className="glass-btn primary" onClick={() => void saveEditor()} disabled={editorBusy}>{editorBusy ? '保存中…' : '保存并回传'}</button></footer>
+            <footer className="modal-footer"><button className="glass-btn" onClick={() => setEditing(null)} disabled={editorBusy}>{t('取消')}</button><button className="glass-btn primary" onClick={() => void saveEditor()} disabled={editorBusy}>{editorBusy ? t('保存中…') : t('保存并回传')}</button></footer>
           </div>
         </div>
       )}
@@ -711,14 +713,14 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         <div className="modal-overlay" onClick={() => !nameBusy && setNameDialog(null)}>
           <div className="modal glass" onClick={(event) => event.stopPropagation()}>
             <header className="modal-header">
-              <div className="modal-title"><Icon name={nameDialog.mode === 'mkdir' ? 'plus' : nameDialog.mode === 'move' ? 'arrow-right' : 'edit'} size={17} />{nameDialog.mode === 'mkdir' ? '新建远程目录' : nameDialog.mode === 'move' ? `移动 ${nameDialog.target?.name ?? ''}` : `重命名 ${nameDialog.target?.name ?? ''}`}</div>
+              <div className="modal-title"><Icon name={nameDialog.mode === 'mkdir' ? 'plus' : nameDialog.mode === 'move' ? 'arrow-right' : 'edit'} size={17} />{nameDialog.mode === 'mkdir' ? t('新建远程目录') : nameDialog.mode === 'move' ? `${t('移动 ')}${nameDialog.target?.name ?? ''}` : `${t('重命名 ')}${nameDialog.target?.name ?? ''}`}</div>
               <button className="modal-close" onClick={() => setNameDialog(null)} disabled={nameBusy}><Icon name="x" size={15} /></button>
             </header>
             <div className="modal-body">
-              {nameDialog.mode === 'mkdir' && <div className="section-tip">将在当前目录 {path} 下创建新目录。</div>}
-              {nameDialog.mode === 'move' && <div className="section-tip">输入目标目录的绝对路径，文件将移动到该目录下并保持原文件名。</div>}
+              {nameDialog.mode === 'mkdir' && <div className="section-tip">{t('将在当前目录 ')}{path}{t(' 下创建新目录。')}</div>}
+              {nameDialog.mode === 'move' && <div className="section-tip">{t('输入目标目录的绝对路径，文件将移动到该目录下并保持原文件名。')}</div>}
               <label className="field">
-                <span className="field-label">{nameDialog.mode === 'move' ? '目标目录' : '名称'}</span>
+                <span className="field-label">{nameDialog.mode === 'move' ? t('目标目录') : t('名称')}</span>
                 <input
                   className="glass-input"
                   value={nameDialog.value}
@@ -729,11 +731,11 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               </label>
             </div>
             <footer className="modal-footer">
-              <button className="glass-btn" onClick={() => setNameDialog(null)} disabled={nameBusy}>取消</button>
+              <button className="glass-btn" onClick={() => setNameDialog(null)} disabled={nameBusy}>{t('取消')}</button>
               {nameDialog.mode === 'move' ? (
-                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim()}>{nameBusy ? '处理中…' : '移动'}</button>
+                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim()}>{nameBusy ? t('处理中…') : t('移动')}</button>
               ) : (
-                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? '处理中…' : '确认'}</button>
+                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? t('处理中…') : t('确认')}</button>
               )}
             </footer>
           </div>
@@ -743,17 +745,17 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         <div className="modal-overlay" onClick={() => !chmodBusy && setChmodDialog(null)}>
           <div className="modal glass" onClick={(event) => event.stopPropagation()}>
             <header className="modal-header">
-              <div className="modal-title"><Icon name="key" size={17} />修改权限 {chmodDialog.target.name}</div>
+              <div className="modal-title"><Icon name="key" size={17} />{t('修改权限 ')}{chmodDialog.target.name}</div>
               <button className="modal-close" onClick={() => setChmodDialog(null)} disabled={chmodBusy}><Icon name="x" size={15} /></button>
             </header>
             <div className="modal-body">
               <div className="section-tip">
-                当前权限：{formatMode(chmodDialog.target.permissions ?? 0)}（{permissionText(chmodDialog.target.permissions ?? 0)}）
-                {chmodDialog.target.owner && <> · 属主 {chmodDialog.target.owner}</>}
-                {chmodDialog.target.group && <> / 组 {chmodDialog.target.group}</>}
+                {t('当前权限：')}{formatMode(chmodDialog.target.permissions ?? 0)}（{permissionText(chmodDialog.target.permissions ?? 0)}）
+                {chmodDialog.target.owner && <> · {t('属主 ')}{chmodDialog.target.owner}</>}
+                {chmodDialog.target.group && <> / {t('组 ')}{chmodDialog.target.group}</>}
               </div>
               <label className="field">
-                <span className="field-label">八进制权限（3~4 位，例如 644）</span>
+                <span className="field-label">{t('八进制权限（3~4 位，例如 644）')}</span>
                 <input
                   className="glass-input"
                   value={chmodDialog.value}
@@ -771,8 +773,8 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               </div>
             </div>
             <footer className="modal-footer">
-              <button className="glass-btn" onClick={() => setChmodDialog(null)} disabled={chmodBusy}>取消</button>
-              <button className="glass-btn primary" onClick={() => void submitChmodDialog()} disabled={chmodBusy}>{chmodBusy ? '处理中…' : '应用'}</button>
+              <button className="glass-btn" onClick={() => setChmodDialog(null)} disabled={chmodBusy}>{t('取消')}</button>
+              <button className="glass-btn primary" onClick={() => void submitChmodDialog()} disabled={chmodBusy}>{chmodBusy ? t('处理中…') : t('应用')}</button>
             </footer>
           </div>
         </div>

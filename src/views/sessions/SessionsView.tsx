@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { getSessionLog, useSessions } from '../../store/sessions'
-import { STATUS_TEXT, SessionStatus } from '../../types/session'
 import { TerminalPane } from './TerminalPane'
 import { SessionSftpPanel } from './SessionSftpPanel'
 import { SessionMonitorPanel } from './SessionMonitorPanel'
@@ -10,8 +9,10 @@ import { useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
+import { useT } from '../../i18n'
 
 export function SessionsView() {
+  const t = useT()
   const sessions = useSessions((s) => s.sessions)
   const order = useSessions((s) => s.order)
   const activeId = useSessions((s) => s.activeId)
@@ -62,12 +63,12 @@ export function SessionsView() {
     setSnippetError(null)
     try {
       await write(activeId, new TextEncoder().encode(`${command}\n`))
-      recordAudit('snippet.send', snippet.name, 'success', '向当前会话发送命令模板')
+      recordAudit('snippet.send', snippet.name, 'success', t('向当前会话发送命令模板'))
       setSnippetId('')
       setSnippetPrompt(null)
     } catch (error) {
-      recordAudit('snippet.send', snippet.name, 'failure', '向当前会话发送命令模板失败')
-      setSnippetError(error instanceof Error ? error.message : '发送命令模板失败')
+      recordAudit('snippet.send', snippet.name, 'failure', t('向当前会话发送命令模板失败'))
+      setSnippetError(error instanceof Error ? error.message : t('发送命令模板失败'))
     }
   }
 
@@ -89,7 +90,7 @@ export function SessionsView() {
     if (!snippetPrompt) return
     const parameters = getSnippetParameters(snippetPrompt.command)
     if (parameters.some((name) => !snippetValues[name]?.trim())) {
-      setSnippetError('请填写全部模板参数')
+      setSnippetError(t('请填写全部模板参数'))
       return
     }
     await sendRenderedSnippet(snippetPrompt, renderCommandTemplate(snippetPrompt.command, snippetValues))
@@ -100,7 +101,7 @@ export function SessionsView() {
     const info = sessions[activeId]
     const data = getSessionLog(activeId)
     if (!info || !data.length) {
-      setSnippetError('当前会话还没有可导出的输出')
+      setSnippetError(t('当前会话还没有可导出的输出'))
       return
     }
     const text = cleanTerminalLog(new TextDecoder().decode(data))
@@ -118,10 +119,10 @@ export function SessionsView() {
     if (!command) return
     const targets = order.filter((id) => sessions[id]?.status === 'connected')
     if (!targets.length) {
-      setBulkResult('没有已连接的目标会话')
+      setBulkResult(t('没有已连接的目标会话'))
       return
     }
-    if (!(await confirmDialog({ title: '批量下发命令', message: `将向 ${targets.length} 台服务器发送此命令，是否继续？`, confirmLabel: '确认发送', danger: true }))) return
+    if (!(await confirmDialog({ title: t('批量下发命令'), message: t('将向 ') + targets.length + t(' 台服务器发送此命令，是否继续？'), confirmLabel: t('确认发送'), danger: true }))) return
     setBulkBusy(true)
     setBulkResult(null)
     let success = 0
@@ -133,8 +134,8 @@ export function SessionsView() {
         // Continue dispatching to the remaining sessions.
       }
     }
-    recordAudit('command.bulk-send', `${success}/${targets.length} 个会话`, success === targets.length ? 'success' : 'failure', '批量发送命令')
-    setBulkResult(`已发送 ${success}/${targets.length} 个会话`)
+    recordAudit('command.bulk-send', `${success}/${targets.length}`, success === targets.length ? 'success' : 'failure', t('批量发送命令'))
+    setBulkResult(t('已发送 ') + success + '/' + targets.length + t(' 个会话'))
     setBulkBusy(false)
   }
 
@@ -162,7 +163,7 @@ export function SessionsView() {
       await renameSession(id, name)
       recordAudit('session.rename', name, 'success', '重命名会话标签')
     } catch (err) {
-      showToast(err instanceof Error ? err.message : '重命名失败', 'error')
+      showToast(err instanceof Error ? err.message : t('重命名失败'), 'error')
     }
   }
 
@@ -177,18 +178,17 @@ export function SessionsView() {
       <div className="view">
         <header className="view-header">
           <div>
-            <div className="view-title">会话</div>
-            <div className="view-subtitle">多个 SSH 终端标签，密码或私钥认证</div>
+            <div className="view-title">{t('会话')}</div>
+            <div className="view-subtitle">{t('多个 SSH 终端标签，密码或私钥认证')}</div>
           </div>
         </header>
         <section className="glass empty-state">
           <div className="empty-icon">
             <Icon name="terminal" size={44} />
           </div>
-          <div className="empty-title">还没有活动会话</div>
+          <div className="empty-title">{t('还没有活动会话')}</div>
           <div className="empty-desc">
-            前往「主机」页点击「新建连接」，或在主机列表点击「连接」，
-            即可在此处打开终端标签。
+            {t('前往「主机」页点击「新建连接」，或在主机列表点击「连接」，即可在此处打开终端标签。')}
           </div>
         </section>
       </div>
@@ -231,19 +231,19 @@ export function SessionsView() {
                     event.stopPropagation()
                     startRename(id, info.name)
                   }}
-                  title="双击重命名"
+                  title={t('双击重命名')}
                 >
                   {info.name}
                 </span>
               )}
-              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason, info.attempt ?? null)}{status === 'connected' && connectedAt[id] ? ` · ${formatOnlineDuration(Date.now() - connectedAt[id])}` : ''}</span>
+              <span className="tab-status" title={info.reason || undefined}>{statusLabel(t, info.status, info.reason, info.attempt ?? null)}{status === 'connected' && connectedAt[id] ? ` · ${formatOnlineDuration(Date.now() - connectedAt[id])}` : ''}</span>
               {(status === 'disconnected' || status === 'closed') && (
                 <button
                   className="tab-close"
-                  title="重新连接"
+                  title={t('重新连接')}
                   onClick={(e) => {
                     e.stopPropagation()
-                    reconnect(id).catch(() => showToast('重连请求失败，请稍后重试', 'error'))
+                    reconnect(id).catch(() => showToast(t('重连请求失败，请稍后重试'), 'error'))
                   }}
                 >
                   <Icon name="refresh" size={12} />
@@ -251,7 +251,7 @@ export function SessionsView() {
               )}
               <button
                 className="tab-close"
-                title="关闭标签并断开"
+                title={t('关闭标签并断开')}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (status === 'connected' || status === 'connecting' || status === 'reconnecting') {
@@ -266,39 +266,39 @@ export function SessionsView() {
           )
         })}
       </div>
-       <div className="session-tool" title="快捷键：Ctrl+1..9 切换标签 · Ctrl+Tab 循环 · Ctrl+W 关闭 · Ctrl+T 新建连接 · Ctrl+F 终端搜索">
+       <div className="session-tool" title={t('快捷键：Ctrl+1..9 切换标签 · Ctrl+Tab 循环 · Ctrl+W 关闭 · Ctrl+T 新建连接 · Ctrl+F 终端搜索')}>
         <div className="snippet-toolbar">
         <Icon name="terminal" size={15} />
         <select className="glass-input snippet-select" value={snippetId} onChange={(event) => setSnippetId(event.target.value)}>
-          <option value="">选择命令片段</option>
+          <option value="">{t('选择命令片段')}</option>
           {snippets.map((snippet) => <option key={snippet.id} value={snippet.id}>{snippet.name}</option>)}
         </select>
-        <button className="glass-btn" onClick={() => void sendSnippet()} disabled={!snippetId || activeId === null} title="发送命令片段">
-          发送
+        <button className="glass-btn" onClick={() => void sendSnippet()} disabled={!snippetId || activeId === null} title={t('发送命令片段')}>
+          {t('发送')}
         </button>
-        <button className="glass-btn" onClick={() => setBulkOpen(true)} title="向所有已连接会话发送命令">
-          批量下发
+        <button className="glass-btn" onClick={() => setBulkOpen(true)} title={t('向所有已连接会话发送命令')}>
+          {t('批量下发')}
         </button>
         <button
           className={`glass-btn ${broadcastEnabled ? 'primary' : ''}`}
           onClick={() => setBroadcastEnabled(!broadcastEnabled)}
           disabled={!connectedSessions.length}
-          title="开启后，在当前终端键入的每个字符都会实时同步到勾选的会话"
+          title={t('开启后，在当前终端键入的每个字符都会实时同步到勾选的会话')}
         >
           <Icon name="broadcast" size={14} />
-          广播输入
+          {t('广播输入')}
         </button>
         <button
           className={`glass-btn ${splitId !== null ? 'primary' : ''}`}
           onClick={toggleSplit}
           disabled={order.length < 2}
-          title={splitId !== null ? '退出分屏，恢复单终端布局' : '将另一个会话的终端与当前终端左右并排显示'}
+          title={splitId !== null ? t('退出分屏，恢复单终端布局') : t('将另一个会话的终端与当前终端左右并排显示')}
         >
           <Icon name="columns" size={14} />
-          分屏
+          {t('分屏')}
         </button>
-        <button className="glass-btn" onClick={exportSessionLog} disabled={activeId === null} title="导出当前会话最近 2 MB 输出">
-          <Icon name="save" size={14} />保存日志
+        <button className="glass-btn" onClick={exportSessionLog} disabled={activeId === null} title={t('导出当前会话最近 2 MB 输出')}>
+          <Icon name="save" size={14} />{t('保存日志')}
         </button>
         </div>
       </div>
@@ -308,8 +308,8 @@ export function SessionsView() {
         <div className="broadcast-bar glass">
           <div className="broadcast-title">
             <Icon name="broadcast" size={15} />
-            <span>广播输入已开启</span>
-            <small>在当前终端键入会实时同步到勾选的会话（{broadcastActiveCount} 个目标）</small>
+            <span>{t('广播输入已开启')}</span>
+            <small>{t('在当前终端键入会实时同步到勾选的会话（')}{broadcastActiveCount}{t(' 个目标）')}</small>
           </div>
           <div className="broadcast-targets">
             {connectedSessions.map((id) => (
@@ -322,7 +322,7 @@ export function SessionsView() {
                 {sessions[id]?.name}
               </button>
             ))}
-            {!connectedSessions.length && <span className="section-tip">没有已连接的会话可作为广播目标。</span>}
+            {!connectedSessions.length && <span className="section-tip">{t('没有已连接的会话可作为广播目标。')}</span>}
           </div>
           <div className="broadcast-actions">
             <button
@@ -332,9 +332,9 @@ export function SessionsView() {
               })}
               disabled={allBroadcastSelected}
             >
-              全选
+              {t('全选')}
             </button>
-            <button className="glass-btn" onClick={() => setBroadcastEnabled(false)}>关闭广播</button>
+            <button className="glass-btn" onClick={() => setBroadcastEnabled(false)}>{t('关闭广播')}</button>
           </div>
         </div>
       )}
@@ -353,9 +353,9 @@ export function SessionsView() {
           <div className="split-bar glass">
             <span className="split-label" title={sessions[splitId]?.host}>
               <Icon name="columns" size={13} />
-              右侧：{sessions[splitId]?.name}
+              {t('右侧：')}{sessions[splitId]?.name}
             </span>
-            <button className="host-icon-btn" onClick={() => setSplit(null)} title="退出分屏">
+            <button className="host-icon-btn" onClick={() => setSplit(null)} title={t('退出分屏')}>
               <Icon name="x" size={13} />
             </button>
           </div>
@@ -366,10 +366,10 @@ export function SessionsView() {
               <button
                 className="panel-rail-btn"
                 onClick={() => void setSessionPanelCollapsed('monitor', false)}
-                title="展开监控面板"
+                title={t('展开监控面板')}
               >
                 <Icon name="monitor" size={15} />
-                <span>监控</span>
+                <span>{t('监控')}</span>
               </button>
             </aside>
           ) : (
@@ -384,17 +384,17 @@ export function SessionsView() {
         )}
       </div>
       {activeId !== null && (
-        sessionPanels.sftpCollapsed ? (
-          <div className="session-sftp-rail">
-            <button
-              className="panel-rail-btn"
-              onClick={() => void setSessionPanelCollapsed('sftp', false)}
-              title="展开 SFTP 面板"
-            >
-              <Icon name="folder" size={15} />
-              <span>SFTP 文件</span>
-            </button>
-          </div>
+          sessionPanels.sftpCollapsed ? (
+            <div className="session-sftp-rail">
+              <button
+                className="panel-rail-btn"
+                onClick={() => void setSessionPanelCollapsed('sftp', false)}
+                title={t('展开 SFTP 面板')}
+              >
+                <Icon name="folder" size={15} />
+                <span>{t('SFTP 文件')}</span>
+              </button>
+            </div>
         ) : (
           <div className="session-sftp-panel">
             <SessionSftpPanel
@@ -408,12 +408,12 @@ export function SessionsView() {
       {bulkOpen && (
         <div className="modal-overlay" onClick={() => !bulkBusy && setBulkOpen(false)}>
           <div className="modal glass" onClick={(event) => event.stopPropagation()}>
-            <header className="modal-header"><div className="modal-title"><Icon name="terminal" size={17} />批量下发命令</div><button className="modal-close" onClick={() => setBulkOpen(false)} disabled={bulkBusy}><Icon name="x" size={15} /></button></header>
+            <header className="modal-header"><div className="modal-title"><Icon name="terminal" size={17} />{t('批量下发命令')}</div><button className="modal-close" onClick={() => setBulkOpen(false)} disabled={bulkBusy}><Icon name="x" size={15} /></button></header>
             <div className="modal-body">
-              <p className="section-tip">命令将发送至所有已连接会话，请确认命令不会造成不可逆影响。</p>
-              <textarea className="glass-input bulk-command" value={bulkCommand} onChange={(event) => setBulkCommand(event.target.value)} placeholder="例如 uname -a" autoFocus />
+              <p className="section-tip">{t('命令将发送至所有已连接会话，请确认命令不会造成不可逆影响。')}</p>
+              <textarea className="glass-input bulk-command" value={bulkCommand} onChange={(event) => setBulkCommand(event.target.value)} placeholder={t('例如 uname -a')} autoFocus />
             </div>
-            <footer className="modal-footer"><button className="glass-btn" onClick={() => setBulkOpen(false)} disabled={bulkBusy}>取消</button><button className="glass-btn primary" onClick={() => void sendBulkCommand()} disabled={bulkBusy || !bulkCommand.trim()}>{bulkBusy ? '发送中…' : '确认发送'}</button></footer>
+            <footer className="modal-footer"><button className="glass-btn" onClick={() => setBulkOpen(false)} disabled={bulkBusy}>{t('取消')}</button><button className="glass-btn primary" onClick={() => void sendBulkCommand()} disabled={bulkBusy || !bulkCommand.trim()}>{bulkBusy ? t('发送中…') : t('确认发送')}</button></footer>
           </div>
         </div>
       )}
@@ -421,20 +421,20 @@ export function SessionsView() {
         <div className="modal-overlay" onClick={() => setSnippetPrompt(null)}>
           <div className="modal glass snippet-prompt-modal" onClick={(event) => event.stopPropagation()}>
             <header className="modal-header">
-              <div className="modal-title"><Icon name="terminal" size={17} />填写命令参数</div>
+              <div className="modal-title"><Icon name="terminal" size={17} />{t('填写命令参数')}</div>
               <button className="modal-close" onClick={() => setSnippetPrompt(null)}><Icon name="x" size={15} /></button>
             </header>
             <div className="modal-body">
-              <div className="section-tip">模板：{snippetPrompt.name}。参数会作为独立 Shell 参数转义。</div>
+              <div className="section-tip">{t('模板：')}{snippetPrompt.name}{t('。参数会作为独立 Shell 参数转义。')}</div>
               {getSnippetParameters(snippetPrompt.command).map((name) => (
                 <label className="field" key={name}>
                   <span className="field-label">{name}</span>
                   <input className="glass-input" value={snippetValues[name] ?? ''} onChange={(event) => setSnippetValues((current) => ({ ...current, [name]: event.target.value }))} autoFocus={name === getSnippetParameters(snippetPrompt.command)[0]} />
                 </label>
               ))}
-              <div className="snippet-rendered-command"><span>发送预览</span><code>{renderCommandTemplate(snippetPrompt.command, snippetValues)}</code></div>
+              <div className="snippet-rendered-command"><span>{t('发送预览')}</span><code>{renderCommandTemplate(snippetPrompt.command, snippetValues)}</code></div>
             </div>
-            <footer className="modal-footer"><button className="glass-btn" onClick={() => setSnippetPrompt(null)}>取消</button><button className="glass-btn primary" onClick={() => void confirmSnippet()}>发送命令</button></footer>
+            <footer className="modal-footer"><button className="glass-btn" onClick={() => setSnippetPrompt(null)}>{t('取消')}</button><button className="glass-btn primary" onClick={() => void confirmSnippet()}>{t('发送命令')}</button></footer>
           </div>
         </div>
       )}
@@ -444,18 +444,18 @@ export function SessionsView() {
 
 function formatOnlineDuration(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000))
-  if (minutes < 60) return `${minutes}分`
+  if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
   const rest = minutes % 60
-  return rest ? `${hours}小时${rest}分` : `${hours}小时`
+  return rest ? `${hours}h${rest}m` : `${hours}h`
 }
 
-function statusLabel(status: string, reason?: string | null, attempt?: number | null): string {
+function statusLabel(t: (key: string) => string, status: string, reason?: string | null, attempt?: number | null): string {
   if (status === 'reconnecting' && attempt && attempt > 0) {
     const interval = attempt === 1 ? 2 : attempt === 2 ? 5 : 10
-    return `第 ${attempt} 次重连 · 间隔 ${interval}s`
+    return `${t('第 ')}${attempt}${t(' 次重连 · 间隔 ')}${interval}s`
   }
-  const text = STATUS_TEXT[status as SessionStatus]
+  const text = t(`status.${status}`)
   if ((status === 'disconnected' || status === 'closed' || status === 'reconnecting') && reason) {
     return reason.length > 22 ? `${reason.slice(0, 22)}…` : reason
   }

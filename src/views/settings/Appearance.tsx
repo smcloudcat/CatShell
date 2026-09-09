@@ -1,5 +1,6 @@
 import { useSettings } from '../../store/settings'
 import { ColorRow } from './ThemeControls'
+import { useT } from '../../i18n'
 
 const ACCENT_SWATCHES = [
   { name: '靛蓝', color: '#6d7cff' },
@@ -20,6 +21,7 @@ const TERMINAL_FONT_OPTIONS = [
 ]
 
 export function Appearance() {
+  const t = useT()
   const theme = useSettings((s) => s.theme)
   const setTheme = useSettings((s) => s.setTheme)
   const setAppearanceMode = useSettings((s) => s.setAppearanceMode)
@@ -29,35 +31,35 @@ export function Appearance() {
 
   return (
     <div className="settings-section">
-      <div className="settings-section-title">外观</div>
+      <div className="settings-section-title">{t('外观')}</div>
       <div className="setting-row">
         <div className="row-label">
-          <span>外观模式</span>
+          <span>{t('外观模式')}</span>
         </div>
         <div className="seg-group">
           <button
             className={`seg-btn ${theme.mode === 'auto' ? 'active' : ''}`}
             onClick={() => setAppearanceMode('auto')}
           >
-            跟随系统
+            {t('跟随系统')}
           </button>
           <button
             className={`seg-btn ${theme.mode === 'light' ? 'active' : ''}`}
             onClick={() => setAppearanceMode('light')}
           >
-            浅色
+            {t('浅色')}
           </button>
           <button
             className={`seg-btn ${theme.mode === 'dark' ? 'active' : ''}`}
             onClick={() => setAppearanceMode('dark')}
           >
-            深色
+            {t('深色')}
           </button>
         </div>
       </div>
       <div className="setting-row">
         <div className="row-label">
-          <span>强调色</span>
+          <span>{t('强调色')}</span>
         </div>
         <div className="preset-grid">
           {ACCENT_SWATCHES.map((swatch) => (
@@ -65,25 +67,25 @@ export function Appearance() {
               key={swatch.color}
               className={`preset-item ${theme.accentColor.toLowerCase() === swatch.color.toLowerCase() ? 'active' : ''}`}
               onClick={() => setTheme({ accentColor: swatch.color })}
-              title={swatch.name}
+              title={t(swatch.name)}
             >
               <span className="preset-swatch" style={{ background: swatch.color }} />
-              <span className="preset-name">{swatch.name}</span>
+              <span className="preset-name">{t(swatch.name)}</span>
             </button>
           ))}
         </div>
       </div>
       <ColorRow
-        label="自定义强调色"
+        label={t('自定义强调色')}
         value={theme.accentColor}
         onChange={(v) => setTheme({ accentColor: v })}
       />
       <div className="section-tip">
-        深浅模式默认跟随系统外观；强调色将应用于按钮、导航与状态高亮。
+        {t('深浅模式默认跟随系统外观；强调色将应用于按钮、导航与状态高亮。')}
       </div>
       <div className="setting-row">
         <div className="row-label">
-          <span>终端字体</span>
+          <span>{t('终端字体')}</span>
         </div>
         <select
           className="glass-input"
@@ -92,14 +94,14 @@ export function Appearance() {
         >
           {TERMINAL_FONT_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label}
+              {option.label.startsWith('Consolas') ? t('Consolas（默认）') : option.label}
             </option>
           ))}
         </select>
       </div>
       <div className="setting-row">
         <div className="row-label">
-          <span>终端字号</span>
+          <span>{t('终端字号')}</span>
         </div>
         <div className="seg-group">
           {[12, 13, 14, 16, 18].map((size) => (
@@ -115,7 +117,7 @@ export function Appearance() {
       </div>
       <div className="setting-row">
         <div className="row-label">
-          <span>回滚行数</span>
+          <span>{t('回滚行数')}</span>
         </div>
         <div className="seg-group">
           {[1000, 5000, 8000, 20000].map((lines) => (
@@ -130,7 +132,7 @@ export function Appearance() {
         </div>
       </div>
       <div className="section-tip">
-        终端外观立即应用于所有已打开会话；终端配色随深浅模式自动切换。
+        {t('终端外观立即应用于所有已打开会话；终端配色随深浅模式自动切换。')}
       </div>
     </div>
   )

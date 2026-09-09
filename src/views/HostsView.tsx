@@ -10,6 +10,7 @@ import { sshConfigParse } from '../api/ssh'
 import { recordAudit } from '../store/audit'
 import { ImportPreview, previewHostImport } from '../store/hosts'
 import { confirmDialog, showToast } from '../store/ui'
+import { useT } from '../i18n'
 
 interface Props {
   onOpenSessions: () => void
@@ -18,6 +19,7 @@ interface Props {
 const UNGROUPED = '__ungrouped__'
 
 export function HostsView({ onOpenSessions }: Props) {
+  const t = useT()
   const [query, setQuery] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -67,7 +69,7 @@ export function HostsView({ onOpenSessions }: Props) {
       if (b === UNGROUPED) return -1
       return a.localeCompare(b, 'zh-Hans-CN')
     })
-    return keys.map((key) => ({ key, label: key === UNGROUPED ? '未分组' : key, hosts: map.get(key) ?? [] }))
+    return keys.map((key) => ({ key, label: key === UNGROUPED ? t('未分组') : key, hosts: map.get(key) ?? [] }))
   }, [filteredHosts])
 
   const hasGroups = useMemo(() => hosts.some((host) => host.group), [hosts])
@@ -160,8 +162,8 @@ export function HostsView({ onOpenSessions }: Props) {
     event.target.value = ''
     if (!file) return
     if (file.size > 5 * 1024 * 1024) {
-      recordAudit('host.import', '主机配置文件', 'failure', '文件超过 5 MB 大小限制')
-      showToast('导入失败，文件超过 5 MB 大小限制。', 'error')
+      recordAudit('host.import', 'hosts-file', 'failure', t('文件超过 5 MB 大小限制'))
+      showToast(t('导入失败，文件超过 5 MB 大小限制。'), 'error')
       return
     }
     try {
@@ -170,20 +172,20 @@ export function HostsView({ onOpenSessions }: Props) {
         ? parsed.hosts
         : Array.isArray(parsed) ? parsed : []
       if (!profiles.length) {
-        recordAudit('host.import', '主机配置文件', 'failure', '文件中没有主机配置')
-        showToast('导入失败，文件中没有主机配置。', 'error')
+        recordAudit('host.import', 'hosts-file', 'failure', t('文件中没有主机配置'))
+        showToast(t('导入失败，文件中没有主机配置。'), 'error')
         return
       }
       const preview = previewHostImport(profiles)
       if (!preview.items.length) {
-        recordAudit('host.import', '主机配置文件', 'failure', '文件中没有有效的主机配置')
-        showToast('导入失败，文件中没有有效的主机配置（缺少主机地址、用户名或端口无效）。', 'error')
+        recordAudit('host.import', 'hosts-file', 'failure', t('文件中没有有效的主机配置'))
+        showToast(t('导入失败，文件中没有有效的主机配置（缺少主机地址、用户名或端口无效）。'), 'error')
         return
       }
       setPendingImport(preview)
     } catch (err) {
-      recordAudit('host.import', '主机配置文件', 'failure', '文件无效或解析失败')
-      showToast(err instanceof Error ? `导入失败：${err.message}` : '导入失败，请选择有效的 CatShell 主机配置文件。', 'error')
+      recordAudit('host.import', 'hosts-file', 'failure', t('文件无效或解析失败'))
+      showToast(err instanceof Error ? t('导入失败：') + err.message : t('导入失败，请选择有效的 CatShell 主机配置文件。'), 'error')
     }
   }
 
@@ -192,13 +194,13 @@ export function HostsView({ onOpenSessions }: Props) {
     try {
       await importProfiles(preview.items.map((item) => item.profile))
       const overwritten = preview.items.filter((item) => item.duplicateOf).length
-      const parts = [`已导入 ${preview.items.length} 条主机配置`]
-      if (overwritten) parts.push(`更新已有 ${overwritten} 条`)
-      if (preview.invalidCount) parts.push(`跳过无效 ${preview.invalidCount} 条`)
-      showToast(parts.join('，'), 'success')
+      const parts = [t('已导入 ') + preview.items.length + t(' 条主机配置')]
+      if (overwritten) parts.push(t('更新已有 ') + overwritten + t(' 条'))
+      if (preview.invalidCount) parts.push(t('跳过无效 ') + preview.invalidCount + t(' 条'))
+      showToast(parts.join(t('，')), 'success')
     } catch (err) {
-      recordAudit('host.import', '主机配置文件', 'failure', '导入失败')
-      showToast(err instanceof Error ? `导入失败：${err.message}` : '导入失败', 'error')
+      recordAudit('host.import', 'hosts-file', 'failure', t('导入失败'))
+      showToast(err instanceof Error ? t('导入失败：') + err.message : t('导入失败'), 'error')
     }
   }
 
@@ -207,14 +209,14 @@ export function HostsView({ onOpenSessions }: Props) {
       <div className="host-icon"><Icon name={normalizeHostIcon(host.icon)} size={18} /></div>
       <div className="host-info">
         <div className="host-name">{host.name || `${host.username}@${host.host}`}</div>
-        <div className="host-meta">{host.username}@{host.host}:{host.port} · {host.authMethod === 'key' ? 'SSH 私钥' : host.authMethod === 'keyboard-interactive' ? '交互式 2FA' : '密码认证'}</div>
+        <div className="host-meta">{host.username}@{host.host}:{host.port} · {host.authMethod === 'key' ? t('SSH 私钥') : host.authMethod === 'keyboard-interactive' ? t('交互式 2FA') : t('密码认证')}</div>
         {host.tags.length > 0 && (
           <div className="host-tags">
             {host.tags.map((tag) => (
               <button
                 key={tag}
                 className={`host-tag ${activeTag === tag ? 'active' : ''}`}
-                title={`筛选标签「${tag}」`}
+                title={t('筛选标签「') + tag + t('」')}
                 onClick={() => setActiveTag((current) => (current === tag ? null : tag))}
               >
                 {tag}
@@ -224,25 +226,25 @@ export function HostsView({ onOpenSessions }: Props) {
         )}
       </div>
       <div className="host-actions">
-        <button className="host-icon-btn" onClick={() => void reconnect(host)} title="连接">
+        <button className="host-icon-btn" onClick={() => void reconnect(host)} title={t('连接')}>
           <Icon name="link" size={15} />
         </button>
-        <button className="host-icon-btn" onClick={() => openEdit(host)} title="编辑">
+        <button className="host-icon-btn" onClick={() => openEdit(host)} title={t('编辑')}>
           <Icon name="edit" size={15} />
         </button>
         <button
           className="host-icon-btn danger"
           onClick={() => {
             void confirmDialog({
-              title: '删除主机',
-              message: `确定删除主机“${host.name || host.host}”吗？已解锁保险箱中的对应凭据会一并清除。`,
-              confirmLabel: '删除',
+              title: t('删除主机'),
+              message: t('确定删除主机“') + (host.name || host.host) + t('”吗？已解锁保险箱中的对应凭据会一并清除。'),
+              confirmLabel: t('删除'),
               danger: true
             }).then((accepted) => {
               if (accepted) void removeHost(host.id)
             })
           }}
-          title="删除"
+          title={t('删除')}
         >
           <Icon name="trash" size={15} />
         </button>
@@ -254,8 +256,8 @@ export function HostsView({ onOpenSessions }: Props) {
     <div className="view">
       <header className="view-header">
         <div>
-          <div className="view-title">主机</div>
-          <div className="view-subtitle">{hosts.length} 台已保存主机 · 管理服务器连接配置</div>
+          <div className="view-title">{t('主机')}</div>
+          <div className="view-subtitle">{hosts.length} {t('台已保存主机 · 管理服务器连接配置')}</div>
         </div>
           <div className="hosts-header">
           <div className="search-field">
@@ -264,28 +266,28 @@ export function HostsView({ onOpenSessions }: Props) {
             </div>
             <input
               className="glass-input"
-              placeholder="搜索主机 / IP / 标签"
+              placeholder={t('搜索主机 / IP / 标签')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
           <div className="hosts-actions">
-            <button className="glass-btn" onClick={() => setSshConfigOpen(true)} title="从 ~/.ssh/config 导入主机">
+            <button className="glass-btn" onClick={() => setSshConfigOpen(true)} title={t('从 ~/.ssh/config 导入主机')}>
               <Icon name="database" size={15} />
-              导入 SSH config
+              {t('导入 SSH config')}
             </button>
-            <label className="glass-btn" title="导入主机配置">
+            <label className="glass-btn" title={t('导入主机配置')}>
               <Icon name="folder" size={15} />
-              导入
+              {t('导入')}
               <input className="sr-only" type="file" accept="application/json,.json" onChange={importHosts} />
             </label>
-            <button className="glass-btn" onClick={exportHosts} disabled={!hosts.length} title="导出主机配置">
+            <button className="glass-btn" onClick={exportHosts} disabled={!hosts.length} title={t('导出主机配置')}>
               <Icon name="save" size={15} />
-              导出
+              {t('导出')}
             </button>
             <button className="glass-btn primary" onClick={openNew}>
               <Icon name="plus" size={15} />
-              新建连接
+              {t('新建连接')}
             </button>
           </div>
         </div>
@@ -294,11 +296,11 @@ export function HostsView({ onOpenSessions }: Props) {
         <section className="glass quick-card">
           <div className="quick-title">
             <Icon name="link" size={16} />
-            快速开始
+            {t('快速开始')}
           </div>
           <div className="quick-desc">
-            点击「新建连接」输入主机地址与认证信息即可打开 SSH 终端。
-             主机地址、端口和认证方式会保存到本机；密码与私钥口令只在连接时使用，不会写入磁盘。
+            {t('点击「新建连接」输入主机地址与认证信息即可打开 SSH 终端。')}
+            {t('主机地址、端口和认证方式会保存到本机；密码与私钥口令只在连接时使用，不会写入磁盘。')}
           </div>
         </section>
         {allTags.length > 0 && (
@@ -307,7 +309,7 @@ export function HostsView({ onOpenSessions }: Props) {
               className={`host-tag ${activeTag === null ? 'active' : ''}`}
               onClick={() => setActiveTag(null)}
             >
-              全部
+              {t('全部')}
             </button>
             {allTags.map((tag) => (
               <button
@@ -346,7 +348,7 @@ export function HostsView({ onOpenSessions }: Props) {
           <section className="glass quick-card">
             <div className="quick-title">
               <Icon name="terminal" size={16} />
-              活动会话
+              {t('活动会话')}
             </div>
             <div className="session-list">
               {sessionOrder.map((id) => {
@@ -369,9 +371,9 @@ export function HostsView({ onOpenSessions }: Props) {
           <div className="empty-icon">
             <Icon name="server" size={44} />
           </div>
-          <div className="empty-title">{hosts.length ? '没有匹配的主机' : '还没有主机配置'}</div>
+          <div className="empty-title">{hosts.length ? t('没有匹配的主机') : t('还没有主机配置')}</div>
           <div className="empty-desc">
-             {hosts.length ? '尝试更换搜索关键词或标签筛选。' : '点击右上角「新建连接」创建第一条 SSH 主机配置。'}
+             {hosts.length ? t('尝试更换搜索关键词或标签筛选。') : t('点击右上角「新建连接」创建第一条 SSH 主机配置。')}
           </div>
         </section>}
       </div>
@@ -407,6 +409,7 @@ function HostImportPreviewModal({
   onClose: () => void
   onConfirm: () => void
 }) {
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const fresh = preview.items.filter((item) => !item.duplicateOf).length
   const overwritten = preview.items.length - fresh
@@ -424,14 +427,14 @@ function HostImportPreviewModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal glass sshconfig-modal" onClick={(event) => event.stopPropagation()}>
         <header className="modal-header">
-          <div className="modal-title"><Icon name="database" size={17} />导入主机配置预览</div>
+          <div className="modal-title"><Icon name="database" size={17} />{t('导入主机配置预览')}</div>
           <button className="modal-close" onClick={onClose} disabled={busy}><Icon name="x" size={15} /></button>
         </header>
         <div className="modal-body">
           <p className="section-tip">
-            共 {preview.items.length} 条有效配置：新增 {fresh} 条，更新已有 {overwritten} 条。
-            {preview.invalidCount > 0 && ` ${preview.invalidCount} 条无效配置（缺少地址/用户名或端口无效）将被跳过。`}
-            已存在的同 主机+端口+用户名 配置会被覆盖更新，凭据不随导入写入。
+            {t('共 ')}{preview.items.length}{t(' 条有效配置：新增 ')}{fresh}{t(' 条，更新已有 ')}{overwritten}{t(' 条。')}
+            {preview.invalidCount > 0 && ` ${preview.invalidCount} ${t('条无效配置（缺少地址/用户名或端口无效）将被跳过。')}`}
+            {t('已存在的同 主机+端口+用户名 配置会被覆盖更新，凭据不随导入写入。')}
           </p>
           <div className="sshconfig-list">
             {preview.items.map((item) => (
@@ -439,18 +442,18 @@ function HostImportPreviewModal({
                 <span className="sshconfig-name">{item.profile.name || `${item.profile.username}@${item.profile.host}`}</span>
                 <span className="sshconfig-meta">
                   {item.profile.username}@{item.profile.host}:{item.profile.port}
-                  {item.profile.group ? ` · 分组 ${item.profile.group}` : ''}
+                  {item.profile.group ? ` · ${t('分组 ')}${item.profile.group}` : ''}
                   {item.profile.tags.length ? ` · ${item.profile.tags.join('、')}` : ''}
                 </span>
-                {item.duplicateOf ? <span className="sshconfig-dup">更新</span> : <span className="sshconfig-new">新增</span>}
+                {item.duplicateOf ? <span className="sshconfig-dup">{t('更新')}</span> : <span className="sshconfig-new">{t('新增')}</span>}
               </div>
             ))}
           </div>
         </div>
         <footer className="modal-footer">
-          <button className="glass-btn" onClick={onClose} disabled={busy}>取消</button>
+          <button className="glass-btn" onClick={onClose} disabled={busy}>{t('取消')}</button>
           <button className="glass-btn primary" onClick={() => void confirm()} disabled={busy}>
-            {busy ? '导入中…' : `确认导入（${preview.items.length}）`}
+            {busy ? t('导入中…') : t('确认导入（') + preview.items.length + t('）')}
           </button>
         </footer>
       </div>
@@ -465,6 +468,7 @@ function SshConfigImportModal({
   onClose: () => void
   importProfiles: (profiles: Partial<HostProfile>[]) => Promise<void>
 }) {
+  const t = useT()
   const hosts = useHosts((s) => s.hosts)
   const [entries, setEntries] = useState<SshConfigEntry[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -511,7 +515,7 @@ function SshConfigImportModal({
     if (!entries) return
     const chosen = entries.filter((entry) => selected.has(entry.host))
     if (!chosen.length) {
-      setError('请至少选择一条主机配置')
+      setError(t('请至少选择一条主机配置'))
       return
     }
     setBusy(true)
@@ -528,14 +532,14 @@ function SshConfigImportModal({
           passphrase: null,
           group: null,
           tags: [],
-          description: '导入自 ~/.ssh/config'
+          description: t('导入自 ~/.ssh/config')
         }))
       )
-      recordAudit('host.import', '~/.ssh/config', 'success', `导入 ${chosen.length} 条 OpenSSH 配置`)
-      showToast(`已从 ~/.ssh/config 导入 ${chosen.length} 条主机配置。`, 'success')
+      recordAudit('host.import', '~/.ssh/config', 'success', `import ${chosen.length} OpenSSH entries`)
+      showToast(t('已从 ~/.ssh/config 导入 ') + chosen.length + t(' 条主机配置。'), 'success')
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '导入失败')
+      setError(err instanceof Error ? err.message : t('导入失败'))
     } finally {
       setBusy(false)
     }
@@ -545,20 +549,20 @@ function SshConfigImportModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal glass sshconfig-modal" onClick={(event) => event.stopPropagation()}>
         <header className="modal-header">
-          <div className="modal-title"><Icon name="database" size={17} />导入 ~/.ssh/config</div>
+          <div className="modal-title"><Icon name="database" size={17} />{t('导入 ~/.ssh/config')}</div>
           <button className="modal-close" onClick={onClose} disabled={busy}><Icon name="x" size={15} /></button>
         </header>
         <div className="modal-body">
           {error ? (
             <div className="form-error">{error}</div>
           ) : !entries ? (
-            <div className="section-tip">正在读取并解析 ~/.ssh/config…</div>
+            <div className="section-tip">{t('正在读取并解析 ~/.ssh/config…')}</div>
           ) : !entries.length ? (
-            <div className="section-tip">配置文件中没有可导入的主机条目（通配符与 Match 块会被跳过）。</div>
+            <div className="section-tip">{t('配置文件中没有可导入的主机条目（通配符与 Match 块会被跳过）。')}</div>
           ) : (
             <>
               <p className="section-tip">
-                共 {entries.length} 条。已存在的同 主机+端口+用户名 配置不会被覆盖。认证方式按 IdentityFile 推断；导入后请补齐凭据。
+                {t('共 ')}{entries.length}{t(' 条。已存在的同 主机+端口+用户名 配置不会被覆盖。认证方式按 IdentityFile 推断；导入后请补齐凭据。')}
               </p>
               <div className="sshconfig-list">
                 {entries.map((entry) => {
@@ -576,7 +580,7 @@ function SshConfigImportModal({
                         {entry.user ? `${entry.user}@` : ''}{address}:{entry.port ?? 22}
                         {entry.identityFile ? ` · ${entry.identityFile}` : ''}
                       </span>
-                      {duplicate && <span className="sshconfig-dup">已存在</span>}
+                      {duplicate && <span className="sshconfig-dup">{t('已存在')}</span>}
                     </label>
                   )
                 })}
@@ -585,9 +589,9 @@ function SshConfigImportModal({
           )}
         </div>
         <footer className="modal-footer">
-          <button className="glass-btn" onClick={onClose} disabled={busy}>取消</button>
+          <button className="glass-btn" onClick={onClose} disabled={busy}>{t('取消')}</button>
           <button className="glass-btn primary" onClick={() => void confirmImport()} disabled={busy || !entries || !selected.size}>
-            {busy ? '导入中…' : `导入所选（${selected.size}）`}
+            {busy ? t('导入中…') : t('导入所选（') + selected.size + t('）')}
           </button>
         </footer>
       </div>

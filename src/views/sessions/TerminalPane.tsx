@@ -8,6 +8,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '../../components/Icon'
 import { useSessions } from '../../store/sessions'
 import { TerminalSettings, useSettings } from '../../store/settings'
+import { useT } from '../../i18n'
 
 interface Props {
   id: number
@@ -87,6 +88,7 @@ function useEffectiveMode(): 'light' | 'dark' {
 }
 
 export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
+  const t = useT()
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -273,7 +275,7 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
           <input
             ref={searchInputRef}
             className="glass-input terminal-search-input"
-            placeholder="终端内搜索"
+            placeholder={t('终端内搜索')}
             value={searchValue}
             onChange={(event) => setSearchValue(event.target.value)}
             onKeyDown={(event) => {
@@ -287,13 +289,13 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
               }
             }}
           />
-          <button className="host-icon-btn" title="上一个 (Shift+Enter)" onClick={() => runSearch('prev', searchValue)}>
+          <button className="host-icon-btn" title={t('上一个 (Shift+Enter)')} onClick={() => runSearch('prev', searchValue)}>
             <Icon name="chevron-up" size={14} />
           </button>
-          <button className="host-icon-btn" title="下一个 (Enter)" onClick={() => runSearch('next', searchValue)}>
+          <button className="host-icon-btn" title={t('下一个 (Enter)')} onClick={() => runSearch('next', searchValue)}>
             <Icon name="chevron-down" size={14} />
           </button>
-          <button className="host-icon-btn" title="关闭 (Esc)" onClick={closeSearch}>
+          <button className="host-icon-btn" title={`${t('关闭')} (Esc)`} onClick={closeSearch}>
             <Icon name="x" size={14} />
           </button>
         </div>

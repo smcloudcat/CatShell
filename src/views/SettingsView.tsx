@@ -12,19 +12,21 @@ import { AuditPanel } from './settings/AuditPanel'
 import { BackupPanel } from './settings/BackupPanel'
 import { MonitorThresholdPanel } from './settings/MonitorThresholdPanel'
 import { showToast } from '../store/ui'
+import { useT } from '../i18n'
 
 type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'backup' | 'update'
 
-const TABS: { id: SettingsTab; label: string; hint: string; icon: IconName }[] = [
-  { id: 'appearance', label: '外观', hint: '主题与质感', icon: 'palette' },
-  { id: 'monitor', label: '监控告警', hint: '阈值与通知', icon: 'monitor' },
-  { id: 'snippets', label: '命令片段', hint: '常用命令库', icon: 'terminal' },
-  { id: 'security', label: '安全与审计', hint: '保险箱与日志', icon: 'key' },
-  { id: 'backup', label: '备份与还原', hint: '导入导出配置', icon: 'database' },
-  { id: 'update', label: '应用更新', hint: '语言与自动更新', icon: 'refresh' }
+const TABS: { id: SettingsTab; labelKey: string; hintKey: string; icon: IconName }[] = [
+  { id: 'appearance', labelKey: '外观', hintKey: '主题与质感', icon: 'palette' },
+  { id: 'monitor', labelKey: '监控告警', hintKey: '阈值与通知', icon: 'monitor' },
+  { id: 'snippets', labelKey: '命令片段', hintKey: '常用命令库', icon: 'terminal' },
+  { id: 'security', labelKey: '安全与审计', hintKey: '保险箱与日志', icon: 'key' },
+  { id: 'backup', labelKey: '备份与还原', hintKey: '导入导出配置', icon: 'database' },
+  { id: 'update', labelKey: '应用更新', hintKey: '语言与自动更新', icon: 'refresh' }
 ]
 
 export function SettingsView() {
+  const t = useT()
   const theme = useSettings((s) => s.theme)
   const setTheme = useSettings((s) => s.setTheme)
   const resetTheme = useSettings((s) => s.resetTheme)
@@ -56,7 +58,7 @@ export function SettingsView() {
     } catch (err) {
       setCurrentUpdate(null)
       setUpdateState('error')
-      setUpdateInfo(err instanceof Error ? err.message : '检查更新失败，请稍后重试或手动下载')
+      setUpdateInfo(err instanceof Error ? err.message : t('检查更新失败，请稍后重试或手动下载'))
     }
   }
 
@@ -69,7 +71,7 @@ export function SettingsView() {
       await relaunch()
     } catch (err) {
       setUpdateState('error')
-      setUpdateInfo(err instanceof Error ? err.message : '下载更新失败')
+      setUpdateInfo(err instanceof Error ? err.message : t('下载更新失败'))
     }
   }
 
@@ -91,9 +93,9 @@ export function SettingsView() {
     <div className="view">
       <header className="view-header">
         <div>
-          <div className="view-title">设置</div>
+          <div className="view-title">{t('设置')}</div>
           <div className="view-subtitle">
-            {tab === 'appearance' ? '外观实时调整 · 效果即时预览' : TABS.find((t) => t.id === tab)?.hint ?? ''}
+            {tab === 'appearance' ? t('外观实时调整 · 效果即时预览') : t(TABS.find((item) => item.id === tab)?.hintKey ?? '')}
           </div>
         </div>
       </header>
@@ -107,8 +109,8 @@ export function SettingsView() {
             >
               <Icon name={item.icon} size={16} />
               <span className="settings-nav-text">
-                <span>{item.label}</span>
-                <small>{item.hint}</small>
+                <span>{t(item.labelKey)}</span>
+                <small>{t(item.hintKey)}</small>
               </span>
             </button>
           ))}
@@ -133,7 +135,7 @@ export function SettingsView() {
                     <div className="glass preview-card">
                       <div className="preview-bar wide" />
                       <div className="preview-bar mid" />
-                      <span className="preview-chip">连接成功</span>
+                      <span className="preview-chip">{t('连接成功')}</span>
                     </div>
                     <div className="preview-stats">
                       <div className="glass preview-stat">
@@ -141,11 +143,11 @@ export function SettingsView() {
                         <span className="stat-ring" />
                       </div>
                       <div className="glass preview-stat">
-                        <span className="stat-label">内存</span>
+                        <span className="stat-label">{t('内存')}</span>
                         <span className="stat-ring" />
                       </div>
                       <div className="glass preview-stat">
-                        <span className="stat-label">磁盘</span>
+                        <span className="stat-label">{t('磁盘')}</span>
                         <span className="stat-ring" />
                       </div>
                     </div>
@@ -155,14 +157,14 @@ export function SettingsView() {
               <div className="settings-actions">
                 <button className="glass-btn" onClick={resetTheme}>
                   <Icon name="refresh" size={15} />
-                  恢复默认
+                  {t('恢复默认')}
                 </button>
                 <button className="glass-btn primary" onClick={() => saveTheme()}>
                   <Icon name="save" size={15} />
-                  保存主题
+                  {t('保存主题')}
                 </button>
               </div>
-              <span className="view-footer">点击保存后主题将持久化至本地设置</span>
+              <span className="view-footer">{t('点击保存后主题将持久化至本地设置')}</span>
             </div>
           </div>
         ) : (
@@ -181,8 +183,8 @@ export function SettingsView() {
               <>
                 <div className="panel-row">
                   <div className="panel-copy">
-                    <div className="panel-title">界面语言</div>
-                    <div className="panel-desc">切换后立即生效并持久化；英文翻译逐步补齐，缺失文案回退中文。</div>
+                    <div className="panel-title">{t('界面语言')}</div>
+                    <div className="panel-desc">{t('切换后立即生效并持久化；英文翻译逐步补齐，缺失文案回退中文。')}</div>
                   </div>
                   <div className="seg-group">
                     {LANGUAGE_OPTIONS.map((option) => (
@@ -194,16 +196,16 @@ export function SettingsView() {
                           void saveLanguage()
                         }}
                       >
-                        {option === 'zh-CN' ? '简体中文' : 'English'}
+                        {option === 'zh-CN' ? t('简体中文') : 'English'}
                       </button>
                     ))}
                   </div>
                 </div>
                 <div className="panel-row">
                   <div className="panel-copy">
-                    <div className="panel-title">关闭窗口时最小化到托盘</div>
+                    <div className="panel-title">{t('关闭窗口时最小化到托盘')}</div>
                     <div className="panel-desc">
-                      开启后点击关闭按钮仅隐藏窗口，SSH 会话保持在线，可从系统托盘恢复或退出。
+                      {t('开启后点击关闭按钮仅隐藏窗口，SSH 会话保持在线，可从系统托盘恢复或退出。')}
                     </div>
                   </div>
                   <label className="switch">
@@ -220,34 +222,34 @@ export function SettingsView() {
                 </div>
                 <div className="panel-row">
                   <div className="panel-copy">
-                    <div className="panel-title">检查更新</div>
+                    <div className="panel-title">{t('检查更新')}</div>
                     <div className="panel-desc">
-                      {updateState === 'checking' && '正在检查更新…'}
-                      {updateState === 'available' && `发现新版本 v${updateInfo}，可下载安装（安装后自动重启）。`}
-                      {updateState === 'latest' && '当前已是最新版本。'}
-                      {updateState === 'downloading' && '正在下载并安装更新…'}
-                      {updateState === 'error' && (updateInfo ?? '检查更新失败')}
-                      {updateState === 'idle' && '通过内置更新通道检查新版本；未配置签名或网络不可用时会提示失败。'}
+                      {updateState === 'checking' && t('正在检查更新…')}
+                      {updateState === 'available' && `${t('发现新版本 v')}${updateInfo}${t('，可下载安装（安装后自动重启）。')}`}
+                      {updateState === 'latest' && t('当前已是最新版本。')}
+                      {updateState === 'downloading' && t('正在下载并安装更新…')}
+                      {updateState === 'error' && (updateInfo ?? t('检查更新失败'))}
+                      {updateState === 'idle' && t('通过内置更新通道检查新版本；未配置签名或网络不可用时会提示失败。')}
                     </div>
                   </div>
                   <div className="settings-actions">
                     {updateState === 'available' ? (
                       <button className="glass-btn primary" onClick={() => void installUpdate()}>
                         <Icon name="download" size={15} />
-                        下载并安装
+                        {t('下载并安装')}
                       </button>
                     ) : (
                       <button className="glass-btn" onClick={() => void checkForUpdate()} disabled={updateState === 'checking' || updateState === 'downloading'}>
                         <Icon name="refresh" size={15} />
-                        检查更新
+                        {t('检查更新')}
                       </button>
                     )}
                   </div>
                 </div>
                 {updateState === 'error' && (
-                  <button className="glass-btn" onClick={() => showToast('可前往 GitHub Releases 页面手动下载最新安装包')}>
+                  <button className="glass-btn" onClick={() => showToast(t('可前往 GitHub Releases 页面手动下载最新安装包'))}>
                     <Icon name="info" size={15} />
-                    手动下载指引
+                    {t('手动下载指引')}
                   </button>
                 )}
               </>

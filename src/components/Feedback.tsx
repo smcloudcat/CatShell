@@ -1,5 +1,6 @@
 import { Icon, IconName } from '../components/Icon'
 import { useUiFeedback, ToastKind } from '../store/ui'
+import { useT } from '../i18n'
 
 const TOAST_ICONS: Record<ToastKind, IconName> = {
   info: 'terminal',
@@ -9,6 +10,7 @@ const TOAST_ICONS: Record<ToastKind, IconName> = {
 }
 
 export function FeedbackHost() {
+  const t = useT()
   const confirmRequest = useUiFeedback((state) => state.confirmRequest)
   const resolveConfirm = useUiFeedback((state) => state.resolveConfirm)
   const toasts = useUiFeedback((state) => state.toasts)
@@ -30,14 +32,14 @@ export function FeedbackHost() {
             </div>
             <footer className="modal-footer">
               <button className="glass-btn" onClick={() => resolveConfirm(false)}>
-                {confirmRequest.cancelLabel ?? '取消'}
+                {confirmRequest.cancelLabel ?? t('取消')}
               </button>
               <button
                 className={`glass-btn ${confirmRequest.danger ? 'danger' : 'primary'}`}
                 onClick={() => resolveConfirm(true)}
                 autoFocus
               >
-                {confirmRequest.confirmLabel ?? '确认'}
+                {confirmRequest.confirmLabel ?? t('确认')}
               </button>
             </footer>
           </div>
@@ -49,7 +51,7 @@ export function FeedbackHost() {
             <div className={`toast glass toast-${toast.kind}`} key={toast.id}>
               <Icon name={TOAST_ICONS[toast.kind]} size={15} />
               <span>{toast.message}</span>
-              <button className="toast-close" onClick={() => dismissToast(toast.id)} title="关闭">
+              <button className="toast-close" onClick={() => dismissToast(toast.id)} title={t('关闭')}>
                 <Icon name="x" size={12} />
               </button>
             </div>

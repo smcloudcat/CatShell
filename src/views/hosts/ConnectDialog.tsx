@@ -7,6 +7,7 @@ import { HostProfile, HOST_ICON_OPTIONS, normalizeHostIcon, HostProxyProfile } f
 import { HostIconName } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
+import { useT } from '../../i18n'
 
 interface Props {
   open: boolean
@@ -107,6 +108,7 @@ function parseTagsInput(value: string): string[] {
 }
 
 export function ConnectDialog({ open: visible, onClose, onConnected, profile }: Props) {
+  const t = useT()
   const [form, setForm] = useState<FormState>(() => formFromProfile(profile))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -143,17 +145,17 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     try {
       const file = await open({
         multiple: false,
-        title: '选择 SSH 私钥',
+        title: t('选择 SSH 私钥'),
         filters: [
-          { name: '私钥文件', extensions: ['pem', 'key', 'ppk', 'ed25519'] },
-          { name: '所有文件', extensions: ['*'] }
+          { name: t('私钥文件'), extensions: ['pem', 'key', 'ppk', 'ed25519'] },
+          { name: t('所有文件'), extensions: ['*'] }
         ]
       })
       if (typeof file === 'string') {
         set({ [target]: file } as Partial<FormState>)
       }
     } catch {
-      setError('无法打开文件选择器')
+      setError(t('无法打开文件选择器'))
     }
   }
 
@@ -164,13 +166,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     const proxyHost = form.proxyHost.trim()
     const proxyPort = Number(form.proxyPort)
     const proxyUsername = form.proxyUsername.trim()
-    if (!proxyHost) return { ok: false, error: '请输入跳板机地址' }
-    if (!proxyUsername) return { ok: false, error: '请输入跳板机用户名' }
+    if (!proxyHost) return { ok: false, error: t('请输入跳板机地址') }
+    if (!proxyUsername) return { ok: false, error: t('请输入跳板机用户名') }
     if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
-      return { ok: false, error: '跳板机端口必须是 1 到 65535 之间的整数' }
+      return { ok: false, error: t('跳板机端口必须是 1 到 65535 之间的整数') }
     }
     if (form.proxyAuthMethod === 'key' && !form.proxyKeyPath.trim()) {
-      return { ok: false, error: '跳板机认证选择了私钥，请选择私钥文件' }
+      return { ok: false, error: t('跳板机认证选择了私钥，请选择私钥文件') }
     }
     return {
       ok: true,
@@ -204,23 +206,23 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     const host = form.host.trim()
     const port = Number(form.port)
     if (!host) {
-      setError('请输入主机地址')
+      setError(t('请输入主机地址'))
       return
     }
     if (!form.username.trim()) {
-      setError('请输入用户名')
+      setError(t('请输入用户名'))
       return
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setError('端口必须是 1 到 65535 之间的整数')
+      setError(t('端口必须是 1 到 65535 之间的整数'))
       return
     }
     if (form.authMethod === 'password' && !form.password) {
-      setError('请输入登录密码')
+      setError(t('请输入登录密码'))
       return
     }
     if (form.authMethod === 'key' && !form.keyPath.trim()) {
-      setError('请选择私钥文件')
+      setError(t('请选择私钥文件'))
       return
     }
     const proxy = buildProxy()
@@ -292,7 +294,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         onConnected?.()
       }
     } catch (err) {
-      setError(typeof err === 'string' ? err : '连接失败')
+      setError(typeof err === 'string' ? err : t('连接失败'))
     } finally {
       setBusy(false)
     }
@@ -303,19 +305,19 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     const host = form.host.trim()
     const port = Number(form.port)
     if (!host) {
-      setError('请输入主机地址')
+      setError(t('请输入主机地址'))
       return
     }
     if (!form.username.trim()) {
-      setError('请输入用户名')
+      setError(t('请输入用户名'))
       return
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setError('端口必须是 1 到 65535 之间的整数')
+      setError(t('端口必须是 1 到 65535 之间的整数'))
       return
     }
     if (form.authMethod === 'key' && !form.keyPath.trim()) {
-      setError('请选择私钥文件')
+      setError(t('请选择私钥文件'))
       return
     }
     const proxy = buildProxy()
@@ -370,7 +372,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setForm(FORM_EMPTY)
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败')
+      setError(err instanceof Error ? err.message : t('保存失败'))
     } finally {
       setBusy(false)
     }
@@ -382,25 +384,25 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         <header className="modal-header">
           <div className="modal-title">
             <Icon name="link" size={18} />
-            {profile ? '编辑并连接' : '新建连接'}
+            {profile ? t('编辑并连接') : t('新建连接')}
           </div>
-          <button className="modal-close" onClick={onClose} title="关闭">
+          <button className="modal-close" onClick={onClose} title={t('关闭')}>
             <Icon name="x" size={16} />
           </button>
         </header>
         <div className="modal-body">
           <div className="form-grid">
             <label className="field span-2">
-              <span className="field-label">名称（可选）</span>
+              <span className="field-label">{t('名称（可选）')}</span>
               <input
                 className="glass-input"
-                placeholder="例如 production-api"
+                placeholder={t('例如 production-api')}
                 value={form.name}
                 onChange={(e) => set({ name: e.target.value })}
               />
             </label>
             <div className="field span-2">
-              <span className="field-label">图标</span>
+              <span className="field-label">{t('图标')}</span>
               <div className="icon-picker">
                 {HOST_ICON_OPTIONS.map((name) => (
                   <button
@@ -416,7 +418,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               </div>
             </div>
             <label className="field">
-              <span className="field-label">主机地址</span>
+              <span className="field-label">{t('主机地址')}</span>
               <input
                 className="glass-input"
                 placeholder="192.168.1.20"
@@ -426,7 +428,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               />
             </label>
             <label className="field">
-              <span className="field-label">端口</span>
+              <span className="field-label">{t('端口')}</span>
               <input
                 className="glass-input"
                 type="number"
@@ -437,7 +439,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               />
             </label>
             <label className="field span-2">
-              <span className="field-label">用户名</span>
+              <span className="field-label">{t('用户名')}</span>
               <input
                 className="glass-input"
                 placeholder="root"
@@ -446,19 +448,19 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               />
             </label>
             <div className="field span-2">
-              <span className="field-label">认证方式</span>
+              <span className="field-label">{t('认证方式')}</span>
               <div className="seg-group">
                 <button
                   className={`seg-btn ${form.authMethod === 'password' ? 'active' : ''}`}
                   onClick={() => set({ authMethod: 'password' })}
                 >
-                  密码
+                  {t('密码')}
                 </button>
                 <button
                   className={`seg-btn ${form.authMethod === 'key' ? 'active' : ''}`}
                   onClick={() => set({ authMethod: 'key' })}
                 >
-                  SSH 私钥
+                  {t('SSH 私钥')}
                 </button>
                 <button
                   className={`seg-btn ${form.authMethod === 'agent' ? 'active' : ''}`}
@@ -470,13 +472,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   className={`seg-btn ${form.authMethod === 'keyboard-interactive' ? 'active' : ''}`}
                   onClick={() => set({ authMethod: 'keyboard-interactive' })}
                 >
-                  交互式 2FA
+                  {t('交互式 2FA')}
                 </button>
               </div>
             </div>
             {form.authMethod === 'password' ? (
               <label className="field span-2">
-                <span className="field-label">登录密码</span>
+                <span className="field-label">{t('登录密码')}</span>
                 <input
                   className="glass-input"
                   type="password"
@@ -488,14 +490,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               <div className="field span-2">
                 <span className="field-label">SSH Agent</span>
                 <div className="section-tip">
-                  Windows 优先尝试 Pageant，其次 OpenSSH agent 命名管道（\\.\pipe\openssh-ssh-agent）；
-                  其他平台读取 SSH_AUTH_SOCK。连接时将逐个尝试 Agent 中的密钥，无需输入口令。
+                  {t('Windows 优先尝试 Pageant，其次 OpenSSH agent 命名管道（\\\\.\\pipe\\openssh-ssh-agent）；其他平台读取 SSH_AUTH_SOCK。连接时将逐个尝试 Agent 中的密钥，无需输入口令。')}
                 </div>
               </div>
             ) : form.authMethod === 'keyboard-interactive' ? (
               <>
                 <label className="field span-2">
-                  <span className="field-label">登录密码（服务器要求时填写）</span>
+                  <span className="field-label">{t('登录密码（服务器要求时填写）')}</span>
                   <input
                     className="glass-input"
                     type="password"
@@ -505,13 +506,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   />
                 </label>
                 <label className="field span-2">
-                  <span className="field-label">一次性验证码（留空则连接时弹出交互输入）</span>
+                  <span className="field-label">{t('一次性验证码（留空则连接时弹出交互输入）')}</span>
                   <input
                     className="glass-input"
                     type="password"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    placeholder="预填后连接时自动应答；留空则逐个提示输入"
+                    placeholder={t('预填后连接时自动应答；留空则逐个提示输入')}
                     value={form.otpSecret}
                     onChange={(e) => set({ otpSecret: e.target.value })}
                   />
@@ -520,27 +521,27 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
             ) : (
               <>
                 <div className="field span-2">
-                  <span className="field-label">私钥文件</span>
+                  <span className="field-label">{t('私钥文件')}</span>
                   <div className="key-picker">
                     <input
                       className="glass-input"
                       readOnly
-                      placeholder="未选择私钥"
+                      placeholder={t('未选择私钥')}
                       value={form.keyPath}
                       onDoubleClick={() => void pickKey('keyPath')}
                     />
                     <button className="glass-btn" onClick={() => void pickKey('keyPath')} type="button">
                       <Icon name="folder" size={14} />
-                      选择
+                      {t('选择')}
                     </button>
                   </div>
                 </div>
                 <label className="field span-2">
-                  <span className="field-label">私钥口令（可选）</span>
+                  <span className="field-label">{t('私钥口令（可选）')}</span>
                   <input
                     className="glass-input"
                     type="password"
-                    placeholder="无口令可留空"
+                    placeholder={t('无口令可留空')}
                     value={form.passphrase}
                     onChange={(e) => set({ passphrase: e.target.value })}
                   />
@@ -548,7 +549,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               </>
             )}
             <label className="field">
-              <span className="field-label">心跳间隔（秒）</span>
+              <span className="field-label">{t('心跳间隔（秒）')}</span>
               <input
                 className="glass-input"
                 type="number"
@@ -559,25 +560,25 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
               />
             </label>
             <label className="field">
-              <span className="field-label">分组（可选）</span>
+              <span className="field-label">{t('分组（可选）')}</span>
               <input
                 className="glass-input"
-                placeholder="例如 生产环境"
+                placeholder={t('例如 生产环境')}
                 value={form.group}
                 onChange={(e) => set({ group: e.target.value })}
               />
             </label>
             <label className="field span-2">
-              <span className="field-label">标签（可选，逗号分隔）</span>
+              <span className="field-label">{t('标签（可选，逗号分隔）')}</span>
               <input
                 className="glass-input"
-                placeholder="例如 web, linux, 部署目标"
+                placeholder={t('例如 web, linux, 部署目标')}
                 value={form.tags}
                 onChange={(e) => set({ tags: e.target.value })}
               />
             </label>
             <label className="field checkbox-field">
-              <span className="field-label">跳板机（ProxyJump）</span>
+              <span className="field-label">{t('跳板机（ProxyJump）')}</span>
               <input
                 type="checkbox"
                 checked={form.proxyEnabled}
@@ -587,16 +588,16 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
             {form.proxyEnabled && (
               <>
                 <label className="field">
-                  <span className="field-label">跳板机地址</span>
+                  <span className="field-label">{t('跳板机地址')}</span>
                   <input
                     className="glass-input"
-                    placeholder="例如 bastion.corp"
+                    placeholder={t('例如 bastion.corp')}
                     value={form.proxyHost}
                     onChange={(e) => set({ proxyHost: e.target.value })}
                   />
                 </label>
                 <label className="field">
-                  <span className="field-label">跳板机端口</span>
+                  <span className="field-label">{t('跳板机端口')}</span>
                   <input
                     className="glass-input"
                     type="number"
@@ -607,7 +608,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   />
                 </label>
                 <label className="field">
-                  <span className="field-label">跳板机用户名</span>
+                  <span className="field-label">{t('跳板机用户名')}</span>
                   <input
                     className="glass-input"
                     placeholder="root"
@@ -616,25 +617,25 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   />
                 </label>
                 <div className="field">
-                  <span className="field-label">跳板机认证</span>
+                  <span className="field-label">{t('跳板机认证')}</span>
                   <div className="seg-group">
                     <button
                       className={`seg-btn ${form.proxyAuthMethod === 'password' ? 'active' : ''}`}
                       onClick={() => set({ proxyAuthMethod: 'password' })}
                     >
-                      密码
+                      {t('密码')}
                     </button>
                     <button
                       className={`seg-btn ${form.proxyAuthMethod === 'key' ? 'active' : ''}`}
                       onClick={() => set({ proxyAuthMethod: 'key' })}
                     >
-                      私钥
+                      {t('私钥')}
                     </button>
                   </div>
                 </div>
                 {form.proxyAuthMethod === 'password' ? (
                   <label className="field">
-                    <span className="field-label">跳板机密码</span>
+                    <span className="field-label">{t('跳板机密码')}</span>
                     <input
                       className="glass-input"
                       type="password"
@@ -644,25 +645,25 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   </label>
                 ) : (
                   <div className="field">
-                    <span className="field-label">跳板机私钥</span>
+                    <span className="field-label">{t('跳板机私钥')}</span>
                     <div className="key-picker">
                       <input
                         className="glass-input"
                         readOnly
-                        placeholder="未选择私钥"
+                        placeholder={t('未选择私钥')}
                         value={form.proxyKeyPath}
                         onDoubleClick={() => void pickKey('proxyKeyPath')}
                       />
                       <button className="glass-btn" onClick={() => void pickKey('proxyKeyPath')} type="button">
                         <Icon name="folder" size={14} />
-                        选择
+                        {t('选择')}
                       </button>
                     </div>
                   </div>
                 )}
                 {form.proxyAuthMethod === 'key' && (
                   <label className="field">
-                    <span className="field-label">跳板机私钥口令（可选）</span>
+                    <span className="field-label">{t('跳板机私钥口令（可选）')}</span>
                     <input
                       className="glass-input"
                       type="password"
@@ -673,13 +674,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                 )}
                 <div className="field span-2">
                   <div className="section-tip">
-                    连接时先登录跳板机，再经其 direct-tcpip 隧道连接目标主机；目标与跳板机的主机指纹分别确认。跳板机凭据与登录密码同等对待，不写入主机配置。
+                    {t('连接时先登录跳板机，再经其 direct-tcpip 隧道连接目标主机；目标与跳板机的主机指纹分别确认。跳板机凭据与登录密码同等对待，不写入主机配置。')}
                   </div>
                 </div>
               </>
             )}
             <label className="field checkbox-field">
-              <span className="field-label">断线自动重连</span>
+              <span className="field-label">{t('断线自动重连')}</span>
               <input
                 type="checkbox"
                 checked={form.autoReconnect}
@@ -691,26 +692,26 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
             (form.authMethod === 'key' && form.passphrase)) &&
             (vaultConfigured ? (
               vaultUnlocked ? (
-                <div className="section-tip">连接成功后将自动加密保存当前凭据，下次可直接从主机列表一键连接。</div>
+                <div className="section-tip">{t('连接成功后将自动加密保存当前凭据，下次可直接从主机列表一键连接。')}</div>
               ) : (
-                <div className="section-tip">凭据保险箱当前已锁定，请在「设置 → 凭据保险箱」解锁后才能自动保存凭据。</div>
+                <div className="section-tip">{t('凭据保险箱当前已锁定，请在「设置 → 凭据保险箱」解锁后才能自动保存凭据。')}</div>
               )
             ) : (
-              <div className="section-tip">密码与私钥口令不会写入主机配置文件。如需自动保存并在下次连接时复用，请在「设置 → 凭据保险箱」设置主密码。</div>
+              <div className="section-tip">{t('密码与私钥口令不会写入主机配置文件。如需自动保存并在下次连接时复用，请在「设置 → 凭据保险箱」设置主密码。')}</div>
             ))}
           {error && <div className="form-error">{error}</div>}
         </div>
         <footer className="modal-footer">
           <button className="glass-btn" onClick={onClose} disabled={busy}>
-            取消
+            {t('取消')}
           </button>
           <button className="glass-btn" onClick={save} disabled={busy}>
             <Icon name="save" size={15} />
-            保存配置
+            {t('保存配置')}
           </button>
           <button className="glass-btn primary" onClick={submit} disabled={busy}>
             <Icon name="link" size={15} />
-            {busy ? '连接中…' : '连接'}
+            {busy ? t('连接中…') : t('连接')}
           </button>
         </footer>
       </div>

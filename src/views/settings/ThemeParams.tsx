@@ -1,5 +1,6 @@
 import { ThemeConfig } from '../../types/theme'
 import { ColorRow, SegRow, SliderRow } from './ThemeControls'
+import { useT } from '../../i18n'
 
 interface Props {
   theme: ThemeConfig
@@ -7,11 +8,12 @@ interface Props {
 }
 
 export function ThemeParams({ theme, setTheme }: Props) {
+  const t = useT()
   return (
     <div className="settings-section">
-      <div className="settings-section-title">界面质感</div>
+      <div className="settings-section-title">{t('界面质感')}</div>
       <SliderRow
-        label="卡片不透明度"
+        label={t('卡片不透明度')}
         value={theme.bgOpacity}
         min={0.1}
         max={1}
@@ -19,7 +21,7 @@ export function ThemeParams({ theme, setTheme }: Props) {
         onChange={(v) => setTheme({ bgOpacity: v })}
       />
       <SliderRow
-        label="模糊强度"
+        label={t('模糊强度')}
         value={theme.blurRadius}
         min={2}
         max={20}
@@ -27,7 +29,7 @@ export function ThemeParams({ theme, setTheme }: Props) {
         onChange={(v) => setTheme({ blurRadius: v })}
       />
       <SliderRow
-        label="圆角大小"
+        label={t('圆角大小')}
         value={theme.borderRadius}
         min={0}
         max={24}
@@ -35,7 +37,7 @@ export function ThemeParams({ theme, setTheme }: Props) {
         onChange={(v) => setTheme({ borderRadius: v })}
       />
       <SliderRow
-        label="描边透明度"
+        label={t('描边透明度')}
         value={theme.borderOpacity}
         min={0.05}
         max={0.4}
@@ -43,31 +45,31 @@ export function ThemeParams({ theme, setTheme }: Props) {
         onChange={(v) => setTheme({ borderOpacity: v })}
       />
 
-      <div className="settings-section-title">背景</div>
+      <div className="settings-section-title">{t('背景')}</div>
       <SegRow
-        label="背景类型"
+        label={t('背景类型')}
         value={theme.backgroundType}
         options={[
-          { value: 'gradient', label: '渐变' },
-          { value: 'solid', label: '纯色' },
-          { value: 'image', label: '图片' }
+          { value: 'gradient', label: t('渐变') },
+          { value: 'solid', label: t('纯色') },
+          { value: 'image', label: t('图片') }
         ]}
         onChange={(v) => setTheme({ backgroundType: v })}
       />
       {theme.backgroundType === 'gradient' && (
         <>
           <ColorRow
-            label="渐变起色"
+            label={t('渐变起色')}
             value={theme.gradient.from}
             onChange={(v) => setTheme({ gradient: { ...theme.gradient, from: v } })}
           />
           <ColorRow
-            label="渐变止色"
+            label={t('渐变止色')}
             value={theme.gradient.to}
             onChange={(v) => setTheme({ gradient: { ...theme.gradient, to: v } })}
           />
           <SliderRow
-            label="渐变角度"
+            label={t('渐变角度')}
             value={theme.gradient.angle}
             min={0}
             max={360}
@@ -78,20 +80,20 @@ export function ThemeParams({ theme, setTheme }: Props) {
       )}
       {theme.backgroundType === 'solid' && (
         <ColorRow
-          label="背景颜色"
+          label={t('背景颜色')}
           value={theme.solidColor}
           onChange={(v) => setTheme({ solidColor: v })}
         />
       )}
       {theme.backgroundType === 'image' && (
         <div className="section-tip">
-          自定义图片：
+          {t('自定义图片：')}
           <button className="seg-btn" onClick={() => pickImage(setTheme)}>
-            选择图片…
+            {t('选择图片…')}
           </button>
           {theme.backgroundImage && (
             <div style={{ marginTop: 8 }}>
-              已选择：<code>{theme.backgroundImage}</code>
+              {t('已选择：')}<code>{theme.backgroundImage}</code>
             </div>
           )}
         </div>

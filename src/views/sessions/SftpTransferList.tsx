@@ -9,6 +9,7 @@ import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
 import { beginTransfer, cancelFlags, removeTransfer, useSftpTransferStore, type TransferProgress } from './sftpTransferStore'
+import { useT } from '../../i18n'
 
 function TransferRow({ transfer }: { transfer: TransferProgress }) {
   const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
@@ -35,8 +36,12 @@ function TransferRow({ transfer }: { transfer: TransferProgress }) {
 }
 
 /** SFTP 传输进度列表：独立订阅磁盘进度事件，避免进度更新重渲染整个面板。 */
+const NO_TRANSFERS: TransferProgress[] = []
+
 export function SftpTransferList({ sessionId }: { sessionId: number }) {
-  const transfers = useSftpTransferStore((state) => state.bySession[sessionId] ?? [])
+  const t = useT()
+  // zustand v5 的 selector 必须返回稳定引用：空态复用常量，避免 getSnapshot 每次新数组导致无限重渲染。
+  const transfers = useSftpTransferStore((state) => state.bySession[sessionId] ?? NO_TRANSFERS)
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
@@ -45,15 +50,15 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
     void subscribeSftpDiskProgress((progress) => {
       if (progress.sessionId !== sessionId) return
       if (progress.done) {
-        const directionLabel = progress.direction === 'upload' ? '上传' : '下载'
+        const directionLabel = progress.direction === 'upload' ? t('上传') : t('下载')
         if (progress.cancelled) {
-          showToast(`已取消 ${progress.fileName}`)
+          showToast(`${t('已取消 ')}${progress.fileName}`)
         } else if (progress.error) {
           recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'failure', progress.error)
-          showToast(`磁盘${directionLabel}失败：${progress.error}`, 'error')
+          showToast(`${t('磁盘')}${directionLabel}${t('失败：')}${progress.error}`, 'error')
         } else {
-          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'success', '磁盘级传输完成')
-          showToast(`磁盘${directionLabel}完成：${progress.fileName}`)
+          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'success', t('磁盘级传输完成'))
+          showToast(`${t('磁盘')}${directionLabel}${t('完成：')}${progress.fileName}`)
         }
         window.setTimeout(() => {
           if (!disposed) removeTransfer(sessionId, progress.transferId)

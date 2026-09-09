@@ -8,6 +8,7 @@ import { useSnippets } from '../../store/snippets'
 import { DEFAULT_MONITOR_THRESHOLDS, MonitorThresholds, useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
+import { useT } from '../../i18n'
 
 interface BackupFile {
   version: 1
@@ -75,6 +76,7 @@ function isMonitorThresholds(value: unknown): value is MonitorThresholds {
 }
 
 export function BackupPanel() {
+  const t = useT()
   const hosts = useHosts((state) => state.hosts)
   const importProfiles = useHosts((state) => state.importProfiles)
   const snippets = useSnippets((state) => state.snippets)
@@ -115,21 +117,21 @@ export function BackupPanel() {
       await saveTheme()
       setMonitorThresholds(backup.monitorThresholds ?? DEFAULT_MONITOR_THRESHOLDS)
       await saveMonitorThresholds()
-      recordAudit('config.import', '本地配置', 'success', `还原 ${backup.hosts.length} 条主机和 ${backup.snippets.length} 个片段`)
-      showToast('配置还原完成，主题设置已持久化。', 'success')
+      recordAudit('config.import', 'local-config', 'success', `restore ${backup.hosts.length} hosts, ${backup.snippets.length} snippets`)
+      showToast(t('配置还原完成，主题设置已持久化。'), 'success')
     } catch (err) {
-      recordAudit('config.import', '本地配置', 'failure', '备份文件无效')
-      showToast(err instanceof Error ? `还原失败：${err.message}` : '还原失败，请选择有效的 CatShell 备份文件。', 'error')
+      recordAudit('config.import', 'local-config', 'failure', t('备份文件无效'))
+      showToast(err instanceof Error ? t('还原失败：') + err.message : t('还原失败，请选择有效的 CatShell 备份文件。'), 'error')
     }
   }
 
   return (
     <section className="settings-section">
-      <div className="settings-section-title"><Icon name="save" size={15} />配置备份</div>
-      <div className="section-tip">导出主机、命令片段、主题和监控告警设置。密码与私钥口令永远不会写入备份文件。</div>
+      <div className="settings-section-title"><Icon name="save" size={15} />{t('配置备份')}</div>
+      <div className="section-tip">{t('导出主机、命令片段、主题和监控告警设置。密码与私钥口令永远不会写入备份文件。')}</div>
       <div className="backup-actions">
-        <button className="glass-btn" onClick={exportBackup} disabled={!hosts.length && !snippets.length}><Icon name="save" size={14} />导出备份</button>
-        <label className="glass-btn"><Icon name="folder" size={14} />还原备份<input className="sr-only" type="file" accept="application/json,.json" onChange={importBackup} /></label>
+        <button className="glass-btn" onClick={exportBackup} disabled={!hosts.length && !snippets.length}><Icon name="save" size={14} />{t('导出备份')}</button>
+        <label className="glass-btn"><Icon name="folder" size={14} />{t('还原备份')}<input className="sr-only" type="file" accept="application/json,.json" onChange={importBackup} /></label>
       </div>
     </section>
   )

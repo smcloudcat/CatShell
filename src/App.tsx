@@ -62,6 +62,7 @@ function App() {
   const answerKbi = useSessions((s) => s.answerKbi)
   const cancelKbi = useSessions((s) => s.cancelKbi)
   const translate = useT()
+  const t = translate
   const [view, setView] = useState<ViewId>('home')
   const [kbiValues, setKbiValues] = useState<string[]>([])
 
@@ -119,9 +120,9 @@ function App() {
         if (!activeCount) return
         event.preventDefault()
         const accepted = await confirmDialog({
-          title: '退出 CatShell',
-          message: `当前有 ${activeCount} 个活动 SSH 会话，退出将断开这些连接。确定要退出吗？`,
-          confirmLabel: '退出并断开',
+          title: t('退出 CatShell'),
+          message: t('当前有 ') + activeCount + t(' 个活动 SSH 会话，退出将断开这些连接。确定要退出吗？'),
+          confirmLabel: t('退出并断开'),
           danger: true
         })
         if (accepted) await appWindow.destroy()
@@ -289,12 +290,12 @@ function App() {
         <button
           className="glass-btn sidebar-toggle"
           onClick={toggleSidebar}
-          title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+          title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
         >
           <span className="sidebar-toggle-icon">
             <Icon name="chevron-down" size={16} />
           </span>
-          <span className="nav-label">{sidebarCollapsed ? '展开侧栏' : '收起侧栏'}</span>
+          <span className="nav-label">{sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}</span>
         </button>
       </aside>
       <main className="main-area">
@@ -310,25 +311,25 @@ function App() {
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <div className="modal glass host-key-modal">
             <header className="modal-header">
-              <div className="modal-title">
-                <Icon name="key" size={18} />
-                首次连接需要确认主机指纹
-              </div>
-            </header>
-            <div className="modal-body">
-              <p className="host-key-warning">
-                这是第一次连接此服务器。只有确认指纹与服务器管理员提供的值一致时才继续。
-              </p>
-              <div className="host-key-target">{hostKeyPrompt.host}:{hostKeyPrompt.port}</div>
-              <code className="host-key-fingerprint">{hostKeyPrompt.fingerprint}</code>
+            <div className="modal-title">
+              <Icon name="key" size={18} />
+              {t('首次连接需要确认主机指纹')}
             </div>
-            <footer className="modal-footer">
-              <button className="glass-btn" onClick={() => void confirmHostKey(false)}>拒绝连接</button>
-              <button className="glass-btn primary" onClick={() => void confirmHostKey(true)}>
-                <Icon name="key" size={15} />
-                信任并继续
-              </button>
-            </footer>
+          </header>
+          <div className="modal-body">
+            <p className="host-key-warning">
+              {t('这是第一次连接此服务器。只有确认指纹与服务器管理员提供的值一致时才继续。')}
+            </p>
+            <div className="host-key-target">{hostKeyPrompt.host}:{hostKeyPrompt.port}</div>
+            <code className="host-key-fingerprint">{hostKeyPrompt.fingerprint}</code>
+          </div>
+          <footer className="modal-footer">
+            <button className="glass-btn" onClick={() => void confirmHostKey(false)}>{t('拒绝连接')}</button>
+            <button className="glass-btn primary" onClick={() => void confirmHostKey(true)}>
+              <Icon name="key" size={15} />
+              {t('信任并继续')}
+            </button>
+          </footer>
           </div>
         </div>
       )}
@@ -336,21 +337,21 @@ function App() {
         <div className="modal-overlay" role="alertdialog" aria-modal="true">
           <div className="modal glass host-key-modal">
             <header className="modal-header">
-              <div className="modal-title host-key-danger">
-                <Icon name="key" size={18} />
-                主机指纹发生变化
-              </div>
-            </header>
-            <div className="modal-body">
-              <p className="host-key-danger-copy">
-                为防止中间人攻击，连接已被阻止。请与服务器管理员核对新指纹，不要直接忽略此警告。
-              </p>
-              <div className="host-key-target">{hostKeyWarning.host}:{hostKeyWarning.port}</div>
-              <code className="host-key-fingerprint">{hostKeyWarning.fingerprint}</code>
+            <div className="modal-title host-key-danger">
+              <Icon name="key" size={18} />
+              {t('主机指纹发生变化')}
             </div>
-            <footer className="modal-footer">
-              <button className="glass-btn" onClick={clearHostKeyWarning}>关闭</button>
-            </footer>
+          </header>
+          <div className="modal-body">
+            <p className="host-key-danger-copy">
+              {t('为防止中间人攻击，连接已被阻止。请与服务器管理员核对新指纹，不要直接忽略此警告。')}
+            </p>
+            <div className="host-key-target">{hostKeyWarning.host}:{hostKeyWarning.port}</div>
+            <code className="host-key-fingerprint">{hostKeyWarning.fingerprint}</code>
+          </div>
+          <footer className="modal-footer">
+            <button className="glass-btn" onClick={clearHostKeyWarning}>{t('关闭')}</button>
+          </footer>
           </div>
         </div>
       )}
@@ -360,7 +361,7 @@ function App() {
             <header className="modal-header">
               <div className="modal-title">
                 <Icon name="key" size={18} />
-                {kbiPrompt.name || '服务器要求交互式验证'}
+                {kbiPrompt.name || t('服务器要求交互式验证')}
                 {kbiQueueLength > 1 && <span className="nav-badge">{kbiQueueLength - 1}</span>}
               </div>
             </header>
@@ -368,7 +369,7 @@ function App() {
               {kbiPrompt.instructions && <p className="section-tip">{kbiPrompt.instructions}</p>}
               {kbiPrompt.prompts.map((question, index) => (
                 <label className="field span-2" key={`${kbiPrompt.sessionId}-${index}`}>
-                  <span className="field-label">{question.prompt || `提示 ${index + 1}`}</span>
+                  <span className="field-label">{question.prompt || t('提示 ') + (index + 1)}</span>
                   <input
                     className="glass-input"
                     type={question.echo ? 'text' : 'password'}
@@ -394,7 +395,7 @@ function App() {
               ))}
             </div>
             <footer className="modal-footer">
-              <button className="glass-btn" onClick={() => { setKbiValues([]); cancelKbi() }}>取消</button>
+              <button className="glass-btn" onClick={() => { setKbiValues([]); cancelKbi() }}>{t('取消')}</button>
               <button
                 className="glass-btn primary"
                 onClick={() => {
@@ -403,7 +404,7 @@ function App() {
                 }}
               >
                 <Icon name="key" size={15} />
-                提交
+                {t('提交')}
               </button>
             </footer>
           </div>
