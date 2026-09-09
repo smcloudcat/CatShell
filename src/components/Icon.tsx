@@ -24,8 +24,25 @@ export type IconName =
   | 'edit'
   | 'broadcast'
   | 'arrow-right'
+  | 'columns'
+  | 'download'
+  | 'info'
 
 const paths: Record<IconName, React.ReactNode> = {
+  download: (
+    <>
+      <path d="M12 3v11" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 19h16" />
+    </>
+  ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
+    </>
+  ),
   palette: (
     <>
       <path d="M12 21a9 9 0 1 1 9-9c0 2-1.5 3-3 3h-2a2 2 0 0 0-1.5 3.3c.3.4.5.7.5 1.2 0 .8-.7 1.5-1.5 1.5Z" />
@@ -166,6 +183,12 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M5 12h14" />
       <path d="m13 6 6 6-6 6" />
+    </>
+  ),
+  columns: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M12 4v16" />
     </>
   )
 }

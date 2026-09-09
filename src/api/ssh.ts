@@ -1,6 +1,25 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
-import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KnownHostsSnapshot, NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SessionOutputEvent, SessionStatusEvent, SftpChunk, SftpEntry, SftpTransferStart, SshConfigEntry } from '../types/session'
+import {
+  ConnectRequest,
+  HostKeyPrompt,
+  HostKeyWarning,
+  KbiPromptEvent,
+  KnownHostsSnapshot,
+  NetworkDiagnostic,
+  PortForwardInfo,
+  ProcessInfo,
+  ServerMetrics,
+  SessionInfo,
+  SessionOutputEvent,
+  SessionStatusEvent,
+  SftpChunk,
+  SftpDiskProgress,
+  SftpDiskTransferInfo,
+  SftpDiskTransferStart,
+  SftpEntry,
+  SshConfigEntry
+} from '../types/session'
 
 const BASE64_CHUNK = 0x8000
 
@@ -21,7 +40,13 @@ export function base64ToBytes(base64: string): Uint8Array {
   return bytes
 }
 
-export async function sshConnect(request: ConnectRequest): Promise<number> {
+/** 终端输出通道：后端以原始字节推送（ArrayBuffer），免去 base64/JSON 开销 */
+export type SshOutputChannel = Channel<ArrayBuffer | number[]>
+
+export async function sshConnect(request: ConnectRequest, onOutput?: SshOutputChannel): Promise<number> {
+  if (onOutput) {
+    return invoke<number>('ssh_connect', { request, onOutput })
+  }
   return invoke<number>('ssh_connect', { request })
 }
 
@@ -43,6 +68,19 @@ export async function sshRemove(id: number): Promise<void> {
 
 export async function sshList(): Promise<SessionInfo[]> {
   return invoke<SessionInfo[]>('ssh_list')
+}
+
+export async function sshPing(id: number): Promise<number> {
+  return invoke<number>('ssh_ping', { id })
+}
+
+export async function kbiRespond(sessionId: number, answers: string[]): Promise<void> {
+  await invoke('kbi_respond', { sessionId, answers })
+}
+
+export async function traySetActiveCount(count: number): Promise<void> {
+  if (!('__TAURI_INTERNALS__' in window)) return
+  await invoke('tray_set_active_count', { count })
 }
 
 export async function sshMonitor(id: number): Promise<ServerMetrics> {
@@ -146,16 +184,21 @@ export async function sftpChmod(id: number, path: string, mode: number): Promise
   await invoke('sftp_chmod', { id, path, mode })
 }
 
-export async function sftpDownloadBegin(id: number, path: string): Promise<SftpTransferStart> {
-  return invoke<SftpTransferStart>('sftp_download_begin', { id, path })
+export interface SftpChunkStart {
+  transferId: number
+  total: number
+}
+
+export async function sftpDownloadBegin(id: number, path: string): Promise<SftpChunkStart> {
+  return invoke<SftpChunkStart>('sftp_download_begin', { id, path })
 }
 
 export async function sftpDownloadChunk(transferId: number): Promise<SftpChunk> {
   return invoke<SftpChunk>('sftp_download_chunk', { transferId })
 }
 
-export async function sftpUploadBegin(id: number, path: string, total: number): Promise<SftpTransferStart> {
-  return invoke<SftpTransferStart>('sftp_upload_begin', { id, path, total })
+export async function sftpUploadBegin(id: number, path: string, total: number): Promise<SftpChunkStart> {
+  return invoke<SftpChunkStart>('sftp_upload_begin', { id, path, total })
 }
 
 export async function sftpUploadChunk(transferId: number, offset: number, data: Uint8Array): Promise<void> {
@@ -168,6 +211,48 @@ export async function sftpUploadFinish(transferId: number): Promise<void> {
 
 export async function sftpTransferCancel(transferId: number): Promise<void> {
   await invoke('sftp_transfer_cancel', { transferId })
+}
+
+/** 磁盘级下载：远端文件直接写入本地磁盘，存在半成品时自动断点续传。 */
+export async function sftpDiskDownloadStart(
+  id: number,
+  remotePath: string,
+  localPath: string,
+  resume: boolean
+): Promise<SftpDiskTransferStart> {
+  return invoke<SftpDiskTransferStart>('sftp_disk_download_start', { id, remotePath, localPath, resume })
+}
+
+/** 磁盘级上传：本地文件在 Rust 侧读盘直传远端，支持按远端已有大小断点续传。 */
+export async function sftpDiskUploadStart(
+  id: number,
+  localPath: string,
+  remotePath: string,
+  resume: boolean
+): Promise<SftpDiskTransferStart> {
+  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start', { id, localPath, remotePath, resume })
+}
+
+export async function sftpDiskTransferCancel(transferId: number): Promise<void> {
+  await invoke('sftp_disk_transfer_cancel', { transferId })
+}
+
+export async function sftpDiskTransferList(sessionId: number): Promise<SftpDiskTransferInfo[]> {
+  return invoke<SftpDiskTransferInfo[]>('sftp_disk_transfer_list', { id: sessionId })
+}
+
+/** 磁盘级传输进度事件（Rust 侧 300ms 节流推送）。 */
+export async function subscribeSftpDiskProgress(
+  handler: (progress: SftpDiskProgress) => void
+): Promise<() => Promise<void>> {
+  const unlisten = await listen<SftpDiskProgress>('sftp-disk-progress', (e) => handler(e.payload))
+  return async () => {
+    try {
+      await unlisten()
+    } catch {
+      /* already removed */
+    }
+  }
 }
 
 export async function sshConfirmHostKey(token: string, accepted: boolean): Promise<void> {
@@ -195,6 +280,7 @@ export interface SshEventHandlers {
   onOutput: (id: number, data: Uint8Array) => void
   onHostKeyPrompt?: (event: HostKeyPrompt) => void
   onHostKeyWarning?: (event: HostKeyWarning) => void
+  onKbiPrompt?: (event: KbiPromptEvent) => void
 }
 
 export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => Promise<void>> {
@@ -210,6 +296,9 @@ export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<()
   }
   if (handlers.onHostKeyWarning) {
     unlisteners.push(await listen<HostKeyWarning>('host-key-warning', (e) => handlers.onHostKeyWarning?.(e.payload)))
+  }
+  if (handlers.onKbiPrompt) {
+    unlisteners.push(await listen<KbiPromptEvent>('kbi-prompt', (e) => handlers.onKbiPrompt?.(e.payload)))
   }
   return async () => {
     for (const unlisten of unlisteners) {

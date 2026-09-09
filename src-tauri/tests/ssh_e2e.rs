@@ -1,15 +1,25 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use catshell_lib::ssh_manager::{ConnectRequest, EventSink, SshManager};
+use catshell_lib::ssh_manager::{ConnectRequest, EventSink, RawOutput, SshManager};
 use russh::keys::*;
 use russh::server::{self, Msg as ServerMsg, Server as _};
 use russh::{Channel, ChannelId};
 use serde_json::Value;
 use tokio::net::TcpListener;
+
+/// 收集原始输出通道字节的测试桩，验证 IPC Channel 输出路径。
+struct CollectOutput(StdMutex<Vec<u8>>);
+
+impl RawOutput for CollectOutput {
+    fn send_bytes(&self, data: Vec<u8>) -> Result<(), String> {
+        self.0.lock().unwrap().extend_from_slice(&data);
+        Ok(())
+    }
+}
 
 struct TestSink {
     events: std::sync::Mutex<Vec<(String, Value)>>,
@@ -80,32 +90,30 @@ impl server::Handler for EchoServer {
         Ok(())
     }
 
-    fn auth_password(
+    async fn auth_password(
         &mut self,
         user: &str,
         password: &str,
-    ) -> impl std::future::Future<Output = Result<server::Auth, Self::Error>> + Send {
-        async move {
-            if user == "test" && password == "secret" {
-                Ok(server::Auth::Accept)
-            } else {
-                Ok(server::Auth::Reject {
-                    proceed_with_methods: None,
-                    partial_success: false,
-                })
-            }
+    ) -> Result<server::Auth, Self::Error> {
+        if user == "test" && password == "secret" {
+            Ok(server::Auth::Accept)
+        } else {
+            Ok(server::Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            })
         }
     }
 
-    fn auth_publickey(
+    async fn auth_publickey(
         &mut self,
         _user: &str,
         _key: &ssh_key::PublicKey,
-    ) -> impl std::future::Future<Output = Result<server::Auth, Self::Error>> + Send {
-        async move { Ok(server::Auth::Accept) }
+    ) -> Result<server::Auth, Self::Error> {
+        Ok(server::Auth::Accept)
     }
 
-    fn pty_request(
+    async fn pty_request(
         &mut self,
         channel: ChannelId,
         _term: &str,
@@ -115,23 +123,19 @@ impl server::Handler for EchoServer {
         _pix_height: u32,
         _modes: &[(russh::Pty, u32)],
         session: &mut server::Session,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            let _ = session.channel_success(channel);
-            Ok(())
-        }
+    ) -> Result<(), Self::Error> {
+        let _ = session.channel_success(channel);
+        Ok(())
     }
 
-    fn shell_request(
+    async fn shell_request(
         &mut self,
         channel: ChannelId,
         session: &mut server::Session,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            let _ = session.channel_success(channel);
-            session.data(channel, b"welcome to echo shell\r\n".to_vec())?;
-            Ok(())
-        }
+    ) -> Result<(), Self::Error> {
+        let _ = session.channel_success(channel);
+        session.data(channel, b"welcome to echo shell\r\n".to_vec())?;
+        Ok(())
     }
 
     async fn data(
@@ -174,6 +178,7 @@ fn connect_req(port: u16, auto_reconnect: bool) -> ConnectRequest {
         otp_secret: None,
         keepalive: 5,
         auto_reconnect,
+        proxy: None,
     }
 }
 
@@ -210,7 +215,7 @@ async fn full_connection_lifecycle() {
     )));
     let sink = Arc::new(TestSink::new());
     let id = manager
-        .create(manager.clone(), sink.clone(), connect_req(port, true))
+        .create(manager.clone(), sink.clone(), None, connect_req(port, true))
         .await
         .expect("create should succeed");
 
@@ -273,6 +278,58 @@ async fn full_connection_lifecycle() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn raw_output_channel_receives_shell_data() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let port = rx.await.unwrap();
+
+    let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
+        "raw-output",
+        port,
+    )));
+    let sink = Arc::new(TestSink::new());
+    let collector = Arc::new(CollectOutput(StdMutex::new(Vec::new())));
+    let id = manager
+        .create(
+            manager.clone(),
+            sink.clone(),
+            Some(collector.clone()),
+            connect_req(port, false),
+        )
+        .await
+        .expect("create should succeed");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !sink.connected.load(Ordering::SeqCst) && tokio::time::Instant::now() < deadline {
+        accept_pending_host_key(&manager, &sink).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        sink.connected.load(Ordering::SeqCst),
+        "should connect within 15s"
+    );
+
+    manager
+        .write(id, b"channel-test".to_vec())
+        .await
+        .expect("write should work");
+
+    let output_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut got_raw = false;
+    while tokio::time::Instant::now() < output_deadline {
+        let out = collector.0.lock().unwrap().clone();
+        if String::from_utf8_lossy(&out).contains("echo: channel-test") {
+            got_raw = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(got_raw, "raw output channel should receive echoed bytes");
+
+    manager.disconnect(sink.clone(), id).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let server_task = tokio::spawn(async move { start_echo_server(tx).await });
@@ -286,7 +343,7 @@ async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
     let mut req = connect_req(port, false);
     req.password = Some("wrong-password".to_string());
     let id = manager
-        .create(manager.clone(), sink.clone(), req)
+        .create(manager.clone(), sink.clone(), None, req)
         .await
         .expect("create should not fail");
 
@@ -331,7 +388,7 @@ async fn auth_failure_does_not_retry_with_auto_reconnect() {
     let mut req = connect_req(port, true);
     req.password = Some("wrong-password".to_string());
     let id = manager
-        .create(manager.clone(), sink.clone(), req)
+        .create(manager.clone(), sink.clone(), None, req)
         .await
         .expect("create should not fail");
 

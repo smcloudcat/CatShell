@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
 import { FeedbackHost } from './components/Feedback'
@@ -9,13 +9,13 @@ import { useHosts } from './store/hosts'
 import { useVault } from './store/vault'
 import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
+import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
 import { HomeView } from './views/HomeView'
 import { HostsView } from './views/HostsView'
 import { SessionsView } from './views/sessions/SessionsView'
 import { SettingsView } from './views/SettingsView'
 import { ForwardView } from './views/ForwardView'
 import { accentContrastOf, resolveMode, withModeBackgrounds } from './types/theme'
-import { knownHostsSetMode } from './api/ssh'
 import './styles/glass.css'
 import './App.css'
 
@@ -31,21 +31,36 @@ const NAV_ITEMS: { id: ViewId; icon: IconName; label: string }[] = [
   { id: 'settings', icon: 'settings', label: '设置' }
 ]
 
+const LAST_VIEW_IDS: ViewId[] = ['home', 'sessions', 'hosts', 'forward', 'settings']
+
 function App() {
   const { theme, init } = useSettings()
   const sidebarCollapsed = useSettings((s) => s.sidebarCollapsed)
   const toggleSidebar = useSettings((s) => s.toggleSidebar)
+  const settingsReady = useSettings((s) => s.ready)
+  const lastView = useSettings((s) => s.lastView)
+  const knownHostsMode = useSettings((s) => s.knownHostsMode)
   const sessionsInit = useSessions((s) => s.init)
   const hostsInit = useHosts((s) => s.init)
   const vaultInit = useVault((s) => s.init)
   const snippetsInit = useSnippets((s) => s.init)
   const auditInit = useAudit((s) => s.init)
   const sessionCount = useSessions((s) => s.order.length)
+  const connectedCount = useSessions((s) =>
+    s.order.filter((id) => {
+      const status = s.sessions[id]?.status
+      return status === 'connected' || status === 'connecting' || status === 'reconnecting'
+    }).length
+  )
   const hostKeyPrompt = useSessions((s) => s.hostKeyPrompt)
   const confirmHostKey = useSessions((s) => s.confirmHostKey)
   const hostKeyWarning = useSessions((s) => s.hostKeyWarning)
   const clearHostKeyWarning = () => useSessions.setState({ hostKeyWarning: null })
+  const kbiPrompt = useSessions((s) => s.kbiPrompt)
+  const answerKbi = useSessions((s) => s.answerKbi)
+  const cancelKbi = useSessions((s) => s.cancelKbi)
   const [view, setView] = useState<ViewId>('home')
+  const [kbiValues, setKbiValues] = useState<string[]>([])
 
   useEffect(() => {
     init()
@@ -54,18 +69,28 @@ function App() {
     void vaultInit()
     void snippetsInit()
     void auditInit()
-    void (async () => {
-      const { knownHostsMode, ready } = useSettings.getState()
-      if (!ready) return
-      if (knownHostsMode === 'appdata' && '__TAURI_INTERNALS__' in window) {
-        try {
-          await knownHostsSetMode('appdata')
-        } catch {
-          /* 浏览器预览模式或后端不可用时保持默认路径 */
-        }
-      }
-    })()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
+
+  // 设置读取完成后再恢复上次视图；恢复完成前不持久化，避免默认视图覆盖记录
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (!settingsReady) return
+    if (LAST_VIEW_IDS.includes(lastView as ViewId)) setView(lastView as ViewId)
+    if (knownHostsMode === 'appdata' && '__TAURI_INTERNALS__' in window) {
+      void knownHostsSetMode('appdata').catch(() => undefined)
+    }
+    restoredRef.current = true
+  }, [settingsReady])
+
+  useEffect(() => {
+    if (!restoredRef.current) return
+    void useSettings.getState().setLastView(view)
+  }, [view])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    void traySetActiveCount(connectedCount).catch(() => undefined)
+  }, [connectedCount])
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
@@ -74,6 +99,11 @@ function App() {
     const appWindow = getCurrentWindow()
     void appWindow
       .onCloseRequested(async (event) => {
+        if (useSettings.getState().closeToTray) {
+          event.preventDefault()
+          await appWindow.hide()
+          return
+        }
         const { sessions } = useSessions.getState()
         const activeCount = Object.values(sessions).filter(
           (session) => session.status === 'connected' || session.status === 'connecting' || session.status === 'reconnecting'
@@ -309,6 +339,59 @@ function App() {
             </div>
             <footer className="modal-footer">
               <button className="glass-btn" onClick={clearHostKeyWarning}>关闭</button>
+            </footer>
+          </div>
+        </div>
+      )}
+      {kbiPrompt && (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <div className="modal glass host-key-modal">
+            <header className="modal-header">
+              <div className="modal-title">
+                <Icon name="key" size={18} />
+                {kbiPrompt.name || '服务器要求交互式验证'}
+              </div>
+            </header>
+            <div className="modal-body">
+              {kbiPrompt.instructions && <p className="section-tip">{kbiPrompt.instructions}</p>}
+              {kbiPrompt.prompts.map((question, index) => (
+                <label className="field span-2" key={`${kbiPrompt.sessionId}-${index}`}>
+                  <span className="field-label">{question.prompt || `提示 ${index + 1}`}</span>
+                  <input
+                    className="glass-input"
+                    type={question.echo ? 'text' : 'password'}
+                    autoComplete={question.echo ? 'off' : 'one-time-code'}
+                    value={kbiValues[index] ?? ''}
+                    onChange={(e) =>
+                      setKbiValues((values) => {
+                        const next = [...values]
+                        next[index] = e.target.value
+                        return next
+                      })
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                        e.preventDefault()
+                        void answerKbi(kbiPrompt.prompts.map((_, i) => kbiValues[i] ?? ''))
+                      }
+                    }}
+                    autoFocus
+                  />
+                </label>
+              ))}
+            </div>
+            <footer className="modal-footer">
+              <button className="glass-btn" onClick={() => { setKbiValues([]); cancelKbi() }}>取消</button>
+              <button
+                className="glass-btn primary"
+                onClick={() => {
+                  void answerKbi(kbiPrompt.prompts.map((_, i) => kbiValues[i] ?? ''))
+                  setKbiValues([])
+                }}
+              >
+                <Icon name="key" size={15} />
+                提交
+              </button>
             </footer>
           </div>
         </div>

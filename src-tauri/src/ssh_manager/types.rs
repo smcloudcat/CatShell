@@ -10,6 +10,21 @@ pub(super) const HOST_KEY_CONFIRM_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub key_path: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectRequest {
     pub name: String,
     pub host: String,
@@ -28,6 +43,8 @@ pub struct ConnectRequest {
     pub keepalive: u64,
     #[serde(default)]
     pub auto_reconnect: bool,
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 fn default_keepalive() -> u64 {

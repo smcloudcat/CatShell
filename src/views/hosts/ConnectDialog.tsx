@@ -3,11 +3,10 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { useSessions } from '../../store/sessions'
 import { AuthMethod, ConnectRequest } from '../../types/session'
-import { HostProfile } from '../../types/host'
+import { HostProfile, HOST_ICON_OPTIONS, normalizeHostIcon } from '../../types/host'
+import { HostIconName } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
-import { HostIconName, normalizeHostIcon } from '../../types/host'
-import { HOST_ICON_OPTIONS } from '../../types/host'
 
 interface Props {
   open: boolean
@@ -31,6 +30,14 @@ interface FormState {
   autoReconnect: boolean
   group: string
   tags: string
+  proxyEnabled: boolean
+  proxyHost: string
+  proxyPort: string
+  proxyUsername: string
+  proxyAuthMethod: 'password' | 'key'
+  proxyPassword: string
+  proxyKeyPath: string
+  proxyPassphrase: string
 }
 
 const FORM_EMPTY: FormState = {
@@ -47,7 +54,15 @@ const FORM_EMPTY: FormState = {
   keepalive: '30',
   autoReconnect: true,
   group: '',
-  tags: ''
+  tags: '',
+  proxyEnabled: false,
+  proxyHost: '',
+  proxyPort: '22',
+  proxyUsername: '',
+  proxyAuthMethod: 'password',
+  proxyPassword: '',
+  proxyKeyPath: '',
+  proxyPassphrase: ''
 }
 
 function formFromProfile(profile?: HostProfile | null): FormState {
@@ -66,7 +81,15 @@ function formFromProfile(profile?: HostProfile | null): FormState {
     keepalive: String(profile.keepAliveInterval),
     autoReconnect: profile.autoReconnect,
     group: profile.group ?? '',
-    tags: profile.tags.join(', ')
+    tags: profile.tags.join(', '),
+    proxyEnabled: profile.proxy.enabled,
+    proxyHost: profile.proxy.host,
+    proxyPort: String(profile.proxy.port),
+    proxyUsername: profile.proxy.username,
+    proxyAuthMethod: profile.proxy.authMethod,
+    proxyPassword: '',
+    proxyKeyPath: profile.proxy.keyPath ?? '',
+    proxyPassphrase: ''
   }
 }
 
@@ -103,6 +126,11 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         next.password = credential.password ?? ''
         next.passphrase = credential.passphrase ?? ''
       }
+      const proxyCredential = getCredential(`proxy:${profile.id}`)
+      if (proxyCredential) {
+        next.proxyPassword = proxyCredential.password ?? ''
+        next.proxyPassphrase = proxyCredential.passphrase ?? ''
+      }
     }
     setForm(next)
   }, [getCredential, profile, vaultUnlocked, visible])
@@ -111,7 +139,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }))
 
-  const pickKey = async () => {
+  const pickKey = async (target: 'keyPath' | 'proxyKeyPath' = 'keyPath') => {
     try {
       const file = await open({
         multiple: false,
@@ -122,10 +150,39 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         ]
       })
       if (typeof file === 'string') {
-        set({ keyPath: file })
+        set({ [target]: file } as Partial<FormState>)
       }
     } catch {
       setError('无法打开文件选择器')
+    }
+  }
+
+  const buildProxy = ():
+    | { ok: true; proxy: ConnectRequest['proxy'] }
+    | { ok: false; error: string } => {
+    if (!form.proxyEnabled) return { ok: true, proxy: null }
+    const proxyHost = form.proxyHost.trim()
+    const proxyPort = Number(form.proxyPort)
+    const proxyUsername = form.proxyUsername.trim()
+    if (!proxyHost) return { ok: false, error: '请输入跳板机地址' }
+    if (!proxyUsername) return { ok: false, error: '请输入跳板机用户名' }
+    if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+      return { ok: false, error: '跳板机端口必须是 1 到 65535 之间的整数' }
+    }
+    if (form.proxyAuthMethod === 'key' && !form.proxyKeyPath.trim()) {
+      return { ok: false, error: '跳板机认证选择了私钥，请选择私钥文件' }
+    }
+    return {
+      ok: true,
+      proxy: {
+        host: proxyHost,
+        port: proxyPort,
+        username: proxyUsername,
+        authMethod: form.proxyAuthMethod,
+        password: form.proxyAuthMethod === 'password' && form.proxyPassword ? form.proxyPassword : null,
+        keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null,
+        passphrase: form.proxyAuthMethod === 'key' && form.proxyPassphrase ? form.proxyPassphrase : null
+      }
     }
   }
 
@@ -149,12 +206,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setError('请输入登录密码')
       return
     }
-    if (form.authMethod === 'keyboard-interactive' && !form.otpSecret.trim()) {
-      setError('请输入一次性验证码')
-      return
-    }
     if (form.authMethod === 'key' && !form.keyPath.trim()) {
       setError('请选择私钥文件')
+      return
+    }
+    const proxy = buildProxy()
+    if (!proxy.ok) {
+      setError(proxy.error)
       return
     }
     const request: ConnectRequest = {
@@ -168,7 +226,8 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       passphrase: form.authMethod === 'key' && form.passphrase ? form.passphrase : null,
       otpSecret: form.authMethod === 'keyboard-interactive' ? form.otpSecret.trim() : null,
       keepalive: Number(form.keepalive) || 30,
-      autoReconnect: form.autoReconnect
+      autoReconnect: form.autoReconnect,
+      proxy: proxy.proxy
     }
     const hostId = profile?.id ?? crypto.randomUUID()
     setBusy(true)
@@ -192,6 +251,14 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           description: profile?.description ?? '',
           keepAliveInterval: request.keepalive,
           autoReconnect: request.autoReconnect,
+          proxy: {
+            enabled: form.proxyEnabled,
+            host: form.proxyHost.trim(),
+            port: Number(form.proxyPort) || 22,
+            username: form.proxyUsername.trim(),
+            authMethod: form.proxyAuthMethod,
+            keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null
+          },
           createdAt: profile?.createdAt ?? now,
           updatedAt: now
         })
@@ -199,6 +266,12 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           await saveCredential(hostId, {
             password: request.password ?? undefined,
             passphrase: request.passphrase ?? undefined
+          })
+        }
+        if (vaultUnlocked && form.proxyEnabled && (request.proxy?.password || request.proxy?.passphrase)) {
+          await saveCredential(`proxy:${hostId}`, {
+            password: request.proxy?.password ?? undefined,
+            passphrase: request.proxy?.passphrase ?? undefined
           })
         }
         setForm(FORM_EMPTY)
@@ -253,6 +326,14 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         description: profile?.description ?? '',
         keepAliveInterval: Math.min(300, Math.max(5, Number(form.keepalive) || 30)),
         autoReconnect: form.autoReconnect,
+        proxy: {
+          enabled: form.proxyEnabled,
+          host: form.proxyHost.trim(),
+          port: Number(form.proxyPort) || 22,
+          username: form.proxyUsername.trim(),
+          authMethod: form.proxyAuthMethod,
+          keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null
+        },
         createdAt: profile?.createdAt ?? now,
         updatedAt: now
         })
@@ -260,6 +341,12 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         await saveCredential(hostId, {
           password: form.password || undefined,
           passphrase: form.passphrase || undefined
+        })
+      }
+      if (vaultUnlocked && form.proxyEnabled && (form.proxyPassword || form.proxyPassphrase)) {
+        await saveCredential(`proxy:${hostId}`, {
+          password: form.proxyPassword || undefined,
+          passphrase: form.proxyPassphrase || undefined
         })
       }
       setForm(FORM_EMPTY)
@@ -356,6 +443,12 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   SSH 私钥
                 </button>
                 <button
+                  className={`seg-btn ${form.authMethod === 'agent' ? 'active' : ''}`}
+                  onClick={() => set({ authMethod: 'agent' })}
+                >
+                  SSH Agent
+                </button>
+                <button
                   className={`seg-btn ${form.authMethod === 'keyboard-interactive' ? 'active' : ''}`}
                   onClick={() => set({ authMethod: 'keyboard-interactive' })}
                 >
@@ -373,6 +466,14 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   onChange={(e) => set({ password: e.target.value })}
                 />
               </label>
+            ) : form.authMethod === 'agent' ? (
+              <div className="field span-2">
+                <span className="field-label">SSH Agent</span>
+                <div className="section-tip">
+                  Windows 优先尝试 Pageant，其次 OpenSSH agent 命名管道（\\.\pipe\openssh-ssh-agent）；
+                  其他平台读取 SSH_AUTH_SOCK。连接时将逐个尝试 Agent 中的密钥，无需输入口令。
+                </div>
+              </div>
             ) : form.authMethod === 'keyboard-interactive' ? (
               <>
                 <label className="field span-2">
@@ -386,13 +487,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                   />
                 </label>
                 <label className="field span-2">
-                  <span className="field-label">一次性验证码</span>
+                  <span className="field-label">一次性验证码（留空则连接时弹出交互输入）</span>
                   <input
                     className="glass-input"
                     type="password"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    placeholder="输入服务器提示的验证码"
+                    placeholder="预填后连接时自动应答；留空则逐个提示输入"
                     value={form.otpSecret}
                     onChange={(e) => set({ otpSecret: e.target.value })}
                   />
@@ -408,9 +509,9 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                       readOnly
                       placeholder="未选择私钥"
                       value={form.keyPath}
-                      onDoubleClick={pickKey}
+                      onDoubleClick={() => void pickKey('keyPath')}
                     />
-                    <button className="glass-btn" onClick={pickKey} type="button">
+                    <button className="glass-btn" onClick={() => void pickKey('keyPath')} type="button">
                       <Icon name="folder" size={14} />
                       选择
                     </button>
@@ -457,6 +558,108 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                 onChange={(e) => set({ tags: e.target.value })}
               />
             </label>
+            <label className="field checkbox-field">
+              <span className="field-label">跳板机（ProxyJump）</span>
+              <input
+                type="checkbox"
+                checked={form.proxyEnabled}
+                onChange={(e) => set({ proxyEnabled: e.target.checked })}
+              />
+            </label>
+            {form.proxyEnabled && (
+              <>
+                <label className="field">
+                  <span className="field-label">跳板机地址</span>
+                  <input
+                    className="glass-input"
+                    placeholder="例如 bastion.corp"
+                    value={form.proxyHost}
+                    onChange={(e) => set({ proxyHost: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">跳板机端口</span>
+                  <input
+                    className="glass-input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.proxyPort}
+                    onChange={(e) => set({ proxyPort: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">跳板机用户名</span>
+                  <input
+                    className="glass-input"
+                    placeholder="root"
+                    value={form.proxyUsername}
+                    onChange={(e) => set({ proxyUsername: e.target.value })}
+                  />
+                </label>
+                <div className="field">
+                  <span className="field-label">跳板机认证</span>
+                  <div className="seg-group">
+                    <button
+                      className={`seg-btn ${form.proxyAuthMethod === 'password' ? 'active' : ''}`}
+                      onClick={() => set({ proxyAuthMethod: 'password' })}
+                    >
+                      密码
+                    </button>
+                    <button
+                      className={`seg-btn ${form.proxyAuthMethod === 'key' ? 'active' : ''}`}
+                      onClick={() => set({ proxyAuthMethod: 'key' })}
+                    >
+                      私钥
+                    </button>
+                  </div>
+                </div>
+                {form.proxyAuthMethod === 'password' ? (
+                  <label className="field">
+                    <span className="field-label">跳板机密码</span>
+                    <input
+                      className="glass-input"
+                      type="password"
+                      value={form.proxyPassword}
+                      onChange={(e) => set({ proxyPassword: e.target.value })}
+                    />
+                  </label>
+                ) : (
+                  <div className="field">
+                    <span className="field-label">跳板机私钥</span>
+                    <div className="key-picker">
+                      <input
+                        className="glass-input"
+                        readOnly
+                        placeholder="未选择私钥"
+                        value={form.proxyKeyPath}
+                        onDoubleClick={() => void pickKey('proxyKeyPath')}
+                      />
+                      <button className="glass-btn" onClick={() => void pickKey('proxyKeyPath')} type="button">
+                        <Icon name="folder" size={14} />
+                        选择
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {form.proxyAuthMethod === 'key' && (
+                  <label className="field">
+                    <span className="field-label">跳板机私钥口令（可选）</span>
+                    <input
+                      className="glass-input"
+                      type="password"
+                      value={form.proxyPassphrase}
+                      onChange={(e) => set({ proxyPassphrase: e.target.value })}
+                    />
+                  </label>
+                )}
+                <div className="field span-2">
+                  <div className="section-tip">
+                    连接时先登录跳板机，再经其 direct-tcpip 隧道连接目标主机；目标与跳板机的主机指纹分别确认。跳板机凭据与登录密码同等对待，不写入主机配置。
+                  </div>
+                </div>
+              </>
+            )}
             <label className="field checkbox-field">
               <span className="field-label">断线自动重连</span>
               <input

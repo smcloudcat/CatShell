@@ -93,17 +93,31 @@ export function HostsView({ onOpenSessions }: Props) {
 
   const reconnect = async (host: HostProfile) => {
     const credential = vaultUnlocked ? getCredential(host.id) : null
+    const proxyCredential = host.proxy.enabled && vaultUnlocked ? getCredential(`proxy:${host.id}`) : null
     const hasAuth =
       host.authMethod === 'key'
         ? Boolean(host.keyPath)
-        : host.authMethod === 'password'
-          ? Boolean(credential?.password)
-          : false
+        : host.authMethod === 'agent'
+          ? true
+          : host.authMethod === 'password'
+            ? Boolean(credential?.password)
+            : Boolean(credential?.password)
     if (!hasAuth) {
       setEditingHost(host)
       setDialogOpen(true)
       return
     }
+    const proxy = host.proxy.enabled
+      ? {
+          host: host.proxy.host,
+          port: host.proxy.port,
+          username: host.proxy.username,
+          authMethod: host.proxy.authMethod,
+          password: host.proxy.authMethod === 'password' ? (proxyCredential?.password ?? null) : null,
+          keyPath: host.proxy.authMethod === 'key' ? host.proxy.keyPath ?? null : null,
+          passphrase: host.proxy.authMethod === 'key' ? (proxyCredential?.passphrase ?? null) : null
+        }
+      : null
     const request: ConnectRequest = {
       name: host.name,
       host: host.host,
@@ -115,7 +129,8 @@ export function HostsView({ onOpenSessions }: Props) {
       passphrase: host.authMethod === 'key' ? (credential?.passphrase ?? null) : null,
       otpSecret: null,
       keepalive: host.keepAliveInterval,
-      autoReconnect: host.autoReconnect
+      autoReconnect: host.autoReconnect,
+      proxy
     }
     try {
       await openSession(request)

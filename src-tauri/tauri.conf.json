@@ -35,5 +35,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/smcloudcat/catshell/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

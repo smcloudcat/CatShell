@@ -12,6 +12,9 @@ const KNOWN_HOSTS_MODE_KEY = 'knownHostsMode'
 const TERMINAL_KEY = 'terminal'
 const MONITOR_INTERVAL_KEY = 'monitorIntervalSeconds'
 const SESSION_PANELS_KEY = 'sessionPanelsCollapsed'
+const LAST_VIEW_KEY = 'lastView'
+const CLOSE_TO_TRAY_KEY = 'closeToTray'
+const LANGUAGE_KEY = 'language'
 
 export const VAULT_AUTO_LOCK_OPTIONS = [0, 5, 15, 30]
 export const DEFAULT_VAULT_AUTO_LOCK_MINUTES = 15
@@ -46,6 +49,10 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
 
 export const MONITOR_INTERVAL_OPTIONS = [5, 10, 30, 60]
 export const DEFAULT_MONITOR_INTERVAL_SECONDS = 10
+
+export type Language = 'zh-CN' | 'en-US'
+export const LANGUAGE_OPTIONS: Language[] = ['zh-CN', 'en-US']
+export const DEFAULT_LANGUAGE: Language = 'zh-CN'
 
 export interface SessionPanelState {
   monitorCollapsed: boolean
@@ -82,6 +89,9 @@ interface SettingsState {
   terminal: TerminalSettings
   monitorIntervalSeconds: number
   sessionPanels: SessionPanelState
+  lastView: string | null
+  closeToTray: boolean
+  language: Language
   ready: boolean
   setTheme: (patch: Partial<ThemeConfig>) => void
   setAppearanceMode: (mode: ThemeConfig['mode']) => void
@@ -102,6 +112,11 @@ interface SettingsState {
   setMonitorIntervalSeconds: (seconds: number) => void
   saveMonitorIntervalSeconds: () => Promise<void>
   setSessionPanelCollapsed: (panel: 'monitor' | 'sftp', collapsed: boolean) => Promise<void>
+  setLastView: (view: string) => void
+  setCloseToTray: (enabled: boolean) => void
+  saveCloseToTray: () => Promise<void>
+  setLanguage: (language: Language) => void
+  saveLanguage: () => Promise<void>
   init: () => Promise<void>
 }
 
@@ -122,6 +137,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
   terminal: { ...DEFAULT_TERMINAL_SETTINGS },
   monitorIntervalSeconds: DEFAULT_MONITOR_INTERVAL_SECONDS,
   sessionPanels: { ...DEFAULT_SESSION_PANELS },
+  lastView: null,
+  closeToTray: true,
+  language: DEFAULT_LANGUAGE,
   ready: false,
   setTheme: (patch) => set((state) => ({ theme: { ...state.theme, ...patch } })),
   setAppearanceMode: (mode) =>
@@ -244,6 +262,40 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
     })()
   },
+  setLastView: (view) => {
+    set({ lastView: view })
+    void (async () => {
+      try {
+        const store = await load(STORE_FILE)
+        await store.set(LAST_VIEW_KEY, view)
+        await store.save()
+      } catch {
+        localStorage.setItem(LAST_VIEW_KEY, JSON.stringify(view))
+      }
+    })()
+  },
+  setCloseToTray: (enabled) => set({ closeToTray: enabled }),
+  saveCloseToTray: async () => {
+    const enabled = get().closeToTray
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(CLOSE_TO_TRAY_KEY, enabled)
+      await store.save()
+    } catch {
+      localStorage.setItem(CLOSE_TO_TRAY_KEY, JSON.stringify(enabled))
+    }
+  },
+  setLanguage: (language) => set({ language: LANGUAGE_OPTIONS.includes(language) ? language : DEFAULT_LANGUAGE }),
+  saveLanguage: async () => {
+    const language = get().language
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(LANGUAGE_KEY, language)
+      await store.save()
+    } catch {
+      localStorage.setItem(LANGUAGE_KEY, JSON.stringify(language))
+    }
+  },
   init: async () => {
     if (get().ready) return
     if (initializationPromise) return initializationPromise
@@ -263,6 +315,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const savedTerminal = await store.get<Partial<TerminalSettings>>(TERMINAL_KEY)
       const savedInterval = await store.get<number>(MONITOR_INTERVAL_KEY)
       const savedPanels = await store.get<Partial<SessionPanelState>>(SESSION_PANELS_KEY)
+      const savedLastView = await store.get<string>(LAST_VIEW_KEY)
+      const savedCloseToTray = await store.get<boolean>(CLOSE_TO_TRAY_KEY)
+      const savedLanguage = await store.get<Language>(LANGUAGE_KEY)
       if (saved && !isLegacyTheme(saved)) {
         set({ theme: { ...get().theme, ...saved, gradient: { ...get().theme.gradient, ...saved.gradient } } })
       }
@@ -289,6 +344,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (savedPanels && typeof savedPanels === 'object') {
         set({ sessionPanels: normalizeSessionPanels(savedPanels) })
+      }
+      if (typeof savedLastView === 'string' && savedLastView) {
+        set({ lastView: savedLastView })
+      }
+      if (typeof savedCloseToTray === 'boolean') {
+        set({ closeToTray: savedCloseToTray })
+      }
+      if (savedLanguage === 'zh-CN' || savedLanguage === 'en-US') {
+        set({ language: savedLanguage })
       }
     } catch (err) {
       console.warn('读取主题设置失败，使用默认值', err)
@@ -378,6 +442,23 @@ export const useSettings = create<SettingsState>((set, get) => ({
         } catch {
           /* ignore corrupt stored session panel state */
         }
+      }
+      const savedLastViewRaw = localStorage.getItem(LAST_VIEW_KEY)
+      if (savedLastViewRaw) {
+        try {
+          const parsed: unknown = JSON.parse(savedLastViewRaw)
+          if (typeof parsed === 'string' && parsed) set({ lastView: parsed })
+        } catch {
+          /* ignore corrupt stored last view */
+        }
+      }
+      const savedCloseToTrayRaw = localStorage.getItem(CLOSE_TO_TRAY_KEY)
+      if (savedCloseToTrayRaw === 'true' || savedCloseToTrayRaw === 'false') {
+        set({ closeToTray: savedCloseToTrayRaw === 'true' })
+      }
+      const savedLanguageRaw = localStorage.getItem(LANGUAGE_KEY)
+      if (savedLanguageRaw === 'zh-CN' || savedLanguageRaw === 'en-US') {
+        set({ language: savedLanguageRaw })
       }
     } finally {
       set({ ready: true })

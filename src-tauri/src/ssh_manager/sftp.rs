@@ -1,17 +1,22 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use russh_sftp::protocol::OpenFlags;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-use super::SshManager;
+use super::{EventSink, SshManager};
 
 const MAX_SFTP_FILE_SIZE: usize = 64 * 1024 * 1024;
 const SFTP_CHUNK_SIZE: usize = 256 * 1024;
 const REMOTE_DELETE_MAX_DEPTH: usize = 16;
 const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
+const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const DISK_PART_SUFFIX: &str = ".catshell-part";
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +45,135 @@ pub struct SftpChunk {
     pub done: bool,
     pub transferred: u64,
     pub total: u64,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpDiskTransferStart {
+    pub transfer_id: u64,
+    pub total: u64,
+    pub resumed: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpDiskTransferInfo {
+    pub transfer_id: u64,
+    pub session_id: u64,
+    pub direction: String,
+    pub file_name: String,
+    pub remote_path: String,
+    pub local_path: String,
+    pub transferred: u64,
+    pub total: u64,
+    pub done: bool,
+    pub cancelled: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SftpDiskProgress {
+    transfer_id: u64,
+    session_id: u64,
+    direction: String,
+    file_name: String,
+    transferred: u64,
+    total: u64,
+    done: bool,
+    cancelled: bool,
+    error: Option<String>,
+}
+
+/// 落盘流式传输任务：数据完全在 Rust 侧读写本地磁盘，不经过前端内存。
+/// 进度以节流事件（≥300ms）推送给前端；`.catshell-part` 半成品文件支持断点续传。
+pub struct SftpDiskTransfer {
+    pub id: u64,
+    pub session_id: u64,
+    pub remote_path: String,
+    pub local_path: String,
+    pub file_name: String,
+    pub direction: &'static str,
+    pub total: u64,
+    pub transferred: AtomicU64,
+    pub cancelled: AtomicBool,
+    pub done: AtomicBool,
+    pub error: StdMutex<Option<String>>,
+    pub last_emit: AtomicU64,
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+impl SftpDiskTransfer {
+    fn info(&self) -> SftpDiskTransferInfo {
+        SftpDiskTransferInfo {
+            transfer_id: self.id,
+            session_id: self.session_id,
+            direction: self.direction.to_string(),
+            file_name: self.file_name.clone(),
+            remote_path: self.remote_path.clone(),
+            local_path: self.local_path.clone(),
+            transferred: self.transferred.load(Ordering::SeqCst),
+            total: self.total,
+            done: self.done.load(Ordering::SeqCst),
+            cancelled: self.cancelled.load(Ordering::SeqCst),
+            error: self.error.lock().expect("磁盘传输错误锁").clone(),
+        }
+    }
+
+    fn progress(&self) -> SftpDiskProgress {
+        SftpDiskProgress {
+            transfer_id: self.id,
+            session_id: self.session_id,
+            direction: self.direction.to_string(),
+            file_name: self.file_name.clone(),
+            transferred: self.transferred.load(Ordering::SeqCst),
+            total: self.total,
+            done: self.done.load(Ordering::SeqCst),
+            cancelled: self.cancelled.load(Ordering::SeqCst),
+            error: self.error.lock().expect("磁盘传输错误锁").clone(),
+        }
+    }
+
+    fn finish_with_error(&self, message: String) {
+        *self.error.lock().expect("磁盘传输错误锁") = Some(message);
+        self.done.store(true, Ordering::SeqCst);
+    }
+}
+
+fn emit_disk_progress(sink: &dyn EventSink, transfer: &SftpDiskTransfer, force: bool) {
+    let now = now_millis();
+    if !force {
+        let last = transfer.last_emit.load(Ordering::SeqCst);
+        if now.saturating_sub(last) < 300 {
+            return;
+        }
+    }
+    transfer.last_emit.store(now, Ordering::SeqCst);
+    sink.emit(
+        "sftp-disk-progress",
+        serde_json::to_value(transfer.progress()).unwrap_or_default(),
+    );
+}
+
+fn validate_local_path(path: &str) -> Result<String, String> {
+    let path = path.trim().to_string();
+    if path.is_empty() || path.contains('\0') {
+        return Err("本地路径无效".to_string());
+    }
+    if path.len() > 1024 {
+        return Err("本地路径过长".to_string());
+    }
+    Ok(path)
+}
+
+fn part_file_path(local_path: &str) -> String {
+    format!("{local_path}{DISK_PART_SUFFIX}")
 }
 
 /// 跨 command 调用存活的一次 SFTP 流式传输（上传或下载）。
@@ -497,5 +631,353 @@ impl SshManager {
         self.close_transfer(&transfer, transfer.direction == "upload")
             .await;
         Ok(())
+    }
+
+    /// 磁盘级下载：远端文件直接流入本地磁盘（Rust 侧读写），
+    /// 存在 `.catshell-part` 半成品时自动断点续传。
+    pub async fn sftp_disk_download_start(
+        &self,
+        manager: Arc<SshManager>,
+        sink: Arc<dyn EventSink>,
+        id: u64,
+        remote_path: String,
+        local_path: String,
+        resume: bool,
+    ) -> Result<SftpDiskTransferStart, String> {
+        let remote_path = validate_sftp_path(remote_path)?;
+        let local_path = validate_local_path(&local_path)?;
+        if Path::new(&local_path).is_dir() {
+            return Err("目标路径是一个已存在的目录".to_string());
+        }
+        let file_name = Path::new(&remote_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .ok_or_else(|| "远程路径无效".to_string())?;
+        if let Some(parent) = Path::new(&local_path).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("创建本地目录失败: {error}"))?;
+            }
+        }
+
+        let sftp = self.open_sftp_channel(id).await?;
+        let metadata = sftp
+            .metadata(&remote_path)
+            .await
+            .map_err(|error| format!("读取远程文件信息失败: {error}"))?;
+        let total = metadata.size.unwrap_or(0);
+        let part_path = part_file_path(&local_path);
+
+        let mut start_offset: u64 = 0;
+        let mut resumed = false;
+        if resume {
+            if let Ok(part_meta) = std::fs::metadata(&part_path) {
+                let part_len = part_meta.len();
+                if part_len > 0 && part_len < total {
+                    start_offset = part_len;
+                    resumed = true;
+                }
+            }
+        }
+
+        let mut remote_file = sftp
+            .open(&remote_path)
+            .await
+            .map_err(|error| format!("打开远程文件失败: {error}"))?;
+        if start_offset > 0 {
+            remote_file
+                .seek(std::io::SeekFrom::Start(start_offset))
+                .await
+                .map_err(|error| format!("远程文件定位断点失败: {error}"))?;
+        }
+        let mut local_file = if resumed {
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&part_path)
+                .await
+                .map_err(|error| format!("打开本地半成品文件失败: {error}"))?
+        } else {
+            tokio::fs::File::create(&part_path)
+                .await
+                .map_err(|error| format!("创建本地文件失败: {error}"))?
+        };
+
+        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
+        let transfer = Arc::new(SftpDiskTransfer {
+            id: transfer_id,
+            session_id: id,
+            remote_path,
+            local_path,
+            file_name,
+            direction: "download",
+            total,
+            transferred: AtomicU64::new(start_offset),
+            cancelled: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            error: StdMutex::new(None),
+            last_emit: AtomicU64::new(now_millis()),
+        });
+        self.sftp_disk_transfers
+            .lock()
+            .await
+            .insert(transfer_id, transfer.clone());
+
+        tauri::async_runtime::spawn(async move {
+            let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
+            loop {
+                if transfer.cancelled.load(Ordering::SeqCst) {
+                    transfer.done.store(true, Ordering::SeqCst);
+                    emit_disk_progress(sink.as_ref(), &transfer, true);
+                    break;
+                }
+                let read =
+                    tokio::time::timeout(DISK_CHUNK_TIMEOUT, remote_file.read(&mut buffer)).await;
+                match read {
+                    Err(_) => {
+                        transfer.finish_with_error("读取远程文件超时".to_string());
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        transfer.finish_with_error(format!("读取远程文件失败: {error}"));
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Ok(0)) => {
+                        if let Err(error) = remote_file.shutdown().await {
+                            transfer.finish_with_error(format!("完成远程读取失败: {error}"));
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
+                        }
+                        if let Err(error) = local_file.sync_all().await {
+                            transfer.finish_with_error(format!("写入本地文件失败: {error}"));
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
+                        }
+                        drop(local_file);
+                        drop(remote_file);
+                        let _ = sftp.close().await;
+                        if Path::new(&transfer.local_path).exists() {
+                            let _ = std::fs::remove_file(&transfer.local_path);
+                        }
+                        if let Err(error) = std::fs::rename(&part_path, &transfer.local_path) {
+                            transfer.finish_with_error(format!("保存本地文件失败: {error}"));
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
+                        }
+                        transfer.done.store(true, Ordering::SeqCst);
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Ok(n)) => {
+                        if let Err(error) = local_file.write_all(&buffer[..n]).await {
+                            transfer.finish_with_error(format!("写入本地文件失败: {error}"));
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
+                        }
+                        transfer.transferred.fetch_add(n as u64, Ordering::SeqCst);
+                        emit_disk_progress(sink.as_ref(), &transfer, false);
+                    }
+                }
+            }
+            manager
+                .sftp_disk_transfers
+                .lock()
+                .await
+                .remove(&transfer_id);
+        });
+        Ok(SftpDiskTransferStart {
+            transfer_id,
+            total,
+            resumed,
+        })
+    }
+
+    /// 磁盘级上传：本地文件在 Rust 侧读盘直接写入远端，不经前端内存。
+    /// 远端已存在更小的同名文件且 resume=true 时从远端断点续写。
+    pub async fn sftp_disk_upload_start(
+        &self,
+        manager: Arc<SshManager>,
+        sink: Arc<dyn EventSink>,
+        id: u64,
+        local_path: String,
+        remote_path: String,
+        resume: bool,
+    ) -> Result<SftpDiskTransferStart, String> {
+        let remote_path = validate_sftp_path(remote_path)?;
+        let local_path = validate_local_path(&local_path)?;
+        let local_meta = tokio::fs::metadata(&local_path)
+            .await
+            .map_err(|error| format!("读取本地文件失败: {error}"))?;
+        if !local_meta.is_file() {
+            return Err("本地路径不是一个文件".to_string());
+        }
+        let total = local_meta.len();
+        let file_name = Path::new(&local_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .ok_or_else(|| "本地路径无效".to_string())?;
+
+        let sftp = self.open_sftp_channel(id).await?;
+        let mut start_offset: u64 = 0;
+        let mut resumed = false;
+        if resume {
+            if let Ok(remote_meta) = sftp.metadata(&remote_path).await {
+                let remote_len = remote_meta.size.unwrap_or(0);
+                if remote_len > 0 && remote_len < total {
+                    start_offset = remote_len;
+                    resumed = true;
+                }
+            }
+        }
+
+        let mut remote_file = if resumed {
+            let mut file = sftp
+                .open_with_flags(&remote_path, OpenFlags::WRITE | OpenFlags::CREATE)
+                .await
+                .map_err(|error| format!("打开远程文件失败: {error}"))?;
+            file.seek(std::io::SeekFrom::Start(start_offset))
+                .await
+                .map_err(|error| format!("远程文件定位断点失败: {error}"))?;
+            file
+        } else {
+            sftp.create(&remote_path)
+                .await
+                .map_err(|error| format!("创建远程文件失败: {error}"))?
+        };
+        let mut local_file = tokio::fs::File::open(&local_path)
+            .await
+            .map_err(|error| format!("打开本地文件失败: {error}"))?;
+        if start_offset > 0 {
+            local_file
+                .seek(std::io::SeekFrom::Start(start_offset))
+                .await
+                .map_err(|error| format!("本地文件定位断点失败: {error}"))?;
+        }
+
+        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
+        let transfer = Arc::new(SftpDiskTransfer {
+            id: transfer_id,
+            session_id: id,
+            remote_path,
+            local_path,
+            file_name,
+            direction: "upload",
+            total,
+            transferred: AtomicU64::new(start_offset),
+            cancelled: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            error: StdMutex::new(None),
+            last_emit: AtomicU64::new(now_millis()),
+        });
+        self.sftp_disk_transfers
+            .lock()
+            .await
+            .insert(transfer_id, transfer.clone());
+
+        tauri::async_runtime::spawn(async move {
+            let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
+            loop {
+                if transfer.cancelled.load(Ordering::SeqCst) {
+                    transfer.done.store(true, Ordering::SeqCst);
+                    emit_disk_progress(sink.as_ref(), &transfer, true);
+                    break;
+                }
+                let read =
+                    tokio::time::timeout(DISK_CHUNK_TIMEOUT, local_file.read(&mut buffer)).await;
+                match read {
+                    Err(_) => {
+                        transfer.finish_with_error("读取本地文件超时".to_string());
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        transfer.finish_with_error(format!("读取本地文件失败: {error}"));
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Ok(0)) => {
+                        if let Err(error) = remote_file.shutdown().await {
+                            transfer.finish_with_error(format!("完成远程写入失败: {error}"));
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
+                        }
+                        let _ = sftp.close().await;
+                        transfer.done.store(true, Ordering::SeqCst);
+                        emit_disk_progress(sink.as_ref(), &transfer, true);
+                        break;
+                    }
+                    Ok(Ok(n)) => {
+                        let write = tokio::time::timeout(
+                            DISK_CHUNK_TIMEOUT,
+                            remote_file.write_all(&buffer[..n]),
+                        )
+                        .await;
+                        match write {
+                            Err(_) => {
+                                transfer.finish_with_error("写入远程文件超时".to_string());
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
+                            Ok(Err(error)) => {
+                                transfer.finish_with_error(format!("写入远程文件失败: {error}"));
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
+                            Ok(Ok(())) => {
+                                transfer.transferred.fetch_add(n as u64, Ordering::SeqCst);
+                                emit_disk_progress(sink.as_ref(), &transfer, false);
+                            }
+                        }
+                    }
+                }
+            }
+            manager
+                .sftp_disk_transfers
+                .lock()
+                .await
+                .remove(&transfer_id);
+        });
+        Ok(SftpDiskTransferStart {
+            transfer_id,
+            total,
+            resumed,
+        })
+    }
+
+    /// 取消磁盘传输任务。半成品文件保留以支持断点续传。
+    pub async fn sftp_disk_transfer_cancel(
+        &self,
+        sink: Arc<dyn EventSink>,
+        transfer_id: u64,
+    ) -> Result<(), String> {
+        let removed = self
+            .sftp_disk_transfers
+            .lock()
+            .await
+            .get(&transfer_id)
+            .cloned();
+        let Some(transfer) = removed else {
+            return Ok(());
+        };
+        transfer.cancelled.store(true, Ordering::SeqCst);
+        // 循环下一轮读到取消标记后自行收尾；这里同步推送一次状态。
+        emit_disk_progress(sink.as_ref(), &transfer, true);
+        Ok(())
+    }
+
+    /// 列出会话中仍在进行的磁盘传输（用于面板重新挂载时恢复进度行）。
+    pub async fn sftp_disk_transfer_list(
+        &self,
+        session_id: u64,
+    ) -> Result<Vec<SftpDiskTransferInfo>, String> {
+        let transfers = self.sftp_disk_transfers.lock().await;
+        Ok(transfers
+            .values()
+            .filter(|transfer| {
+                transfer.session_id == session_id && !transfer.done.load(Ordering::SeqCst)
+            })
+            .map(|transfer| transfer.info())
+            .collect())
     }
 }

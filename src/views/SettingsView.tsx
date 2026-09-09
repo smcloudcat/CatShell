@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { useSettings } from '../store/settings'
+import { check, Update } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
+import { useSettings, Language, LANGUAGE_OPTIONS } from '../store/settings'
 import { ThemeParams } from './settings/ThemeParams'
 import { Appearance } from './settings/Appearance'
 import { Icon, IconName } from '../components/Icon'
@@ -9,15 +11,17 @@ import { SnippetPanel } from './settings/SnippetPanel'
 import { AuditPanel } from './settings/AuditPanel'
 import { BackupPanel } from './settings/BackupPanel'
 import { MonitorThresholdPanel } from './settings/MonitorThresholdPanel'
+import { showToast } from '../store/ui'
 
-type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'backup'
+type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'backup' | 'update'
 
 const TABS: { id: SettingsTab; label: string; hint: string; icon: IconName }[] = [
   { id: 'appearance', label: '外观', hint: '主题与质感', icon: 'palette' },
   { id: 'monitor', label: '监控告警', hint: '阈值与通知', icon: 'monitor' },
   { id: 'snippets', label: '命令片段', hint: '常用命令库', icon: 'terminal' },
   { id: 'security', label: '安全与审计', hint: '保险箱与日志', icon: 'key' },
-  { id: 'backup', label: '备份与还原', hint: '导入导出配置', icon: 'database' }
+  { id: 'backup', label: '备份与还原', hint: '导入导出配置', icon: 'database' },
+  { id: 'update', label: '应用更新', hint: '语言与自动更新', icon: 'refresh' }
 ]
 
 export function SettingsView() {
@@ -25,7 +29,49 @@ export function SettingsView() {
   const setTheme = useSettings((s) => s.setTheme)
   const resetTheme = useSettings((s) => s.resetTheme)
   const saveTheme = useSettings((s) => s.saveTheme)
+  const closeToTray = useSettings((s) => s.closeToTray)
+  const setCloseToTray = useSettings((s) => s.setCloseToTray)
+  const saveCloseToTray = useSettings((s) => s.saveCloseToTray)
+  const language = useSettings((s) => s.language)
+  const setLanguage = useSettings((s) => s.setLanguage)
+  const saveLanguage = useSettings((s) => s.saveLanguage)
   const [tab, setTab] = useState<SettingsTab>('appearance')
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'available' | 'latest' | 'downloading' | 'error'>('idle')
+  const [updateInfo, setUpdateInfo] = useState<string | null>(null)
+  const [currentUpdate, setCurrentUpdate] = useState<Update | null>(null)
+
+  const checkForUpdate = async () => {
+    setUpdateState('checking')
+    setUpdateInfo(null)
+    try {
+      const update = await check()
+      if (update) {
+        setCurrentUpdate(update)
+        setUpdateInfo(update.version ?? '')
+        setUpdateState('available')
+      } else {
+        setCurrentUpdate(null)
+        setUpdateState('latest')
+      }
+    } catch (err) {
+      setCurrentUpdate(null)
+      setUpdateState('error')
+      setUpdateInfo(err instanceof Error ? err.message : '检查更新失败，请稍后重试或手动下载')
+    }
+  }
+
+  const installUpdate = async () => {
+    if (!currentUpdate) return
+    setUpdateState('downloading')
+    try {
+      await currentUpdate.downloadAndInstall()
+      setUpdateState('idle')
+      await relaunch()
+    } catch (err) {
+      setUpdateState('error')
+      setUpdateInfo(err instanceof Error ? err.message : '下载更新失败')
+    }
+  }
 
   const previewStyle: React.CSSProperties = (() => {
     if (theme.backgroundType === 'solid') return { background: theme.solidColor }
@@ -131,6 +177,81 @@ export function SettingsView() {
               </>
             )}
             {tab === 'backup' && <BackupPanel />}
+            {tab === 'update' && (
+              <>
+                <div className="panel-row">
+                  <div className="panel-copy">
+                    <div className="panel-title">界面语言</div>
+                    <div className="panel-desc">切换后立即生效并持久化；英文翻译逐步补齐，缺失文案回退中文。</div>
+                  </div>
+                  <div className="seg-group">
+                    {LANGUAGE_OPTIONS.map((option) => (
+                      <button
+                        key={option}
+                        className={`seg-btn ${language === option ? 'active' : ''}`}
+                        onClick={() => {
+                          setLanguage(option as Language)
+                          void saveLanguage()
+                        }}
+                      >
+                        {option === 'zh-CN' ? '简体中文' : 'English'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="panel-row">
+                  <div className="panel-copy">
+                    <div className="panel-title">关闭窗口时最小化到托盘</div>
+                    <div className="panel-desc">
+                      开启后点击关闭按钮仅隐藏窗口，SSH 会话保持在线，可从系统托盘恢复或退出。
+                    </div>
+                  </div>
+                  <label className="switch">
+                    <input
+                      type="checkbox"
+                      checked={closeToTray}
+                      onChange={(e) => {
+                        setCloseToTray(e.target.checked)
+                        void saveCloseToTray()
+                      }}
+                    />
+                    <span className="switch-slider" />
+                  </label>
+                </div>
+                <div className="panel-row">
+                  <div className="panel-copy">
+                    <div className="panel-title">检查更新</div>
+                    <div className="panel-desc">
+                      {updateState === 'checking' && '正在检查更新…'}
+                      {updateState === 'available' && `发现新版本 v${updateInfo}，可下载安装（安装后自动重启）。`}
+                      {updateState === 'latest' && '当前已是最新版本。'}
+                      {updateState === 'downloading' && '正在下载并安装更新…'}
+                      {updateState === 'error' && (updateInfo ?? '检查更新失败')}
+                      {updateState === 'idle' && '通过内置更新通道检查新版本；未配置签名或网络不可用时会提示失败。'}
+                    </div>
+                  </div>
+                  <div className="settings-actions">
+                    {updateState === 'available' ? (
+                      <button className="glass-btn primary" onClick={() => void installUpdate()}>
+                        <Icon name="download" size={15} />
+                        下载并安装
+                      </button>
+                    ) : (
+                      <button className="glass-btn" onClick={() => void checkForUpdate()} disabled={updateState === 'checking' || updateState === 'downloading'}>
+                        <Icon name="refresh" size={15} />
+                        检查更新
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {updateState === 'error' && (
+                  <button className="glass-btn" onClick={() => showToast('可前往 GitHub Releases 页面手动下载最新安装包')}>
+                    <Icon name="info" size={15} />
+                    手动下载指引
+                  </button>
+                )}
+              </>
+            )}
           </section>
         )}
       </div>

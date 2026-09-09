@@ -6,9 +6,16 @@
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
     "dialog:default",
     "opener:default",
     "store:default",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:allow-restart",
+    "process:allow-exit"
   ]
 }

@@ -13,6 +13,8 @@ export type AuditAction =
   | 'sftp.upload'
   | 'sftp.batch-upload'
   | 'sftp.download'
+  | 'sftp.disk-download'
+  | 'sftp.disk-upload'
   | 'sftp.delete'
   | 'sftp.edit'
   | 'sftp.mkdir'

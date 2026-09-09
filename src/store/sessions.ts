@@ -1,5 +1,7 @@
 import { create } from 'zustand'
+import { Channel } from '@tauri-apps/api/core'
 import {
+  kbiRespond,
   sshConnect,
   sshDisconnect,
   sshList,
@@ -7,9 +9,10 @@ import {
   sshResize,
   sshConfirmHostKey,
   sshWrite,
-  subscribeSshEvents
+  subscribeSshEvents,
+  type SshOutputChannel
 } from '../api/ssh'
-import { ConnectRequest, HostKeyPrompt, HostKeyWarning, SessionInfo, SessionStatusEvent } from '../types/session'
+import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KbiPromptEvent, SessionInfo, SessionStatusEvent } from '../types/session'
 import { recordAudit } from './audit'
 
 export interface TerminalRef {
@@ -25,11 +28,13 @@ interface SessionsState {
   sessions: Record<number, SessionInfo>
   order: number[]
   activeId: number | null
+  splitId: number | null
   terminals: Record<number, TerminalRef>
   requests: Record<number, ConnectRequest>
   connectedAt: Record<number, number>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
+  kbiPrompt: KbiPromptEvent | null
   broadcastEnabled: boolean
   broadcastTargets: number[]
   init: () => Promise<void>
@@ -41,6 +46,9 @@ interface SessionsState {
   closeTab: (id: number) => Promise<void>
   renameSession: (id: number, name: string) => Promise<void>
   setActive: (id: number | null) => void
+  setSplit: (id: number | null) => void
+  answerKbi: (answers: string[]) => Promise<void>
+  cancelKbi: () => void
   setBroadcastEnabled: (enabled: boolean) => void
   toggleBroadcastTarget: (id: number) => void
   registerTerminal: (ref: TerminalRef) => void
@@ -95,21 +103,42 @@ export function clearSessionLog(id: number) {
   sessionLogs.delete(id)
 }
 
+function bytesFromChannel(data: ArrayBuffer | number[] | unknown): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  if (Array.isArray(data)) return new Uint8Array(data as number[])
+  return new Uint8Array()
+}
+
 // React Strict Mode can invoke the startup effect twice before the first
 // asynchronous initialization completes. Share that initialization promise
 // so SSH events are subscribed exactly once.
 let initializationPromise: Promise<void> | null = null
+
+/** 为单个会话建立终端输出 IPC Channel（原始字节）。id 在 invoke 返回后回填。 */
+function createOutputChannel(idBox: { id: number }): SshOutputChannel {
+  const channel = new Channel<ArrayBuffer | number[]>()
+  channel.onmessage = (data) => {
+    const bytes = bytesFromChannel(data)
+    if (!bytes.length) return
+    appendSessionLog(idBox.id, bytes)
+    const term = useSessions.getState().terminals[idBox.id]
+    if (term) term.write(bytes)
+  }
+  return channel
+}
 
 export const useSessions = create<SessionsState>((set, get) => ({
   ready: false,
   sessions: {},
   order: [],
   activeId: null,
+  splitId: null,
   terminals: {},
   requests: {},
   connectedAt: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
+  kbiPrompt: null,
   broadcastEnabled: false,
   broadcastTargets: [],
   init: async () => {
@@ -140,6 +169,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
           },
           onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
           ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
+          ,onKbiPrompt: (event) => set({ kbiPrompt: event })
         })
       } catch (err) {
         // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级
@@ -202,13 +232,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
     }
   },
   open: async (request: ConnectRequest) => {
+    const idBox: { id: number } = { id: 0 }
     let id: number
     try {
-      id = await sshConnect(request)
+      id = await sshConnect(request, createOutputChannel(idBox))
     } catch (error) {
       recordAudit('session.connect', `${request.host}:${request.port}`, 'failure', '连接请求失败')
       throw error
     }
+    idBox.id = id
     recordAudit('session.connect', `${request.name} (${request.host}:${request.port})`, 'info', '已提交连接请求')
     set((s) => {
       const existing = s.sessions[id]
@@ -237,7 +269,9 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const request = get().requests[id]
     const info = get().sessions[id]
     if (!request || !info) throw new Error('该会话缺少可复用的连接参数，请从主机页重新连接')
-    const newId = await sshConnect(request)
+    const idBox: { id: number } = { id: 0 }
+    const newId = await sshConnect(request, createOutputChannel(idBox))
+    idBox.id = newId
     recordAudit('session.connect', `${info.name} (${info.host}:${info.port})`, 'info', '从已断开标签重新连接')
     set((s) => {
       const sessions = { ...s.sessions }
@@ -258,7 +292,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       }
       const order = [...new Set(s.order.map((item) => (item === id ? newId : item)))]
       const activeId = s.activeId === id ? newId : s.activeId
-      return { sessions, requests, order, terminals, connectedAt, activeId }
+      const splitId = s.splitId === id ? newId : s.splitId
+      return { sessions, requests, order, terminals, connectedAt, activeId, splitId }
     })
     return newId
   },
@@ -292,7 +327,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const connectedAt = { ...s.connectedAt }
       delete connectedAt[id]
       const activeId = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
-      return { sessions, requests, order, terminals, connectedAt, activeId }
+      const splitId = s.splitId === id ? null : s.splitId
+      return { sessions, requests, order, terminals, connectedAt, activeId, splitId }
     })
   },
   renameSession: async (id, name) => {
@@ -307,6 +343,29 @@ export const useSessions = create<SessionsState>((set, get) => ({
     }))
   },
   setActive: (id) => set({ activeId: id }),
+  setSplit: (id) =>
+    set((s) => {
+      if (id === null) return { splitId: null }
+      // 分屏两侧必须是不同会话；若与活动标签相同则回退为不启用
+      if (id === s.activeId) return { splitId: null }
+      return { splitId: id }
+    }),
+  answerKbi: async (answers) => {
+    const prompt = get().kbiPrompt
+    if (!prompt) return
+    try {
+      await kbiRespond(prompt.sessionId, answers)
+    } finally {
+      set({ kbiPrompt: null })
+    }
+  },
+  cancelKbi: () => {
+    const prompt = get().kbiPrompt
+    if (!prompt) return
+    set({ kbiPrompt: null })
+    // 发送空应答让后端立即结束（oneshot 关闭视为取消）
+    void kbiRespond(prompt.sessionId, []).catch(() => undefined)
+  },
   setBroadcastEnabled: (enabled) => {
     if (!enabled) {
       set({ broadcastEnabled: false, broadcastTargets: [] })

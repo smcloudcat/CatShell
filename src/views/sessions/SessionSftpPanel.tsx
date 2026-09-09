@@ -1,8 +1,12 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import {
   base64ToBytes,
   sftpChmod,
+  sftpDiskDownloadStart,
+  sftpDiskTransferCancel,
+  sftpDiskUploadStart,
   sftpDownloadBegin,
   sftpDownloadChunk,
   sftpList,
@@ -15,7 +19,8 @@ import {
   sftpUploadBegin,
   sftpUploadChunk,
   sftpUploadFinish,
-  sftpWriteFile
+  sftpWriteFile,
+  subscribeSftpDiskProgress
 } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
@@ -35,6 +40,7 @@ interface TransferProgress {
   kind: 'upload' | 'download'
   transferred: number
   total: number
+  disk?: boolean
 }
 
 function parentPath(path: string): string {
@@ -164,7 +170,11 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setTransfers((current) => current.filter((item) => item.id !== id))
   }
 
-  const requestCancel = (id: number) => {
+  const requestCancel = (id: number, disk?: boolean) => {
+    if (disk) {
+      void sftpDiskTransferCancel(id).catch(() => undefined)
+      return
+    }
     cancelFlags.current.add(id)
   }
 
@@ -233,6 +243,86 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }
 
+  const saveDialogUnavailable = () => {
+    setError('当前环境无法打开保存对话框，请改用浏览器下载或启动桌面应用')
+  }
+
+  const handleDiskDownload = async (entry: SftpEntry) => {
+    if (entry.kind !== 'file') return
+    if (!('__TAURI_INTERNALS__' in window)) {
+      saveDialogUnavailable()
+      return
+    }
+    setError(null)
+    try {
+      const target = await save({
+        title: '保存到本地磁盘',
+        defaultPath: entry.name
+      })
+      if (typeof target !== 'string' || !target.trim()) return
+      const start = await sftpDiskDownloadStart(sessionId, entry.path, target, true)
+      setTransfers((current) => [
+        ...current.filter((item) => item.id !== start.transferId),
+        { id: start.transferId, name: entry.name, kind: 'download', transferred: 0, total: start.total, disk: true }
+      ])
+      recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? '磁盘级下载（断点续传）' : '磁盘级下载开始')
+    } catch (err) {
+      recordAudit('sftp.disk-download', entry.path, 'failure', '磁盘级下载启动失败')
+      setError(typeof err === 'string' ? err : '磁盘级下载启动失败')
+    }
+  }
+
+  const handleDiskUpload = async () => {
+    if (!('__TAURI_INTERNALS__' in window)) {
+      saveDialogUnavailable()
+      return
+    }
+    setError(null)
+    try {
+      const picked = await open({
+        multiple: true,
+        title: '选择要上传的本地文件'
+      })
+      const files = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter((item): item is string => typeof item === 'string')
+      if (!files.length) return
+      let existingNames = new Set<string>()
+      try {
+        existingNames = new Set((await sftpList(sessionId, path)).map((entry) => entry.name))
+      } catch {
+        existingNames = new Set()
+      }
+      let started = 0
+      for (const localPath of files) {
+        const name = localPath.replace(/\\/g, '/').split('/').pop() ?? localPath
+        const target = joinRemotePath(path, name)
+        if (existingNames.has(name)) {
+          const accepted = await confirmDialog({
+            title: '覆盖或续传远程文件',
+            message: `远程目录 ${path} 已存在同名文件“${name}”。续传模式下较小文件从断点续写，其余将被覆盖。继续？`,
+            confirmLabel: '继续传输',
+            danger: true
+          })
+          if (!accepted) continue
+        }
+        try {
+          const start = await sftpDiskUploadStart(sessionId, localPath, target, true)
+          setTransfers((current) => [
+            ...current.filter((item) => item.id !== start.transferId),
+            { id: start.transferId, name, kind: 'upload', transferred: 0, total: start.total, disk: true }
+          ])
+          recordAudit('sftp.disk-upload', target, 'success', start.resumed ? '磁盘级上传（断点续传）' : '磁盘级上传开始')
+          started += 1
+        } catch (err) {
+          recordAudit('sftp.disk-upload', target, 'failure', '磁盘级上传启动失败')
+          setError(typeof err === 'string' ? err : `磁盘级上传启动失败：${name}`)
+        }
+      }
+      if (started > 0) setNotice(`磁盘级上传已开始 ${started} 个文件`)
+    } catch (err) {
+      setError(typeof err === 'string' ? err : '磁盘级上传失败')
+    }
+  }
+
   const loadDirectory = async (nextPath?: string) => {
     const target = nextPath ?? path
     setBusy(true)
@@ -254,6 +344,58 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (connected) void loadDirectory()
     // Directory loading is intentionally triggered only when the session changes.
   }, [sessionId, connected])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    let disposed = false
+    let unlisten: (() => Promise<void>) | null = null
+    void subscribeSftpDiskProgress((progress) => {
+      if (progress.sessionId !== sessionId) return
+      setTransfers((current) => {
+        const known = current.some((item) => item.id === progress.transferId)
+        if (!known) {
+          // 后端可能自行续传/列出进行中任务，前端未登记时补录
+          if (progress.done) return current
+          return [
+            ...current,
+            {
+              id: progress.transferId,
+              name: progress.fileName,
+              kind: progress.direction === 'upload' ? 'upload' : 'download',
+              transferred: progress.transferred,
+              total: progress.total,
+              disk: true
+            }
+          ]
+        }
+        if (progress.done) {
+          return current.map((item) => (item.id === progress.transferId ? { ...item, transferred: progress.transferred, total: progress.total } : item))
+        }
+        return current.map((item) => (item.id === progress.transferId ? { ...item, transferred: progress.transferred, total: progress.total } : item))
+      })
+      if (progress.done) {
+        if (progress.cancelled) {
+          setNotice(`已取消 ${progress.fileName}`)
+        } else if (progress.error) {
+          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'failure', progress.error)
+          setError(`磁盘${progress.direction === 'upload' ? '上传' : '下载'}失败：${progress.error}`)
+        } else {
+          recordAudit(`sftp.disk-${progress.direction}`, progress.fileName, 'success', '磁盘级传输完成')
+          setNotice(`磁盘${progress.direction === 'upload' ? '上传' : '下载'}完成：${progress.fileName}`)
+        }
+        window.setTimeout(() => {
+          setTransfers((current) => current.filter((item) => item.id !== progress.transferId))
+        }, 1200)
+      }
+    }).then((dispose) => {
+      if (disposed) void dispose()
+      else unlisten = dispose
+    })
+    return () => {
+      disposed = true
+      void unlisten?.()
+    }
+  }, [sessionId])
 
   const uploadFiles = async (files: File[]) => {
     if (!files.length) return
@@ -383,6 +525,10 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const handleDownload = async (entry: SftpEntry) => {
     if (entry.kind !== 'file') return
     if (entry.size > SFTP_CHUNKED_THRESHOLD) {
+      if ('__TAURI_INTERNALS__' in window) {
+        await handleDiskDownload(entry)
+        return
+      }
       setError(null)
       try {
         await downloadChunked(entry)
@@ -588,6 +734,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           上传文件
           <input className="sr-only" type="file" multiple onChange={handleUpload} disabled={busy} />
         </label>
+        <button className="glass-btn" onClick={() => void handleDiskUpload()} disabled={busy} title="磁盘级上传：本地文件经 Rust 直传远端，支持断点续传"><Icon name="save" size={15} /></button>
       </div>
       <div className="sftp-pathbar">
         <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
@@ -746,7 +893,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
                   </div>
                   <div className="metric-bar"><span style={{ width: `${percent}%` }} /></div>
                 </div>
-                <button className="host-icon-btn danger" onClick={() => requestCancel(transfer.id)} title="取消传输"><Icon name="x" size={13} /></button>
+                <button className="host-icon-btn danger" onClick={() => requestCancel(transfer.id, transfer.disk)} title="取消传输"><Icon name="x" size={13} /></button>
               </div>
             )
           })}

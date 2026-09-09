@@ -196,6 +196,31 @@ impl SshManager {
         parse_metrics(id, &output)
     }
 
+    /// RTT 探测：执行空命令并测量整个 SSH 往返耗时（毫秒）。
+    pub async fn ping(&self, id: u64) -> Result<u64, String> {
+        let session = self.session_ref(id).await?;
+        let mut connection = session.conn.lock().await;
+        let connection = connection
+            .as_mut()
+            .ok_or_else(|| "会话尚未连接".to_string())?;
+        let started = std::time::Instant::now();
+        let mut channel = connection
+            .channel_open_session()
+            .await
+            .map_err(|error| format!("打开探测通道失败: {error}"))?;
+        channel
+            .exec(true, ":")
+            .await
+            .map_err(|error| format!("执行探测命令失败: {error}"))?;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Close | ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+        Ok(started.elapsed().as_millis() as u64)
+    }
+
     pub async fn list_processes(&self, id: u64) -> Result<Vec<ProcessInfo>, String> {
         let session = self.session_ref(id).await?;
         let mut connection = session.conn.lock().await;

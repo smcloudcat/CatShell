@@ -104,16 +104,43 @@ export interface SftpEntry {
   group: string | null
 }
 
-export interface SftpTransferStart {
-  transferId: number
-  total: number
-}
-
 export interface SftpChunk {
   data: string
   done: boolean
   transferred: number
   total: number
+}
+
+export interface SftpDiskTransferStart {
+  transferId: number
+  total: number
+  resumed: boolean
+}
+
+export interface SftpDiskProgress {
+  transferId: number
+  sessionId: number
+  direction: 'upload' | 'download'
+  fileName: string
+  transferred: number
+  total: number
+  done: boolean
+  cancelled: boolean
+  error?: string | null
+}
+
+export interface SftpDiskTransferInfo {
+  transferId: number
+  sessionId: number
+  direction: 'upload' | 'download'
+  fileName: string
+  remotePath: string
+  localPath: string
+  transferred: number
+  total: number
+  done: boolean
+  cancelled: boolean
+  error?: string | null
 }
 
 export interface KnownHostEntry {
@@ -135,8 +162,29 @@ export interface SshConfigEntry {
   identityFile: string | null
 }
 
-export type { AuthMethod } from './host'
-import type { AuthMethod } from './host'
+export type AuthMethod = 'password' | 'key' | 'keyboard-interactive' | 'agent'
+
+export interface ProxyConfig {
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'key'
+  password?: string | null
+  keyPath?: string | null
+  passphrase?: string | null
+}
+
+export interface KbiPromptQuestion {
+  prompt: string
+  echo: boolean
+}
+
+export interface KbiPromptEvent {
+  sessionId: number
+  name: string
+  instructions: string
+  prompts: KbiPromptQuestion[]
+}
 
 export interface ConnectRequest {
   name: string
@@ -150,6 +198,7 @@ export interface ConnectRequest {
   otpSecret?: string | null
   keepalive: number
   autoReconnect: boolean
+  proxy?: ProxyConfig | null
 }
 
 export const STATUS_TEXT: Record<SessionStatus, string> = {

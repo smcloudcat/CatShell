@@ -1,8 +1,12 @@
-export type AuthMethod = 'password' | 'key' | 'keyboard-interactive'
+export type AuthMethod = 'password' | 'key' | 'keyboard-interactive' | 'agent'
 
-export interface SSHKeyRef {
-  id: string
-  name: string
+export interface HostProxyProfile {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'key'
+  keyPath: string | null
 }
 
 export interface HostProfile {
@@ -21,6 +25,7 @@ export interface HostProfile {
   description: string
   keepAliveInterval: number
   autoReconnect: boolean
+  proxy: HostProxyProfile
   createdAt: number
   updatedAt: number
 }
@@ -66,6 +71,14 @@ export const createHostProfile = (partial: Partial<HostProfile>): HostProfile =>
   description: '',
   keepAliveInterval: 30,
   autoReconnect: true,
+  proxy: {
+    enabled: false,
+    host: '',
+    port: 22,
+    username: '',
+    authMethod: 'password',
+    keyPath: null
+  },
   createdAt: Date.now(),
   updatedAt: Date.now(),
   ...partial

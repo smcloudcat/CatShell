@@ -13,6 +13,8 @@ use std::time::Duration;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
+use russh::keys::agent::client::{AgentClient, AgentStream};
+use russh::keys::agent::AgentIdentity;
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{client, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
 use serde::Serialize;
@@ -24,16 +26,24 @@ pub use config::{
     default_known_hosts_path, load_known_hosts_snapshot, parse_known_hosts, parse_ssh_config,
     remove_known_hosts_entries, remove_known_hosts_entry, ssh_config_path,
 };
-pub use sftp::{SftpChunk, SftpEntry, SftpTransferStart};
+pub use sftp::{
+    SftpChunk, SftpDiskTransferInfo, SftpDiskTransferStart, SftpEntry, SftpTransferStart,
+};
 pub use types::{
     ConnectRequest, KnownHostEntry, KnownHostsSnapshot, NetworkDiagnostic, PartitionMetric,
-    PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SshConfigEntry,
+    PortForwardInfo, ProcessInfo, ProxyConfig, ServerMetrics, SessionInfo, SshConfigEntry,
 };
 
 use types::{
     reconnect_delay, CONNECT_TIMEOUT, HOST_KEY_CONFIRM_TIMEOUT, MANUAL_POLL_INTERVAL,
     MAX_RECONNECT_ATTEMPTS,
 };
+
+/// 终端输出的原始字节通道抽象。Tauri 前端通过 IPC Channel 实现，
+/// 测试环境保持 None 走事件回退，SSH 核心不依赖 Tauri 类型。
+pub trait RawOutput: Send + Sync + 'static {
+    fn send_bytes(&self, data: Vec<u8>) -> Result<(), String>;
+}
 
 pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, name: &str, payload: serde_json::Value);
@@ -44,13 +54,18 @@ pub struct ActiveSession {
     pub info: SessionInfo,
     pub creds: ConnectRequest,
     pub conn: Mutex<Option<client::Handle<SshHandler>>>,
+    /// ProxyJump 跳板机连接。目标会话存活期间必须保持该 Handle，否则隧道关闭。
+    pub proxy_conn: Mutex<Option<client::Handle<SshHandler>>>,
     pub write: Mutex<Option<ChannelWriteHalf<russh::client::Msg>>>,
+    pub output: Option<Arc<dyn RawOutput>>,
     pub manual_closed: AtomicBool,
 }
 
 pub struct SshManager {
     pub sessions: Mutex<HashMap<u64, Arc<ActiveSession>>>,
     pub host_key_confirmations: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// 等待前端应答的交互式（keyboard-interactive）认证提示，按会话 id 索引。
+    pub kbi_prompts: KbiPromptMap,
     known_hosts_path: std::sync::RwLock<Option<PathBuf>>,
     next_id: AtomicU64,
     pub forwards: Mutex<HashMap<u64, JoinHandle<()>>>,
@@ -59,7 +74,9 @@ pub struct SshManager {
     remote_routes: Arc<Mutex<HashMap<(u64, u16), forward::RemoteForwardRoute>>>,
     next_forward_id: AtomicU64,
     pub sftp_transfers: Mutex<HashMap<u64, Arc<sftp::SftpTransfer>>>,
+    pub sftp_disk_transfers: Mutex<HashMap<u64, Arc<sftp::SftpDiskTransfer>>>,
     next_transfer_id: AtomicU64,
+    next_disk_transfer_id: AtomicU64,
 }
 
 impl Default for SshManager {
@@ -67,6 +84,7 @@ impl Default for SshManager {
         SshManager {
             sessions: Mutex::new(HashMap::new()),
             host_key_confirmations: Arc::new(Mutex::new(HashMap::new())),
+            kbi_prompts: Arc::new(Mutex::new(HashMap::new())),
             known_hosts_path: std::sync::RwLock::new(None),
             next_id: AtomicU64::new(1),
             forwards: Mutex::new(HashMap::new()),
@@ -75,7 +93,9 @@ impl Default for SshManager {
             remote_routes: Arc::new(Mutex::new(HashMap::new())),
             next_forward_id: AtomicU64::new(1),
             sftp_transfers: Mutex::new(HashMap::new()),
+            sftp_disk_transfers: Mutex::new(HashMap::new()),
             next_transfer_id: AtomicU64::new(1),
+            next_disk_transfer_id: AtomicU64::new(1),
         }
     }
 }
@@ -105,6 +125,22 @@ struct HostKeyPayload {
     fingerprint: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KbiPromptPayload {
+    session_id: u64,
+    name: String,
+    instructions: String,
+    prompts: Vec<KbiPromptField>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KbiPromptField {
+    prompt: String,
+    echo: bool,
+}
+
 fn emit_status(sink: &dyn EventSink, id: u64, status: &str, reason: Option<String>, attempt: u32) {
     let payload = StatusPayload {
         id,
@@ -127,6 +163,16 @@ fn emit_output(sink: &dyn EventSink, id: u64, data: Vec<u8>) {
         "session-output",
         serde_json::to_value(payload).unwrap_or_default(),
     );
+}
+
+/// 终端输出优先走原始字节通道（IPC Channel），不可用时回退到 base64 事件。
+fn dispatch_output(sink: &dyn EventSink, session: &ActiveSession, data: Vec<u8>) {
+    match &session.output {
+        Some(raw) => {
+            let _ = raw.send_bytes(data);
+        }
+        None => emit_output(sink, session.session_id, data),
+    }
 }
 
 fn is_host_key_error(error: &str) -> bool {
@@ -294,55 +340,113 @@ impl client::Handler for SshHandler {
     }
 }
 
-async fn open_shell(
-    creds: &ConnectRequest,
-    session_id: u64,
-    sink: Arc<dyn EventSink>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-    known_hosts_path: Option<PathBuf>,
-    remote_routes: Arc<Mutex<HashMap<(u64, u16), forward::RemoteForwardRoute>>>,
-) -> Result<
-    (
-        client::Handle<SshHandler>,
-        ChannelReadHalf,
-        ChannelWriteHalf<russh::client::Msg>,
-    ),
-    ConnectError,
-> {
-    let config = Arc::new(client::Config {
-        keepalive_interval: Some(Duration::from_secs(creds.keepalive.clamp(5, 300))),
-        keepalive_max: 2,
-        ..Default::default()
-    });
-    let handler = SshHandler {
-        host: creds.host.clone(),
-        port: creds.port,
-        sink,
-        pending,
-        known_hosts_path,
-        session_id,
-        remote_routes,
-    };
-    let mut session = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        client::connect(config, (creds.host.as_str(), creds.port), handler),
-    )
-    .await
-    .map_err(|_| {
-        ConnectError::transient(format!(
-            "连接超时：{} 秒内未能与服务器建立连接",
-            CONNECT_TIMEOUT.as_secs()
-        ))
-    })?
-    .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
+/// 等待前端应答的交互式认证提示发送端，按会话 id 索引。
+pub type KbiPromptMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Vec<String>>>>>;
 
-    let username = creds.username.clone();
-    match creds.auth_method.as_str() {
+/// 连接 SSH Agent：Windows 优先 Pageant，其次 OpenSSH agent 命名管道；
+/// 其他平台读取 SSH_AUTH_SOCK。
+async fn connect_ssh_agent(
+) -> Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, ConnectError> {
+    #[cfg(windows)]
+    {
+        if let Ok(client) = AgentClient::connect_pageant().await {
+            return Ok(client.dynamic());
+        }
+        let client = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+            .await
+            .map_err(|error| {
+                ConnectError::permanent(format!(
+                    "无法连接 SSH Agent（已尝试 Pageant 与 OpenSSH agent 命名管道）: {error}"
+                ))
+            })?;
+        Ok(client.dynamic())
+    }
+    #[cfg(not(windows))]
+    {
+        let client = AgentClient::connect_env().await.map_err(|error| {
+            ConnectError::permanent(format!(
+                "无法连接 SSH Agent（读取 SSH_AUTH_SOCK 失败，请确认 ssh-agent 已启动）: {error}"
+            ))
+        })?;
+        Ok(client.dynamic())
+    }
+}
+
+/// 交互式认证：把服务器提示转发给前端弹窗并等待用户应答（带超时）。
+async fn request_kbi_answers(
+    sink: &dyn EventSink,
+    pending: &KbiPromptMap,
+    session_id: u64,
+    name: &str,
+    instructions: &str,
+    prompts: &[client::Prompt],
+) -> Result<Vec<String>, ConnectError> {
+    const KBI_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
+    let (sender, receiver) = oneshot::channel();
+    pending.lock().await.insert(session_id, sender);
+    sink.emit(
+        "kbi-prompt",
+        serde_json::to_value(KbiPromptPayload {
+            session_id,
+            name: name.to_string(),
+            instructions: instructions.to_string(),
+            prompts: prompts
+                .iter()
+                .map(|prompt| KbiPromptField {
+                    prompt: prompt.prompt.clone(),
+                    echo: prompt.echo,
+                })
+                .collect(),
+        })
+        .unwrap_or_default(),
+    );
+    let answers = match tokio::time::timeout(KBI_PROMPT_TIMEOUT, receiver).await {
+        Ok(Ok(answers)) => answers,
+        Ok(Err(_)) | Err(_) => {
+            pending.lock().await.remove(&session_id);
+            return Err(ConnectError::permanent(
+                "交互式认证已取消或超时（120 秒内未收到应答）",
+            ));
+        }
+    };
+    Ok(answers)
+}
+
+fn kbi_auto_answer(prompt_text: &str, otp: &str, password: &str) -> String {
+    let text = prompt_text.to_ascii_lowercase();
+    let otp_prompt = text.contains("otp")
+        || text.contains("code")
+        || text.contains("token")
+        || text.contains("passcode")
+        || text.contains("验证")
+        || text.contains("动态口令");
+    if otp_prompt {
+        otp.to_string()
+    } else if text.contains("password") || text.contains("密码") {
+        password.to_string()
+    } else {
+        otp.to_string()
+    }
+}
+
+/// 在已建立的 SSH 连接上执行认证。password/key/keyboard-interactive/agent 四种方式；
+/// 跳板机不传 otp_secret，因此不会触发交互式提示。
+#[allow(clippy::too_many_arguments)]
+async fn authenticate_connection(
+    session: &mut client::Handle<SshHandler>,
+    username: &str,
+    auth_method: &str,
+    password: Option<&str>,
+    key_path: Option<&str>,
+    passphrase: Option<&str>,
+    otp_secret: Option<&str>,
+    sink: &Arc<dyn EventSink>,
+    kbi_pending: &KbiPromptMap,
+    session_id: u64,
+) -> Result<(), ConnectError> {
+    match auth_method {
         "password" => {
-            let password = creds
-                .password
-                .clone()
-                .ok_or_else(|| ConnectError::permanent("未提供登录密码"))?;
+            let password = password.ok_or_else(|| ConnectError::permanent("未提供登录密码"))?;
             let result = session
                 .authenticate_password(username, password)
                 .await
@@ -354,11 +458,8 @@ async fn open_shell(
             }
         }
         "key" => {
-            let key_path = creds
-                .key_path
-                .clone()
-                .ok_or_else(|| ConnectError::permanent("未选择私钥文件"))?;
-            let key_pair = load_secret_key(&key_path, creds.passphrase.as_deref())
+            let key_path = key_path.ok_or_else(|| ConnectError::permanent("未选择私钥文件"))?;
+            let key_pair = load_secret_key(key_path, passphrase)
                 .map_err(|e| ConnectError::permanent(format!("私钥加载失败: {e}")))?;
             let rsa_hash = session
                 .best_supported_rsa_hash()
@@ -378,62 +479,149 @@ async fn open_shell(
                 ));
             }
         }
-        "keyboard-interactive" => {
-            let otp = creds
-                .otp_secret
-                .clone()
-                .ok_or_else(|| ConnectError::permanent("未提供一次性验证码"))?;
-            let password = creds.password.clone().unwrap_or_default();
-            let mut response = session
-                .authenticate_keyboard_interactive_start(username, None::<String>)
-                .await
-                .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
-            let mut rounds = 0;
-            loop {
-                match response {
-                    russh::client::KeyboardInteractiveAuthResponse::Success => break,
-                    russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
-                        return Err(ConnectError::permanent(
-                            "认证失败：一次性验证码不正确或该账户不可用",
-                        ))
-                    }
-                    russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
-                        prompts, ..
-                    } => {
-                        if prompts.is_empty() || prompts.len() > 8 || rounds >= 4 {
+        "keyboard-interactive" => match otp_secret {
+            Some(otp) => {
+                let password = password.unwrap_or_default();
+                let mut response = session
+                    .authenticate_keyboard_interactive_start(username, None::<String>)
+                    .await
+                    .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
+                let mut rounds = 0;
+                loop {
+                    match response {
+                        russh::client::KeyboardInteractiveAuthResponse::Success => break,
+                        russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
                             return Err(ConnectError::permanent(
-                                "认证失败：服务器返回了不支持的交互式认证提示",
-                            ));
+                                "认证失败：一次性验证码不正确或该账户不可用",
+                            ))
                         }
-                        response = session
-                            .authenticate_keyboard_interactive_respond(
-                                prompts
-                                    .into_iter()
-                                    .map(|prompt| {
-                                        let text = prompt.prompt.to_ascii_lowercase();
-                                        let otp_prompt = text.contains("otp")
-                                            || text.contains("code")
-                                            || text.contains("token")
-                                            || text.contains("passcode")
-                                            || text.contains("验证")
-                                            || text.contains("动态口令");
-                                        if otp_prompt {
-                                            otp.clone()
-                                        } else if text.contains("password") || text.contains("密码")
-                                        {
-                                            password.clone()
-                                        } else {
-                                            otp.clone()
-                                        }
-                                    })
-                                    .collect(),
-                            )
-                            .await
-                            .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
-                        rounds += 1;
+                        russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                            prompts,
+                            ..
+                        } => {
+                            if prompts.is_empty() || prompts.len() > 8 || rounds >= 4 {
+                                return Err(ConnectError::permanent(
+                                    "认证失败：服务器返回了不支持的交互式认证提示",
+                                ));
+                            }
+                            response = session
+                                .authenticate_keyboard_interactive_respond(
+                                    prompts
+                                        .iter()
+                                        .map(|prompt| {
+                                            kbi_auto_answer(&prompt.prompt, otp, password)
+                                        })
+                                        .collect(),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    ConnectError::transient(format!("认证请求失败: {e}"))
+                                })?;
+                            rounds += 1;
+                        }
                     }
                 }
             }
+            None => {
+                let mut response = session
+                    .authenticate_keyboard_interactive_start(username, None::<String>)
+                    .await
+                    .map_err(|e| ConnectError::transient(format!("认证请求失败: {e}")))?;
+                let mut rounds = 0;
+                loop {
+                    match response {
+                        russh::client::KeyboardInteractiveAuthResponse::Success => break,
+                        russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
+                            return Err(ConnectError::permanent("认证失败：交互式认证未通过"))
+                        }
+                        russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                            name,
+                            instructions,
+                            prompts,
+                        } => {
+                            if prompts.is_empty() || prompts.len() > 4 || rounds >= 3 {
+                                return Err(ConnectError::permanent(
+                                    "认证失败：服务器返回了不支持的交互式认证提示",
+                                ));
+                            }
+                            let answers = request_kbi_answers(
+                                sink.as_ref(),
+                                kbi_pending,
+                                session_id,
+                                &name,
+                                &instructions,
+                                &prompts,
+                            )
+                            .await?;
+                            let mut answers = answers;
+                            answers.resize(prompts.len(), String::new());
+                            response = session
+                                .authenticate_keyboard_interactive_respond(answers)
+                                .await
+                                .map_err(|e| {
+                                    ConnectError::transient(format!("认证请求失败: {e}"))
+                                })?;
+                            rounds += 1;
+                        }
+                    }
+                }
+            }
+        },
+        "agent" => {
+            let mut agent = connect_ssh_agent().await?;
+            let identities = agent
+                .request_identities()
+                .await
+                .map_err(|e| ConnectError::permanent(format!("读取 SSH Agent 密钥失败: {e}")))?;
+            if identities.is_empty() {
+                return Err(ConnectError::permanent("SSH Agent 中没有可用的密钥"));
+            }
+            let rsa_hash = session
+                .best_supported_rsa_hash()
+                .await
+                .map_err(|e| ConnectError::transient(format!("RSA 算法协商失败: {e}")))?
+                .flatten();
+            let username = username.to_string();
+            for identity in &identities {
+                let attempt = match identity {
+                    AgentIdentity::Certificate { certificate, .. } => {
+                        session
+                            .authenticate_certificate_with(
+                                username.clone(),
+                                certificate.clone(),
+                                rsa_hash,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                    _ => {
+                        session
+                            .authenticate_publickey_with(
+                                username.clone(),
+                                identity.public_key().into_owned(),
+                                rsa_hash,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                };
+                match attempt {
+                    Ok(result) => {
+                        if result.success() {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        return Err(ConnectError::transient(format!(
+                            "SSH Agent 认证请求失败: {e}"
+                        )));
+                    }
+                }
+            }
+            return Err(ConnectError::permanent(format!(
+                "认证失败：SSH Agent 中的 {} 个密钥均未被服务器接受",
+                identities.len()
+            )));
         }
         other => {
             return Err(ConnectError::permanent(format!(
@@ -441,6 +629,135 @@ async fn open_shell(
             )))
         }
     }
+    Ok(())
+}
+
+async fn open_shell(
+    creds: &ConnectRequest,
+    session_id: u64,
+    sink: Arc<dyn EventSink>,
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    kbi_pending: KbiPromptMap,
+    known_hosts_path: Option<PathBuf>,
+    remote_routes: Arc<Mutex<HashMap<(u64, u16), forward::RemoteForwardRoute>>>,
+) -> Result<
+    (
+        client::Handle<SshHandler>,
+        Option<client::Handle<SshHandler>>,
+        ChannelReadHalf,
+        ChannelWriteHalf<russh::client::Msg>,
+    ),
+    ConnectError,
+> {
+    let config = Arc::new(client::Config {
+        keepalive_interval: Some(Duration::from_secs(creds.keepalive.clamp(5, 300))),
+        keepalive_max: 2,
+        ..Default::default()
+    });
+    let handler = SshHandler {
+        host: creds.host.clone(),
+        port: creds.port,
+        sink: sink.clone(),
+        pending: pending.clone(),
+        known_hosts_path,
+        session_id,
+        remote_routes: remote_routes.clone(),
+    };
+    let (mut session, proxy_conn) = match &creds.proxy {
+        Some(proxy) => {
+            let proxy_handler = SshHandler {
+                host: proxy.host.clone(),
+                port: proxy.port,
+                sink: sink.clone(),
+                pending: pending.clone(),
+                known_hosts_path: handler.known_hosts_path.clone(),
+                session_id,
+                remote_routes: remote_routes.clone(),
+            };
+            let mut proxy_session = tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                client::connect(
+                    config.clone(),
+                    (proxy.host.as_str(), proxy.port),
+                    proxy_handler,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                ConnectError::transient(format!(
+                    "跳板机连接超时：{} 秒内未能与 {}:{} 建立连接",
+                    CONNECT_TIMEOUT.as_secs(),
+                    proxy.host,
+                    proxy.port
+                ))
+            })?
+            .map_err(|e| ConnectError::from_connect(format!("跳板机连接失败: {e}")))?;
+            authenticate_connection(
+                &mut proxy_session,
+                &proxy.username,
+                &proxy.auth_method,
+                proxy.password.as_deref(),
+                proxy.key_path.as_deref(),
+                proxy.passphrase.as_deref(),
+                None,
+                &sink,
+                &kbi_pending,
+                session_id,
+            )
+            .await?;
+            let channel = proxy_session
+                .channel_open_direct_tcpip(
+                    creds.host.clone(),
+                    u32::from(creds.port),
+                    "127.0.0.1",
+                    0,
+                )
+                .await
+                .map_err(|e| ConnectError::transient(format!("跳板机建立隧道失败: {e}")))?;
+            let tunneled = tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                client::connect_stream(config.clone(), channel.into_stream(), handler),
+            )
+            .await
+            .map_err(|_| {
+                ConnectError::transient(format!(
+                    "连接超时：{} 秒内未能经由跳板机连接服务器",
+                    CONNECT_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
+            (tunneled, Some(proxy_session))
+        }
+        None => {
+            let session = tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                client::connect(config, (creds.host.as_str(), creds.port), handler),
+            )
+            .await
+            .map_err(|_| {
+                ConnectError::transient(format!(
+                    "连接超时：{} 秒内未能与服务器建立连接",
+                    CONNECT_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
+            (session, None)
+        }
+    };
+
+    authenticate_connection(
+        &mut session,
+        &creds.username,
+        &creds.auth_method,
+        creds.password.as_deref(),
+        creds.key_path.as_deref(),
+        creds.passphrase.as_deref(),
+        creds.otp_secret.as_deref(),
+        &sink,
+        &kbi_pending,
+        session_id,
+    )
+    .await?;
 
     let channel = session
         .channel_open_session()
@@ -456,7 +773,7 @@ async fn open_shell(
         .map_err(|e| ConnectError::transient(format!("打开远程 Shell 失败: {e}")))?;
 
     let (read_half, write_half) = channel.split();
-    Ok((session, read_half, write_half))
+    Ok((session, proxy_conn, read_half, write_half))
 }
 
 async fn shell_loop(
@@ -468,8 +785,8 @@ async fn shell_loop(
     loop {
         tokio::select! {
             msg = channel_read.wait() => match msg {
-                Some(ChannelMsg::Data { data }) => emit_output(sink.as_ref(), session.session_id, data.to_vec()),
-                Some(ChannelMsg::ExtendedData { data, .. }) => emit_output(sink.as_ref(), session.session_id, data.to_vec()),
+                Some(ChannelMsg::Data { data }) => dispatch_output(sink.as_ref(), &session, data.to_vec()),
+                Some(ChannelMsg::ExtendedData { data, .. }) => dispatch_output(sink.as_ref(), &session, data.to_vec()),
                 Some(ChannelMsg::Eof) => {}
                 Some(ChannelMsg::Close) => return reason,
                 Some(_) => {}
@@ -507,6 +824,7 @@ async fn run_session(
             id,
             sink.clone(),
             manager.host_key_confirmations.clone(),
+            manager.kbi_prompts.clone(),
             manager.effective_known_hosts_path(),
             manager.remote_routes.clone(),
         )
@@ -532,7 +850,7 @@ async fn run_session(
                 attempt += 1;
                 tokio::time::sleep(reconnect_delay(attempt)).await;
             }
-            Ok((conn, read_half, write_half)) => {
+            Ok((conn, proxy_conn, read_half, write_half)) => {
                 attempt = 0;
                 let mut conn = conn;
                 if let Err(error) = manager.restore_remote_forwards(id, &mut conn).await {
@@ -550,12 +868,20 @@ async fn run_session(
                     *lock = Some(conn);
                 }
                 {
+                    let mut lock = session.proxy_conn.lock().await;
+                    *lock = proxy_conn;
+                }
+                {
                     let mut lock = session.write.lock().await;
                     *lock = Some(write_half);
                 }
                 let reason = shell_loop(sink.clone(), session.clone(), read_half).await;
                 {
                     let mut lock = session.conn.lock().await;
+                    *lock = None;
+                }
+                {
+                    let mut lock = session.proxy_conn.lock().await;
                     *lock = None;
                 }
                 {
@@ -647,6 +973,7 @@ impl SshManager {
         &self,
         manager: Arc<SshManager>,
         sink: Arc<dyn EventSink>,
+        output: Option<Arc<dyn RawOutput>>,
         req: ConnectRequest,
     ) -> Result<u64, String> {
         if req.host.trim().is_empty() {
@@ -654,6 +981,11 @@ impl SshManager {
         }
         if req.username.trim().is_empty() {
             return Err("用户名不能为空".to_string());
+        }
+        if let Some(proxy) = &req.proxy {
+            if proxy.host.trim().is_empty() || proxy.username.trim().is_empty() {
+                return Err("跳板机地址或用户名不能为空".to_string());
+            }
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = if req.name.trim().is_empty() {
@@ -675,12 +1007,27 @@ impl SshManager {
             info,
             creds: req,
             conn: Mutex::new(None),
+            proxy_conn: Mutex::new(None),
             write: Mutex::new(None),
+            output,
             manual_closed: AtomicBool::new(false),
         });
         self.sessions.lock().await.insert(id, session.clone());
         tauri::async_runtime::spawn(run_session(sink.clone(), manager, session));
         Ok(id)
+    }
+
+    /// 前端应答交互式认证提示。没有等待中的提示时返回错误。
+    pub async fn answer_kbi(&self, session_id: u64, answers: Vec<String>) -> Result<(), String> {
+        let sender = self
+            .kbi_prompts
+            .lock()
+            .await
+            .remove(&session_id)
+            .ok_or_else(|| "没有等待中的交互式认证提示".to_string())?;
+        sender
+            .send(answers)
+            .map_err(|_| "交互式认证请求已结束".to_string())
     }
 
     pub async fn write(&self, id: u64, data: Vec<u8>) -> Result<(), String> {

@@ -12,6 +12,8 @@ import { TerminalSettings, useSettings } from '../../store/settings'
 interface Props {
   id: number
   active: boolean
+  /** 分屏角色：left/right 时在分屏布局中始终可见并接受输入 */
+  splitRole?: 'none' | 'left' | 'right'
 }
 
 const BASE_OPTIONS = {
@@ -84,7 +86,7 @@ function useEffectiveMode(): 'light' | 'dark' {
   return mode
 }
 
-export function TerminalPane({ id, active }: Props) {
+export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -92,6 +94,8 @@ export function TerminalPane({ id, active }: Props) {
   const webglRef = useRef<WebglAddon | null>(null)
   const activeRef = useRef(active)
   activeRef.current = active
+  const splitRoleRef = useRef(splitRole)
+  splitRoleRef.current = splitRole
   const openSearchRef = useRef<() => void>(() => undefined)
 
   const registerTerminal = useSessions((s) => s.registerTerminal)
@@ -201,14 +205,14 @@ export function TerminalPane({ id, active }: Props) {
     })
 
     const onWindowResize = () => {
-      if (activeRef.current) {
+      if (activeRef.current || splitRoleRef.current !== 'none') {
         fit.fit()
       }
     }
     window.addEventListener('resize', onWindowResize)
 
     const observer = new ResizeObserver(() => {
-      if (activeRef.current) {
+      if (activeRef.current || splitRoleRef.current !== 'none') {
         fit.fit()
       }
     })
@@ -260,7 +264,9 @@ export function TerminalPane({ id, active }: Props) {
   }, [active, id])
 
   return (
-    <div className={`terminal-pane glass ${active ? 'active' : ''}`}>
+    <div
+      className={`terminal-pane glass ${active ? 'active' : ''} ${splitRole !== 'none' ? `split-${splitRole}` : ''}`}
+    >
       <div className="terminal-host" ref={containerRef} />
       {searchOpen && (
         <div className="terminal-search glass">

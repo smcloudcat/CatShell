@@ -15,9 +15,11 @@ export function SessionsView() {
   const sessions = useSessions((s) => s.sessions)
   const order = useSessions((s) => s.order)
   const activeId = useSessions((s) => s.activeId)
+  const splitId = useSessions((s) => s.splitId)
   const connectedAt = useSessions((s) => s.connectedAt)
   const init = useSessions((s) => s.init)
   const setActive = useSessions((s) => s.setActive)
+  const setSplit = useSessions((s) => s.setSplit)
   const closeTab = useSessions((s) => s.closeTab)
   const disconnect = useSessions((s) => s.disconnect)
   const reconnect = useSessions((s) => s.reconnect)
@@ -139,6 +141,17 @@ export function SessionsView() {
   const connectedSessions = order.filter((id) => sessions[id]?.status === 'connected')
   const broadcastActiveCount = broadcastTargets.filter((id) => sessions[id]?.status === 'connected').length
   const allBroadcastSelected = connectedSessions.length > 0 && connectedSessions.every((id) => broadcastTargets.includes(id))
+
+  const toggleSplit = () => {
+    if (splitId !== null) {
+      setSplit(null)
+      return
+    }
+    if (activeId === null) return
+    const candidate = order.find((id) => id !== activeId)
+    if (candidate === undefined) return
+    setSplit(candidate)
+  }
 
   const commitRename = async () => {
     const id = renamingId
@@ -275,6 +288,15 @@ export function SessionsView() {
           <Icon name="broadcast" size={14} />
           广播输入
         </button>
+        <button
+          className={`glass-btn ${splitId !== null ? 'primary' : ''}`}
+          onClick={toggleSplit}
+          disabled={order.length < 2}
+          title={splitId !== null ? '退出分屏，恢复单终端布局' : '将另一个会话的终端与当前终端左右并排显示'}
+        >
+          <Icon name="columns" size={14} />
+          分屏
+        </button>
         <button className="glass-btn" onClick={exportSessionLog} disabled={activeId === null} title="导出当前会话最近 2 MB 输出">
           <Icon name="save" size={14} />保存日志
         </button>
@@ -317,11 +339,27 @@ export function SessionsView() {
         </div>
       )}
       <div className="session-workspace">
-        <div className="terminal-stack">
+        <div className={`terminal-stack ${splitId !== null ? 'split' : ''}`}>
           {order.map((id) => (
-            <TerminalPane key={id} id={id} active={activeId === id} />
+            <TerminalPane
+              key={id}
+              id={id}
+              active={activeId === id || splitId === id}
+              splitRole={splitId === null ? 'none' : id === activeId ? 'left' : id === splitId ? 'right' : 'none'}
+            />
           ))}
         </div>
+        {splitId !== null && sessions[splitId] && (
+          <div className="split-bar glass">
+            <span className="split-label" title={sessions[splitId]?.host}>
+              <Icon name="columns" size={13} />
+              右侧：{sessions[splitId]?.name}
+            </span>
+            <button className="host-icon-btn" onClick={() => setSplit(null)} title="退出分屏">
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+        )}
         {activeId !== null && (
           sessionPanels.monitorCollapsed ? (
             <aside className="session-panel-rail">
