@@ -1,0 +1,269 @@
+/* ============ 寮圭獥 ============ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(2, 6, 16, 0.55);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlay-in 0.18s var(--ease-out);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  width: min(560px, calc(100vw - 64px));
+  max-height: calc(100vh - 80px);
+  border-radius: 18px;
+  border: 1px solid var(--hairline-strong);
+  /* 寮圭獥琛ㄩ潰涓嶉殢銆屽崱鐗囦笉閫忔槑搴︺€嶈缃彉鍖栵紝淇濊瘉浠讳綍鑳屾櫙璁剧疆涓嬫枃瀛楀彲璇?*/
+  background: rgb(var(--glass-bg) / 0.95);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
+  backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-main);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-in 0.22s var(--ease-out);
+}
+
+/* 寮圭獥鍐呯殑杈撳叆涓庢寜閽敼鐢ㄥ崐閫忔槑琛ㄩ潰鑹诧紝閬垮厤鐧藉簳鐧藉瓧/鐧藉簳鐧介挳 */
+.modal .glass-input,
+.modal .seg-btn:not(.active),
+.modal .glass-btn:not(.primary) {
+  background: var(--soft-bg-strong);
+}
+
+.modal .glass-input:focus {
+  background: var(--soft-bg-strong);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.modal-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.modal-close:hover {
+  background: var(--hover-bg);
+  color: var(--text-main);
+}
+
+.modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field.span-2 {
+  grid-column: span 2;
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.modal .field-label {
+  color: var(--text-main);
+  opacity: 0.72;
+}
+
+.field input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.key-picker {
+  display: flex;
+  gap: 8px;
+}
+
+.key-picker .glass-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-error {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+  color: var(--err);
+  font-size: 12px;
+}
+
+/* ============ SSH config 导入弹窗 ============ */
+.sshconfig-modal {
+  width: min(640px, calc(100vw - 64px));
+}
+
+.sshconfig-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.sshconfig-row {
+  display: grid;
+  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.03));
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.sshconfig-row input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.sshconfig-name {
+  color: var(--text-main);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sshconfig-meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sshconfig-dup {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.sshconfig-new {
+  font-size: 10.5px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.terminal-search {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+.terminal-search-input {
+  width: 190px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+@media (max-width: 700px) {
+  .sshconfig-row {
+    grid-template-columns: 16px minmax(0, 1fr);
+  }
+
+  .sshconfig-meta {
+    grid-column: 2;
+    white-space: normal;
+  }
+
+  .sshconfig-dup {
+    display: none;
+  }
+}

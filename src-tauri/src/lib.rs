@@ -265,18 +265,12 @@ async fn sftp_upload_chunk(
 }
 
 #[tauri::command]
-async fn sftp_upload_finish(
-    state: State<'_, AppState>,
-    transfer_id: u64,
-) -> Result<(), String> {
+async fn sftp_upload_finish(state: State<'_, AppState>, transfer_id: u64) -> Result<(), String> {
     state.ssh.sftp_upload_finish(transfer_id).await
 }
 
 #[tauri::command]
-async fn sftp_transfer_cancel(
-    state: State<'_, AppState>,
-    transfer_id: u64,
-) -> Result<(), String> {
+async fn sftp_transfer_cancel(state: State<'_, AppState>, transfer_id: u64) -> Result<(), String> {
     state.ssh.sftp_transfer_cancel(transfer_id).await
 }
 
@@ -308,8 +302,8 @@ async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     if !path.exists() {
         return Err("未找到 ~/.ssh/config 文件".to_string());
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
     Ok(ssh_manager::parse_ssh_config(&content))
 }
 

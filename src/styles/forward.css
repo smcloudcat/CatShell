@@ -1,0 +1,99 @@
+/* ============ 绔彛杞彂 ============ */
+.forward-view {
+  overflow-y: auto;
+}
+
+.forward-form,
+.forward-list-panel {
+  padding: 16px;
+}
+
+.forward-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.forward-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.forward-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.forward-list-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.forward-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.forward-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.5fr) 32px;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.04));
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease, background 0.13s ease;
+}
+
+.forward-row:hover {
+  border-color: var(--hairline-strong);
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.08));
+}
+
+.forward-route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.forward-direction {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.forward-route strong,
+.forward-route code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forward-route strong {
+  color: var(--text-main);
+}
+
+.forward-route code,
+.forward-session {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.forward-session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

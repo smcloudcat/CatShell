@@ -1,0 +1,241 @@
+/* ============ 鏈嶅姟鍣ㄧ洃鎺?============ */
+.monitor-view {
+  overflow-y: auto;
+}
+
+.monitor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.monitor-select {
+  max-width: 520px;
+  cursor: pointer;
+}
+
+.monitor-status {
+  margin-left: auto;
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.monitor-alerts {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.monitor-alerts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitor-summary,
+.monitor-panels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.monitor-panels {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.monitor-card,
+.monitor-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.monitor-card {
+  position: relative;
+}
+
+.monitor-card strong {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitor-card > span:last-child,
+.monitor-label,
+.monitor-panel-meta,
+.monitor-updated {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.monitor-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.monitor-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.metric-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--soft-bg-strong);
+  overflow: hidden;
+  margin: 12px 0 4px;
+}
+
+.metric-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 65%, transparent),
+    var(--accent)
+  );
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 34%, transparent);
+  transition: width 0.3s var(--ease-out);
+}
+
+.monitor-panel-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.network-values {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.network-values strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-updated {
+  text-align: right;
+}
+
+.monitor-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.monitor-interval select {
+  width: 84px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.monitor-sparkline {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  width: 88px;
+  height: 26px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.monitor-sparkline path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.monitor-extra-panels {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+}
+
+.process-panel,
+.diagnostic-panel {
+  min-width: 0;
+}
+
+.process-list-head,
+.process-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 52px 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.process-list-head {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  margin-top: 8px;
+}
+
+.process-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.process-row {
+  min-height: 36px;
+  border-bottom: 1px solid var(--soft-bg);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.process-row > span:first-child {
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-row .host-icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.diagnostic-form {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.diagnostic-output {
+  max-height: 240px;
+  overflow: auto;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--glass-border) / calc(var(--border-opacity) * 0.6));
+  background: rgba(4, 8, 18, 0.82);
+  color: #d3e2fb;
+  font: 11.5px/1.6 Consolas, 'Cascadia Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

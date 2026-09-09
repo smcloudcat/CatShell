@@ -21,14 +21,20 @@ jobs:
       - run: npm run build
 
   rust:
-    name: Rust (check / test)
+    name: Rust (fmt / clippy / check / test)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - run: cargo fmt --check
+        working-directory: src-tauri
+      - run: cargo clippy -- -D warnings
+        working-directory: src-tauri
       - run: cargo check
         working-directory: src-tauri
       - run: cargo test

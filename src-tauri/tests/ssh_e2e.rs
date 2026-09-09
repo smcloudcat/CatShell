@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use catshell_lib::ssh_manager::{ConnectRequest, EventSink, SshManager};
 use russh::keys::*;
 use russh::server::{self, Msg as ServerMsg, Server as _};
 use russh::{Channel, ChannelId};
 use serde_json::Value;
-use catshell_lib::ssh_manager::{ConnectRequest, EventSink, SshManager};
 use tokio::net::TcpListener;
 
 struct TestSink {
