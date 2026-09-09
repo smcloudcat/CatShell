@@ -9,7 +9,7 @@ use ssh_manager::{
     NetworkDiagnostic, PortForwardInfo, ProcessInfo, ServerMetrics, SessionInfo, SftpChunk,
     SftpEntry, SftpTransferStart, SshConfigEntry, SshManager,
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct AppState {
     pub ssh: Arc<SshManager>,
@@ -309,7 +309,18 @@ async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_window_state::Builder::default().build());
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -348,6 +359,13 @@ pub fn run() {
             sftp_upload_finish,
             sftp_transfer_cancel
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri_plugin_window_state::AppHandleExt as _;
+                use tauri_plugin_window_state::StateFlags;
+                let _ = app.save_window_state(StateFlags::all());
+            }
+        });
 }

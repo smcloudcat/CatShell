@@ -21,7 +21,7 @@ export function getSnippetParameters(command: string): string[] {
   return names
 }
 
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`
 }
 

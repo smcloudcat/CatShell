@@ -27,6 +27,7 @@ interface SessionsState {
   activeId: number | null
   terminals: Record<number, TerminalRef>
   requests: Record<number, ConnectRequest>
+  connectedAt: Record<number, number>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
   broadcastEnabled: boolean
@@ -106,6 +107,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   activeId: null,
   terminals: {},
   requests: {},
+  connectedAt: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
   broadcastEnabled: false,
@@ -165,12 +167,18 @@ export const useSessions = create<SessionsState>((set, get) => ({
             attempt: event.attempt
           }
         },
-        order: s.order.includes(event.id) ? s.order : [...s.order, event.id]
+        order: s.order.includes(event.id) ? s.order : [...s.order, event.id],
+        connectedAt: event.status === 'connected'
+          ? { ...s.connectedAt, [event.id]: Date.now() }
+          : s.connectedAt
       }))
       return
     }
     const updated: SessionInfo = { ...info, status: event.status, reason: event.reason, attempt: event.attempt }
-    set({ sessions: { ...sessions, [event.id]: updated } })
+    const connectedAt = { ...get().connectedAt }
+    if (event.status === 'connected') connectedAt[event.id] = Date.now()
+    if (event.status === 'disconnected' || event.status === 'closed') delete connectedAt[event.id]
+    set({ sessions: { ...sessions, [event.id]: updated }, connectedAt })
     const prompt = get().hostKeyPrompt
     if (
       (event.status === 'disconnected' || event.status === 'closed') &&
@@ -235,9 +243,11 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const sessions = { ...s.sessions }
       const requests = { ...s.requests }
       const terminals = { ...s.terminals }
+      const connectedAt = { ...s.connectedAt }
       delete sessions[id]
       delete requests[id]
       delete terminals[id]
+      delete connectedAt[id]
       sessions[newId] = {
         id: newId,
         name: info.name,
@@ -248,7 +258,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       }
       const order = [...new Set(s.order.map((item) => (item === id ? newId : item)))]
       const activeId = s.activeId === id ? newId : s.activeId
-      return { sessions, requests, order, terminals, activeId }
+      return { sessions, requests, order, terminals, connectedAt, activeId }
     })
     return newId
   },
@@ -279,8 +289,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const order = s.order.filter((x) => x !== id)
       const terminals = { ...s.terminals }
       delete terminals[id]
+      const connectedAt = { ...s.connectedAt }
+      delete connectedAt[id]
       const activeId = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
-      return { sessions, requests, order, terminals, activeId }
+      return { sessions, requests, order, terminals, connectedAt, activeId }
     })
   },
   renameSession: async (id, name) => {

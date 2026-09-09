@@ -31,6 +31,25 @@ export interface HostGroup {
   expanded: boolean
 }
 
+export const HOST_ICON_OPTIONS = [
+  'server',
+  'terminal',
+  'key',
+  'database',
+  'monitor',
+  'folder',
+  'link',
+  'home',
+  'image',
+  'palette'
+] as const
+
+export type HostIconName = (typeof HOST_ICON_OPTIONS)[number]
+
+export function normalizeHostIcon(icon: string): HostIconName {
+  return (HOST_ICON_OPTIONS as readonly string[]).includes(icon) ? (icon as HostIconName) : 'server'
+}
+
 export const createHostProfile = (partial: Partial<HostProfile>): HostProfile => ({
   id: crypto.randomUUID(),
   name: '',

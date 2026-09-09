@@ -18,6 +18,7 @@ import {
 } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
+import { shellQuote } from '../../types/snippet'
 import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog } from '../../store/ui'
@@ -79,7 +80,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [editorText, setEditorText] = useState('')
   const [editorBusy, setEditorBusy] = useState(false)
   const [transfers, setTransfers] = useState<TransferProgress[]>([])
-  const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename'; target: SftpEntry | null; value: string } | null>(null)
+  const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename' | 'move'; target: SftpEntry | null; value: string } | null>(null)
   const [nameBusy, setNameBusy] = useState(false)
   const [sortKey, setSortKey] = useState<SftpSortKey>('name')
   const [sortAsc, setSortAsc] = useState(true)
@@ -90,6 +91,20 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const dragDepth = useRef(0)
 
   const connected = sessions[sessionId]?.status === 'connected'
+  const write = useSessions((state) => state.write)
+  const terminals = useSessions((state) => state.terminals)
+
+  const openInTerminal = async () => {
+    setError(null)
+    try {
+      await write(sessionId, new TextEncoder().encode(`cd ${shellQuote(path)}\n`))
+      terminals[sessionId]?.focus()
+      recordAudit('sftp.open-in-terminal', path, 'success', '在终端中打开此目录')
+    } catch (err) {
+      recordAudit('sftp.open-in-terminal', path, 'failure', '在终端中打开此目录失败')
+      setError(typeof err === 'string' ? err : '发送 cd 命令失败')
+    }
+  }
 
   const visibleEntries = useMemo(() => {
     const needle = nameFilter.trim().toLowerCase()
@@ -371,8 +386,50 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }
 
+  const joinRemotePath = (dir: string, name: string): string => {
+    const normalized = dir === '/' ? '' : dir.replace(/\/+$/, '')
+    return `${normalized}/${name}`
+  }
+
+  const submitMoveDialog = async () => {
+    if (!nameDialog || nameDialog.mode !== 'move' || !nameDialog.target) return
+    const entry = nameDialog.target
+    const dir = nameDialog.value.trim()
+    if (!dir.startsWith('/') || dir.includes('//')) {
+      setError('目标目录必须是绝对路径（以 / 开头）')
+      return
+    }
+    const target = joinRemotePath(dir.replace(/\/+$/, '') || '/', entry.name)
+    if (target === entry.path) {
+      setError('目标目录与当前位置相同')
+      return
+    }
+    if (entry.kind === 'directory' && (target.startsWith(`${entry.path}/`) || entry.path === dir.replace(/\/+$/, ''))) {
+      setError('不能把目录移动到其自身或其子目录中')
+      return
+    }
+    setNameBusy(true)
+    setError(null)
+    try {
+      await sftpRename(sessionId, entry.path, target)
+      recordAudit('sftp.move', `${entry.path} -> ${target}`, 'success', '移动远程文件')
+      setNotice(`已移动到 ${dir}`)
+      setNameDialog(null)
+      await loadDirectory(path)
+    } catch (err) {
+      recordAudit('sftp.move', entry.path, 'failure', '移动远程文件失败')
+      setError(typeof err === 'string' ? err : '移动失败')
+    } finally {
+      setNameBusy(false)
+    }
+  }
+
   const submitNameDialog = async () => {
     if (!nameDialog) return
+    if (nameDialog.mode === 'move') {
+      await submitMoveDialog()
+      return
+    }
     const value = nameDialog.value.trim()
     if (!value || value.includes('/')) return
     setNameBusy(true)
@@ -481,6 +538,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       <div className="sftp-pathbar">
         <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
         <code>{path}</code>
+        <button className="host-icon-btn" onClick={() => void openInTerminal()} title="在终端中打开此目录（发送 cd 命令）"><Icon name="terminal" size={15} /></button>
       </div>
       <div className="sftp-filterbar">
         <select
@@ -530,6 +588,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void handleDownload(entry)} title="下载"><Icon name="save" size={14} /></button>}
               {entry.kind === 'file' && <button className="host-icon-btn" onClick={() => void openEditor(entry)} title="编辑文本文件"><Icon name="settings" size={14} /></button>}
               <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'rename', target: entry, value: entry.name })} title="重命名"><Icon name="edit" size={14} /></button>
+              <button className="host-icon-btn" onClick={() => setNameDialog({ mode: 'move', target: entry, value: path })} title="移动到其他目录"><Icon name="arrow-right" size={14} /></button>
               <button className="host-icon-btn danger" onClick={() => void handleDelete(entry)} title={entry.kind === 'directory' ? '递归删除目录' : '删除'}><Icon name="trash" size={14} /></button>
             </span>
           </div>
@@ -550,19 +609,30 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         <div className="modal-overlay" onClick={() => !nameBusy && setNameDialog(null)}>
           <div className="modal glass" onClick={(event) => event.stopPropagation()}>
             <header className="modal-header">
-              <div className="modal-title"><Icon name={nameDialog.mode === 'mkdir' ? 'plus' : 'edit'} size={17} />{nameDialog.mode === 'mkdir' ? '新建远程目录' : `重命名 ${nameDialog.target?.name ?? ''}`}</div>
+              <div className="modal-title"><Icon name={nameDialog.mode === 'mkdir' ? 'plus' : nameDialog.mode === 'move' ? 'arrow-right' : 'edit'} size={17} />{nameDialog.mode === 'mkdir' ? '新建远程目录' : nameDialog.mode === 'move' ? `移动 ${nameDialog.target?.name ?? ''}` : `重命名 ${nameDialog.target?.name ?? ''}`}</div>
               <button className="modal-close" onClick={() => setNameDialog(null)} disabled={nameBusy}><Icon name="x" size={15} /></button>
             </header>
             <div className="modal-body">
               {nameDialog.mode === 'mkdir' && <div className="section-tip">将在当前目录 {path} 下创建新目录。</div>}
+              {nameDialog.mode === 'move' && <div className="section-tip">输入目标目录的绝对路径，文件将移动到该目录下并保持原文件名。</div>}
               <label className="field">
-                <span className="field-label">名称</span>
-                <input className="glass-input" value={nameDialog.value} onChange={(event) => setNameDialog({ ...nameDialog, value: event.target.value })} autoFocus onKeyDown={(event) => { if (event.key === 'Enter' && !nameBusy) void submitNameDialog() }} />
+                <span className="field-label">{nameDialog.mode === 'move' ? '目标目录' : '名称'}</span>
+                <input
+                  className="glass-input"
+                  value={nameDialog.value}
+                  onChange={(event) => setNameDialog({ ...nameDialog, value: event.target.value })}
+                  autoFocus
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !nameBusy) void submitNameDialog() }}
+                />
               </label>
             </div>
             <footer className="modal-footer">
               <button className="glass-btn" onClick={() => setNameDialog(null)} disabled={nameBusy}>取消</button>
-              <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? '处理中…' : '确认'}</button>
+              {nameDialog.mode === 'move' ? (
+                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim()}>{nameBusy ? '处理中…' : '移动'}</button>
+              ) : (
+                <button className="glass-btn primary" onClick={() => void submitNameDialog()} disabled={nameBusy || !nameDialog.value.trim() || nameDialog.value.trim().includes('/')}>{nameBusy ? '处理中…' : '确认'}</button>
+              )}
             </footer>
           </div>
         </div>

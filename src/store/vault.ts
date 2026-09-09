@@ -41,6 +41,12 @@ let sessionKey: CryptoKey | null = null
 let autoLockTimer: number | null = null
 let lastVaultActivity = 0
 
+function onBlurLockWindow() {
+  if (useSettings.getState().vaultBlurLock) {
+    useVault.getState().lock()
+  }
+}
+
 function touchVaultActivity() {
   lastVaultActivity = Date.now()
 }
@@ -50,11 +56,13 @@ function stopAutoLockTimer() {
     window.clearInterval(autoLockTimer)
     autoLockTimer = null
   }
+  window.removeEventListener('blur', onBlurLockWindow)
 }
 
 function startAutoLockTimer() {
   stopAutoLockTimer()
   lastVaultActivity = Date.now()
+  window.addEventListener('blur', onBlurLockWindow)
   autoLockTimer = window.setInterval(() => {
     const minutes = useSettings.getState().vaultAutoLockMinutes
     if (!minutes) return

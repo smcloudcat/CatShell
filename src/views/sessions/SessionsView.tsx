@@ -15,6 +15,7 @@ export function SessionsView() {
   const sessions = useSessions((s) => s.sessions)
   const order = useSessions((s) => s.order)
   const activeId = useSessions((s) => s.activeId)
+  const connectedAt = useSessions((s) => s.connectedAt)
   const init = useSessions((s) => s.init)
   const setActive = useSessions((s) => s.setActive)
   const closeTab = useSessions((s) => s.closeTab)
@@ -41,11 +42,18 @@ export function SessionsView() {
   const [snippetPrompt, setSnippetPrompt] = useState<CommandSnippet | null>(null)
   const [snippetValues, setSnippetValues] = useState<Record<string, string>>({})
   const [snippetError, setSnippetError] = useState<string | null>(null)
+  const [, setDurationTick] = useState(0)
 
   useEffect(() => {
     void init()
     void snippetsInit()
   }, [init, snippetsInit])
+
+  useEffect(() => {
+    if (!order.some((id) => sessions[id]?.status === 'connected')) return
+    const timer = window.setInterval(() => setDurationTick((value) => value + 1), 30_000)
+    return () => window.clearInterval(timer)
+  }, [order, sessions])
 
   const sendRenderedSnippet = async (snippet: CommandSnippet, command: string) => {
     if (activeId === null) return
@@ -215,7 +223,7 @@ export function SessionsView() {
                   {info.name}
                 </span>
               )}
-              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason, info.attempt ?? null)}</span>
+              <span className="tab-status" title={info.reason || undefined}>{statusLabel(info.status, info.reason, info.attempt ?? null)}{status === 'connected' && connectedAt[id] ? ` · ${formatOnlineDuration(Date.now() - connectedAt[id])}` : ''}</span>
               {(status === 'disconnected' || status === 'closed') && (
                 <button
                   className="tab-close"
@@ -394,6 +402,14 @@ export function SessionsView() {
       )}
     </div>
   )
+}
+
+function formatOnlineDuration(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000))
+  if (minutes < 60) return `${minutes}分`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours}小时${rest}分` : `${hours}小时`
 }
 
 function statusLabel(status: string, reason?: string | null, attempt?: number | null): string {

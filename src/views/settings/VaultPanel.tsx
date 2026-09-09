@@ -38,6 +38,9 @@ export function VaultPanel() {
   const vaultAutoLockMinutes = useSettings((state) => state.vaultAutoLockMinutes)
   const setVaultAutoLockMinutes = useSettings((state) => state.setVaultAutoLockMinutes)
   const saveVaultAutoLockMinutes = useSettings((state) => state.saveVaultAutoLockMinutes)
+  const vaultBlurLock = useSettings((state) => state.vaultBlurLock)
+  const setVaultBlurLock = useSettings((state) => state.setVaultBlurLock)
+  const saveVaultBlurLock = useSettings((state) => state.saveVaultBlurLock)
 
   useEffect(() => {
     void init()
@@ -229,6 +232,18 @@ export function VaultPanel() {
         </select>
       </label>
       <div className="section-tip">保险箱解锁后，若在设定时长内没有任何凭据操作，将自动锁定并清除内存中的明文凭据。</div>
+      <label className="field checkbox-field">
+        <span className="field-label">窗口失焦时自动锁定</span>
+        <input
+          type="checkbox"
+          checked={vaultBlurLock}
+          onChange={(event) => {
+            setVaultBlurLock(event.target.checked)
+            void saveVaultBlurLock()
+          }}
+        />
+      </label>
+      <div className="section-tip">开启后，只要应用窗口失去焦点（切换到其他窗口），保险箱立即锁定并清除内存凭据。关闭的窗口（如文件选择器）不会触发锁定。</div>
       {error && unlocked && <div className="form-error">{error}</div>}
       {notice && unlocked && <div className="form-notice">{notice}</div>}
     </div>

@@ -23,6 +23,7 @@ export type IconName =
   | 'database'
   | 'edit'
   | 'broadcast'
+  | 'arrow-right'
 
 const paths: Record<IconName, React.ReactNode> = {
   palette: (
@@ -159,6 +160,12 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
       <path d="M16.24 16.24a6 6 0 0 0 0-8.49" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </>
+  ),
+  'arrow-right': (
+    <>
+      <path d="M5 12h14" />
+      <path d="m13 6 6 6-6 6" />
     </>
   )
 }

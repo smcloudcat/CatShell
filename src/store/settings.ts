@@ -7,6 +7,7 @@ const THEME_KEY = 'theme'
 const MONITOR_THRESHOLDS_KEY = 'monitorThresholds'
 const SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed'
 const VAULT_AUTO_LOCK_KEY = 'vaultAutoLockMinutes'
+const VAULT_BLUR_LOCK_KEY = 'vaultBlurLock'
 const TERMINAL_KEY = 'terminal'
 const MONITOR_INTERVAL_KEY = 'monitorIntervalSeconds'
 const SESSION_PANELS_KEY = 'sessionPanelsCollapsed'
@@ -75,6 +76,7 @@ interface SettingsState {
   monitorThresholds: MonitorThresholds
   sidebarCollapsed: boolean
   vaultAutoLockMinutes: number
+  vaultBlurLock: boolean
   terminal: TerminalSettings
   monitorIntervalSeconds: number
   sessionPanels: SessionPanelState
@@ -89,6 +91,8 @@ interface SettingsState {
   toggleSidebar: () => void
   setVaultAutoLockMinutes: (minutes: number) => void
   saveVaultAutoLockMinutes: () => Promise<void>
+  setVaultBlurLock: (enabled: boolean) => void
+  saveVaultBlurLock: () => Promise<void>
   setTerminal: (patch: Partial<TerminalSettings>) => void
   saveTerminal: () => Promise<void>
   setMonitorIntervalSeconds: (seconds: number) => void
@@ -109,6 +113,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS },
   sidebarCollapsed: false,
   vaultAutoLockMinutes: DEFAULT_VAULT_AUTO_LOCK_MINUTES,
+  vaultBlurLock: false,
   terminal: { ...DEFAULT_TERMINAL_SETTINGS },
   monitorIntervalSeconds: DEFAULT_MONITOR_INTERVAL_SECONDS,
   sessionPanels: { ...DEFAULT_SESSION_PANELS },
@@ -174,6 +179,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
       localStorage.setItem(VAULT_AUTO_LOCK_KEY, JSON.stringify(minutes))
     }
   },
+  setVaultBlurLock: (enabled) => set({ vaultBlurLock: enabled }),
+  saveVaultBlurLock: async () => {
+    const enabled = get().vaultBlurLock
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(VAULT_BLUR_LOCK_KEY, enabled)
+      await store.save()
+    } catch {
+      localStorage.setItem(VAULT_BLUR_LOCK_KEY, JSON.stringify(enabled))
+    }
+  },
   setTerminal: (patch) =>
     set((state) => ({ terminal: normalizeTerminalSettings({ ...state.terminal, ...patch }) })),
   saveTerminal: async () => {
@@ -226,6 +242,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const thresholds = await store.get<Partial<MonitorThresholds>>(MONITOR_THRESHOLDS_KEY)
       const sidebarCollapsed = await store.get<boolean>(SIDEBAR_COLLAPSED_KEY)
       const vaultAutoLockMinutes = await store.get<number>(VAULT_AUTO_LOCK_KEY)
+      const vaultBlurLock = await store.get<boolean>(VAULT_BLUR_LOCK_KEY)
       const savedTerminal = await store.get<Partial<TerminalSettings>>(TERMINAL_KEY)
       const savedInterval = await store.get<number>(MONITOR_INTERVAL_KEY)
       const savedPanels = await store.get<Partial<SessionPanelState>>(SESSION_PANELS_KEY)
@@ -240,6 +257,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (typeof vaultAutoLockMinutes === 'number' && VAULT_AUTO_LOCK_OPTIONS.includes(vaultAutoLockMinutes)) {
         set({ vaultAutoLockMinutes })
+      }
+      if (typeof vaultBlurLock === 'boolean') {
+        set({ vaultBlurLock })
       }
       if (savedTerminal && typeof savedTerminal === 'object') {
         set({ terminal: normalizeTerminalSettings(savedTerminal) })
@@ -297,6 +317,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
         } catch {
           /* ignore corrupt stored vault auto lock */
         }
+      }
+      const savedVaultBlurLock = localStorage.getItem(VAULT_BLUR_LOCK_KEY)
+      if (savedVaultBlurLock === 'true' || savedVaultBlurLock === 'false') {
+        set({ vaultBlurLock: savedVaultBlurLock === 'true' })
       }
       const savedTerminalRaw = localStorage.getItem(TERMINAL_KEY)
       if (savedTerminalRaw) {

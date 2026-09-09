@@ -4,7 +4,7 @@ import { ConnectDialog } from './hosts/ConnectDialog'
 import { useSessions } from '../store/sessions'
 import { useHosts } from '../store/hosts'
 import { useVault } from '../store/vault'
-import { HostProfile } from '../types/host'
+import { HostProfile, normalizeHostIcon } from '../types/host'
 import { ConnectRequest, SshConfigEntry } from '../types/session'
 import { sshConfigParse } from '../api/ssh'
 import { recordAudit } from '../store/audit'
@@ -189,7 +189,7 @@ export function HostsView({ onOpenSessions }: Props) {
 
   const renderHostRow = (host: HostProfile) => (
     <article key={host.id} className="glass host-row">
-      <div className="host-icon"><Icon name="server" size={18} /></div>
+      <div className="host-icon"><Icon name={normalizeHostIcon(host.icon)} size={18} /></div>
       <div className="host-info">
         <div className="host-name">{host.name || `${host.username}@${host.host}`}</div>
         <div className="host-meta">{host.username}@{host.host}:{host.port} · {host.authMethod === 'key' ? 'SSH 私钥' : host.authMethod === 'keyboard-interactive' ? '交互式 2FA' : '密码认证'}</div>

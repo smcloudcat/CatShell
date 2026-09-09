@@ -6,6 +6,8 @@ import { AuthMethod, ConnectRequest } from '../../types/session'
 import { HostProfile } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
+import { HostIconName, normalizeHostIcon } from '../../types/host'
+import { HOST_ICON_OPTIONS } from '../../types/host'
 
 interface Props {
   open: boolean
@@ -16,6 +18,7 @@ interface Props {
 
 interface FormState {
   name: string
+  icon: HostIconName
   host: string
   port: string
   username: string
@@ -32,6 +35,7 @@ interface FormState {
 
 const FORM_EMPTY: FormState = {
   name: '',
+  icon: 'server',
   host: '',
   port: '22',
   username: '',
@@ -50,6 +54,7 @@ function formFromProfile(profile?: HostProfile | null): FormState {
   if (!profile) return FORM_EMPTY
   return {
     name: profile.name,
+    icon: normalizeHostIcon(profile.icon),
     host: profile.host,
     port: String(profile.port),
     username: profile.username,
@@ -174,7 +179,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         await upsertHost({
           id: hostId,
           name: request.name,
-          icon: profile?.icon ?? 'server',
+          icon: form.icon,
           host: request.host,
           port: request.port,
           username: request.username,
@@ -235,7 +240,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       await upsertHost({
         id: hostId,
         name: form.name.trim() || `${form.username.trim()}@${host}`,
-        icon: profile?.icon ?? 'server',
+        icon: form.icon,
         host,
         port,
         username: form.username.trim(),
@@ -289,6 +294,22 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
                 onChange={(e) => set({ name: e.target.value })}
               />
             </label>
+            <div className="field span-2">
+              <span className="field-label">图标</span>
+              <div className="icon-picker">
+                {HOST_ICON_OPTIONS.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`icon-option ${form.icon === name ? 'active' : ''}`}
+                    onClick={() => set({ icon: name })}
+                    title={name}
+                  >
+                    <Icon name={name} size={17} />
+                  </button>
+                ))}
+              </div>
+            </div>
             <label className="field">
               <span className="field-label">主机地址</span>
               <input
