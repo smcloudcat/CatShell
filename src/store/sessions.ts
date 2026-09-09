@@ -17,6 +17,7 @@ export interface TerminalRef {
   write: (data: Uint8Array) => void
   focus: () => void
   fit: () => void
+  openSearch?: () => void
 }
 
 interface SessionsState {
@@ -114,7 +115,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (initializationPromise) return initializationPromise
 
     initializationPromise = (async () => {
-      let list: SessionInfo[] = []
+      let list: SessionInfo[]
       try {
         list = await sshList()
       } catch {

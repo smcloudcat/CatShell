@@ -15,6 +15,9 @@ export type IconName =
   | 'link'
   | 'key'
   | 'chevron-down'
+  | 'chevron-up'
+  | 'eye'
+  | 'eye-off'
   | 'upload'
   | 'palette'
   | 'database'
@@ -123,6 +126,20 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   'chevron-down': <path d="m6 9 6 6 6-6" />,
+  'chevron-up': <path d="m18 15-6-6-6 6" />,
+  eye: (
+    <>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  'eye-off': (
+    <>
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20s-10-7-10-14a10 10 0 0 1 4.06-4.94M9.9 4.24A9.12 9.12 0 0 1 12 6c6.5 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19" />
+      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+      <path d="m2 2 20 20" />
+    </>
+  ),
   upload: (
     <>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />

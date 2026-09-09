@@ -53,7 +53,6 @@ export function ForwardView() {
 
   useEffect(() => {
     void loadForwards()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusSignature])
 
   const update = (patch: Partial<FormState>) => setForm((current) => ({ ...current, ...patch }))

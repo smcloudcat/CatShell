@@ -245,7 +245,7 @@ export function SessionsView() {
           )
         })}
       </div>
-       <div className="session-tool">
+       <div className="session-tool" title="快捷键：Ctrl+1..9 切换标签 · Ctrl+Tab 循环 · Ctrl+W 关闭 · Ctrl+T 新建连接 · Ctrl+F 终端搜索">
         <div className="snippet-toolbar">
         <Icon name="terminal" size={15} />
         <select className="glass-input snippet-select" value={snippetId} onChange={(event) => setSnippetId(event.target.value)}>
@@ -409,12 +409,15 @@ function statusLabel(status: string, reason?: string | null, attempt?: number | 
 }
 
 function safeFileName(value: string): string {
+  // eslint-disable-next-line no-control-regex
   return value.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 80) || 'ssh-session'
 }
 
 function cleanTerminalLog(value: string): string {
   return value
+    // eslint-disable-next-line no-control-regex
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\r(?!\n)/g, '\n')
 }

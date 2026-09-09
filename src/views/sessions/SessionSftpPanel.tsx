@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useRef, useState } from 'react'
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import {
   base64ToBytes,
@@ -60,6 +60,14 @@ interface Props {
   onCollapse?: () => void
 }
 
+type SftpSortKey = 'name' | 'size' | 'modifiedAt'
+
+const SFTP_SORT_LABELS: Record<SftpSortKey, string> = {
+  name: '按名称',
+  size: '按大小',
+  modifiedAt: '按修改时间'
+}
+
 export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const sessions = useSessions((state) => state.sessions)
   const [path, setPath] = useState('/')
@@ -73,9 +81,34 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [transfers, setTransfers] = useState<TransferProgress[]>([])
   const [nameDialog, setNameDialog] = useState<{ mode: 'mkdir' | 'rename'; target: SftpEntry | null; value: string } | null>(null)
   const [nameBusy, setNameBusy] = useState(false)
+  const [sortKey, setSortKey] = useState<SftpSortKey>('name')
+  const [sortAsc, setSortAsc] = useState(true)
+  const [showHidden, setShowHidden] = useState(false)
+  const [nameFilter, setNameFilter] = useState('')
+  const [dragOver, setDragOver] = useState(false)
   const cancelFlags = useRef<Set<number>>(new Set())
+  const dragDepth = useRef(0)
 
   const connected = sessions[sessionId]?.status === 'connected'
+
+  const visibleEntries = useMemo(() => {
+    const needle = nameFilter.trim().toLowerCase()
+    const list = entries.filter((entry) => {
+      if (!showHidden && entry.name.startsWith('.')) return false
+      if (needle && !entry.name.toLowerCase().includes(needle)) return false
+      return true
+    })
+    const dirFirst = (entry: SftpEntry) => (entry.kind === 'directory' ? 0 : 1)
+    return list.sort((a, b) => {
+      const dirDelta = dirFirst(a) - dirFirst(b)
+      if (dirDelta !== 0) return dirDelta
+      let delta: number
+      if (sortKey === 'name') delta = a.name.localeCompare(b.name, 'zh-Hans-CN')
+      else if (sortKey === 'size') delta = a.size - b.size
+      else delta = (a.modifiedAt ?? -1) - (b.modifiedAt ?? -1)
+      return sortAsc ? delta : -delta
+    })
+  }, [entries, sortKey, sortAsc, showHidden, nameFilter])
 
   const updateTransfer = (id: number, transferred: number) => {
     setTransfers((current) => current.map((item) => (item.id === id ? { ...item, transferred } : item)))
@@ -175,12 +208,9 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   useEffect(() => {
     if (connected) void loadDirectory()
     // Directory loading is intentionally triggered only when the session changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, connected])
 
-  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? [])
-    event.target.value = ''
+  const uploadFiles = async (files: File[]) => {
     if (!files.length) return
     setBusy(true)
     setError(null)
@@ -242,6 +272,33 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     } finally {
       setBusy(false)
     }
+  }
+
+  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    await uploadFiles(files)
+  }
+
+  const handleDropUpload = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    dragDepth.current = 0
+    setDragOver(false)
+    if (!connected || busy) return
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    void uploadFiles(files)
+  }
+
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!connected || busy) return
+    event.preventDefault()
+    dragDepth.current += 1
+    setDragOver(true)
+  }
+
+  const handleDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragOver(false)
   }
 
   const openEditor = async (entry: SftpEntry) => {
@@ -401,7 +458,14 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   }
 
   return (
-    <div className="sftp-panel-body">
+    <div
+      className={`sftp-panel-body ${dragOver ? 'drag-over' : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDropUpload}
+    >
+      {dragOver && <div className="sftp-drop-hint">松开以上传到 {path}</div>}
       <div className="sftp-toolbar">
         <Icon name="folder" size={15} />
         <span className="sftp-heading">SFTP 文件</span>
@@ -418,11 +482,43 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         <button className="host-icon-btn" onClick={() => void loadDirectory(parentPath(path))} disabled={path === '/'} title="返回上级"><Icon name="chevron-down" size={15} /></button>
         <code>{path}</code>
       </div>
+      <div className="sftp-filterbar">
+        <select
+          className="glass-input sftp-sort-select"
+          value={sortKey}
+          onChange={(event) => setSortKey(event.target.value as SftpSortKey)}
+          title="排序方式"
+        >
+          {(Object.keys(SFTP_SORT_LABELS) as SftpSortKey[]).map((key) => (
+            <option key={key} value={key}>{SFTP_SORT_LABELS[key]}</option>
+          ))}
+        </select>
+        <button
+          className="host-icon-btn"
+          onClick={() => setSortAsc((current) => !current)}
+          title={sortAsc ? '当前升序，点击切换为降序' : '当前降序，点击切换为升序'}
+        >
+          <Icon name={sortAsc ? 'chevron-up' : 'chevron-down'} size={14} />
+        </button>
+        <button
+          className={`host-icon-btn ${showHidden ? 'active' : ''}`}
+          onClick={() => setShowHidden((current) => !current)}
+          title={showHidden ? '显示隐藏文件中，点击隐藏' : '显示以 . 开头的隐藏文件'}
+        >
+          <Icon name={showHidden ? 'eye' : 'eye-off'} size={14} />
+        </button>
+        <input
+          className="glass-input sftp-filter-input"
+          placeholder="筛选当前目录"
+          value={nameFilter}
+          onChange={(event) => setNameFilter(event.target.value)}
+        />
+      </div>
       {error && <div className="form-error">{error}</div>}
       {notice && <div className="form-notice">{notice}</div>}
       <div className="sftp-table-head"><span>名称</span><span>类型</span><span>大小</span><span>操作</span></div>
       <div className="sftp-entries">
-        {entries.map((entry) => (
+        {visibleEntries.map((entry) => (
           <div className="sftp-entry" key={entry.path}>
             <button className="sftp-name" onClick={() => entry.kind === 'directory' ? void loadDirectory(entry.path) : void handleDownload(entry)}>
               <Icon name={entry.kind === 'directory' ? 'folder' : 'save'} size={15} />
@@ -438,7 +534,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
             </span>
           </div>
         ))}
-        {!busy && entries.length === 0 && <div className="sftp-empty">目录为空</div>}
+        {!busy && visibleEntries.length === 0 && <div className="sftp-empty">{entries.length ? '没有匹配的文件' : '目录为空'}</div>}
         {busy && <div className="sftp-empty">读取中…</div>}
       </div>
       {editing && (

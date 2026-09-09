@@ -8,6 +8,7 @@ import { HostProfile } from '../types/host'
 import { ConnectRequest, SshConfigEntry } from '../types/session'
 import { sshConfigParse } from '../api/ssh'
 import { recordAudit } from '../store/audit'
+import { ImportPreview, previewHostImport } from '../store/hosts'
 import { confirmDialog, showToast } from '../store/ui'
 
 interface Props {
@@ -28,6 +29,7 @@ export function HostsView({ onOpenSessions }: Props) {
   const hosts = useHosts((s) => s.hosts)
   const removeHost = useHosts((s) => s.remove)
   const importProfiles = useHosts((s) => s.importProfiles)
+  const [pendingImport, setPendingImport] = useState<ImportPreview | null>(null)
   const openSession = useSessions((s) => s.open)
   const vaultUnlocked = useVault((s) => s.unlocked)
   const getCredential = useVault((s) => s.getCredential)
@@ -119,7 +121,7 @@ export function HostsView({ onOpenSessions }: Props) {
       await openSession(request)
       recordAudit('session.connect', `${host.name} (${host.host}:${host.port})`, 'success', '从主机列表快速连接')
       onOpenSessions()
-    } catch (err) {
+    } catch {
       recordAudit('session.connect', `${host.name} (${host.host}:${host.port})`, 'failure', '快速连接失败，打开连接对话框')
       setEditingHost(host)
       setDialogOpen(true)
@@ -157,10 +159,31 @@ export function HostsView({ onOpenSessions }: Props) {
         showToast('导入失败，文件中没有主机配置。', 'error')
         return
       }
-      await importProfiles(profiles)
+      const preview = previewHostImport(profiles)
+      if (!preview.items.length) {
+        recordAudit('host.import', '主机配置文件', 'failure', '文件中没有有效的主机配置')
+        showToast('导入失败，文件中没有有效的主机配置（缺少主机地址、用户名或端口无效）。', 'error')
+        return
+      }
+      setPendingImport(preview)
     } catch (err) {
       recordAudit('host.import', '主机配置文件', 'failure', '文件无效或解析失败')
       showToast(err instanceof Error ? `导入失败：${err.message}` : '导入失败，请选择有效的 CatShell 主机配置文件。', 'error')
+    }
+  }
+
+  const confirmImport = async (preview: ImportPreview) => {
+    setPendingImport(null)
+    try {
+      await importProfiles(preview.items.map((item) => item.profile))
+      const overwritten = preview.items.filter((item) => item.duplicateOf).length
+      const parts = [`已导入 ${preview.items.length} 条主机配置`]
+      if (overwritten) parts.push(`更新已有 ${overwritten} 条`)
+      if (preview.invalidCount) parts.push(`跳过无效 ${preview.invalidCount} 条`)
+      showToast(parts.join('，'), 'success')
+    } catch (err) {
+      recordAudit('host.import', '主机配置文件', 'failure', '导入失败')
+      showToast(err instanceof Error ? `导入失败：${err.message}` : '导入失败', 'error')
     }
   }
 
@@ -343,12 +366,79 @@ export function HostsView({ onOpenSessions }: Props) {
          onClose={() => { setDialogOpen(false); setEditingHost(null) }}
          onConnected={onOpenSessions}
        />
-       {sshConfigOpen && (
-         <SshConfigImportModal
-           onClose={() => setSshConfigOpen(false)}
-           importProfiles={importProfiles}
-         />
-       )}
+        {sshConfigOpen && (
+          <SshConfigImportModal
+            onClose={() => setSshConfigOpen(false)}
+            importProfiles={importProfiles}
+          />
+        )}
+        {pendingImport && (
+          <HostImportPreviewModal
+            preview={pendingImport}
+            onClose={() => setPendingImport(null)}
+            onConfirm={() => void confirmImport(pendingImport)}
+          />
+        )}
+      </div>
+  )
+}
+
+function HostImportPreviewModal({
+  preview,
+  onClose,
+  onConfirm
+}: {
+  preview: ImportPreview
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const fresh = preview.items.filter((item) => !item.duplicateOf).length
+  const overwritten = preview.items.length - fresh
+
+  const confirm = async () => {
+    setBusy(true)
+    try {
+      onConfirm()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal glass sshconfig-modal" onClick={(event) => event.stopPropagation()}>
+        <header className="modal-header">
+          <div className="modal-title"><Icon name="database" size={17} />导入主机配置预览</div>
+          <button className="modal-close" onClick={onClose} disabled={busy}><Icon name="x" size={15} /></button>
+        </header>
+        <div className="modal-body">
+          <p className="section-tip">
+            共 {preview.items.length} 条有效配置：新增 {fresh} 条，更新已有 {overwritten} 条。
+            {preview.invalidCount > 0 && ` ${preview.invalidCount} 条无效配置（缺少地址/用户名或端口无效）将被跳过。`}
+            已存在的同 主机+端口+用户名 配置会被覆盖更新，凭据不随导入写入。
+          </p>
+          <div className="sshconfig-list">
+            {preview.items.map((item) => (
+              <div className="sshconfig-row" key={item.profile.id + (item.duplicateOf?.id ?? '')}>
+                <span className="sshconfig-name">{item.profile.name || `${item.profile.username}@${item.profile.host}`}</span>
+                <span className="sshconfig-meta">
+                  {item.profile.username}@{item.profile.host}:{item.profile.port}
+                  {item.profile.group ? ` · 分组 ${item.profile.group}` : ''}
+                  {item.profile.tags.length ? ` · ${item.profile.tags.join('、')}` : ''}
+                </span>
+                {item.duplicateOf ? <span className="sshconfig-dup">更新</span> : <span className="sshconfig-new">新增</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+        <footer className="modal-footer">
+          <button className="glass-btn" onClick={onClose} disabled={busy}>取消</button>
+          <button className="glass-btn primary" onClick={() => void confirm()} disabled={busy}>
+            {busy ? '导入中…' : `确认导入（${preview.items.length}）`}
+          </button>
+        </footer>
+      </div>
     </div>
   )
 }

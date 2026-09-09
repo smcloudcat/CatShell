@@ -20,6 +20,16 @@ interface HostsState {
   importProfiles: (profiles: Partial<HostProfile>[]) => Promise<void>
 }
 
+export interface ImportPreviewItem {
+  profile: HostProfile
+  duplicateOf: HostProfile | null
+}
+
+export interface ImportPreview {
+  items: ImportPreviewItem[]
+  invalidCount: number
+}
+
 let initializationPromise: Promise<void> | null = null
 
 function normalizeGroup(value: unknown): string | null {
@@ -75,6 +85,26 @@ async function persist(hosts: HostProfile[]) {
     console.warn('保存主机配置失败，使用本地回退存储', err)
     localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts))
   }
+}
+
+/** 解析待导入的主机配置并标记与现有配置的冲突，导入前供预览弹窗使用 */
+export function previewHostImport(profiles: Partial<HostProfile>[], maxCount: number = MAX_IMPORT_PROFILES): ImportPreview {
+  const existing = useHosts.getState().hosts
+  const items: ImportPreviewItem[] = []
+  let invalidCount = 0
+  for (const profile of profiles) {
+    const normalized = normalizeHost(profile)
+    if (!isValidHost(normalized)) {
+      invalidCount += 1
+      continue
+    }
+    if (items.length >= maxCount) break
+    const duplicate = existing.find(
+      (host) => host.host === normalized.host && host.port === normalized.port && host.username === normalized.username
+    )
+    items.push({ profile: normalized, duplicateOf: duplicate ?? null })
+  }
+  return { items, invalidCount }
 }
 
 export const useHosts = create<HostsState>((set, get) => ({

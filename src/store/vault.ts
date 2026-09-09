@@ -2,24 +2,23 @@ import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { recordAudit } from './audit'
 import { useSettings } from './settings'
+import {
+  PBKDF2_ITERATIONS,
+  VaultCredential,
+  VaultRecord,
+  base64ToBytes,
+  decryptEntries,
+  deriveKey,
+  encryptEntries,
+  encryptEntriesWithKey,
+  validatePassword
+} from '../utils/vaultCrypto'
 
 const STORE_FILE = 'credential-vault.json'
 const VAULT_KEY = 'vault'
-const PBKDF2_ITERATIONS = 600000
 const AUTO_LOCK_CHECK_INTERVAL_MS = 30_000
 
-interface VaultRecord {
-  version: 1
-  salt: string
-  iv: string
-  data: string
-  iterations: number
-}
-
-export interface VaultCredential {
-  password?: string
-  passphrase?: string
-}
+export type { VaultCredential } from '../utils/vaultCrypto'
 
 interface VaultState {
   ready: boolean
@@ -63,73 +62,6 @@ function startAutoLockTimer() {
       useVault.getState().lock()
     }
   }, AUTO_LOCK_CHECK_INTERVAL_MS)
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value)
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0))
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(bytes.byteLength)
-  new Uint8Array(buffer).set(bytes)
-  return buffer
-}
-
-function validatePassword(password: string) {
-  if (password.length < 8) throw new Error('主密码至少需要 8 个字符')
-}
-
-async function deriveKey(password: string, salt: Uint8Array, iterations: number) {
-  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey'])
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations, hash: 'SHA-256' },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  )
-}
-
-async function encryptEntriesWithKey(
-  key: CryptoKey,
-  salt: Uint8Array,
-  entries: Record<string, VaultCredential>
-): Promise<VaultRecord> {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const plaintext = new TextEncoder().encode(JSON.stringify(entries))
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext)
-  return {
-    version: 1,
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    data: bytesToBase64(new Uint8Array(encrypted)),
-    iterations: PBKDF2_ITERATIONS
-  }
-}
-
-async function encryptEntries(password: string, entries: Record<string, VaultCredential>): Promise<VaultRecord> {
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const key = await deriveKey(password, salt, PBKDF2_ITERATIONS)
-  return encryptEntriesWithKey(key, salt, entries)
-}
-
-async function decryptEntries(password: string, record: VaultRecord): Promise<Record<string, VaultCredential>> {
-  const key = await deriveKey(password, base64ToBytes(record.salt), record.iterations)
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: toArrayBuffer(base64ToBytes(record.iv)) },
-    key,
-    toArrayBuffer(base64ToBytes(record.data))
-  )
-  const parsed: unknown = JSON.parse(new TextDecoder().decode(decrypted))
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('保险箱数据格式无效')
-  return parsed as Record<string, VaultCredential>
 }
 
 async function readRecord(): Promise<VaultRecord | null> {

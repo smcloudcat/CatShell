@@ -87,6 +87,71 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey) return
+      const target = event.target as HTMLElement | null
+      const targetClass = typeof target?.className === 'string' ? target.className : ''
+      const inXtermTextarea = targetClass.includes('xterm-helper-textarea')
+      const editable =
+        !inXtermTextarea &&
+        Boolean(
+          target &&
+            (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        )
+      const state = useSessions.getState()
+      const key = event.key.toLowerCase()
+
+      // 终端内搜索：Ctrl+F / Ctrl+Shift+F（终端聚焦时由 TerminalPane 拦截，此处覆盖焦点在外的场景）
+      if (key === 'f') {
+        if (view !== 'sessions' || state.activeId === null || editable) return
+        event.preventDefault()
+        state.terminals[state.activeId]?.openSearch?.()
+        return
+      }
+      // Ctrl+Shift+Tab 与 Ctrl+Tab 都循环切换标签
+      if (key === 'tab') {
+        if (!state.order.length) return
+        event.preventDefault()
+        const index = state.order.indexOf(state.activeId ?? -1)
+        const total = state.order.length
+        const next = event.shiftKey
+          ? state.order[(index - 1 + total) % total]
+          : state.order[(index + 1) % total]
+        state.setActive(next)
+        if (view !== 'sessions') setView('sessions')
+        return
+      }
+      if (/^[1-9]$/.test(key)) {
+        const id = state.order[Number(key) - 1]
+        if (id === undefined) return
+        event.preventDefault()
+        state.setActive(id)
+        if (view !== 'sessions') setView('sessions')
+        return
+      }
+      if (event.shiftKey) return
+      if (key === 't') {
+        if (editable) return
+        event.preventDefault()
+        setView('hosts')
+        return
+      }
+      if (key === 'w') {
+        if (editable || view !== 'sessions' || state.activeId === null) return
+        event.preventDefault()
+        const id = state.activeId
+        const info = state.sessions[id]
+        if (info && (info.status === 'connected' || info.status === 'connecting' || info.status === 'reconnecting')) {
+          void state.disconnect(id)
+        }
+        void state.closeTab(id)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [view])
+
+  useEffect(() => {
     const root = document.documentElement.style
     root.setProperty('--bg-opacity', String(theme.bgOpacity))
     root.setProperty('--glass-blur', `${theme.blurRadius}px`)
