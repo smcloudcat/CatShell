@@ -1,3 +1,4 @@
+pub mod logging;
 pub mod ssh_manager;
 
 use std::sync::Arc;
@@ -570,6 +571,17 @@ fn show_main_window(app: &AppHandle) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 日志目录：应用数据目录下的 `logs/`。取不到时返回 `None`，退化为仅输出到 stdout。
+fn log_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    match app.path().app_data_dir() {
+        Ok(dir) => Some(dir.join("logs")),
+        Err(error) => {
+            eprintln!("无法解析应用数据目录，日志将只输出到 stdout: {error}");
+            None
+        }
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
@@ -635,6 +647,11 @@ pub fn run() {
             tray_set_active_count
         ])
         .setup(|app| {
+            // release 构建没有控制台，日志必须落盘才能事后追查连接/传输故障。
+            // 日志级别可用环境变量 CATSHELL_LOG 覆盖，默认 info。
+            let log_guard = logging::init(log_dir(app.handle()));
+            app.manage(log_guard);
+
             #[cfg(desktop)]
             {
                 use tauri::menu::{Menu, MenuItem};
@@ -666,6 +683,21 @@ pub fn run() {
                 })
                 .build(app)?;
             }
+
+            // 后台回收前端已放弃的 SFTP 流式传输：这类传输如果不回收，
+            // 其持有的 SSH 通道会一直滞留到进程退出（长时运行的运维工具会持续累积）。
+            // 新建传输时也会顺带回收一次，这里负责「长时间不再发起传输」的场景。
+            let manager = app.state::<AppState>().ssh.clone();
+            tauri::async_runtime::spawn(async move {
+                const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+                loop {
+                    tokio::time::sleep(REAP_INTERVAL).await;
+                    let _ = manager
+                        .reap_idle_transfers(std::time::Duration::from_secs(10 * 60))
+                        .await;
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())

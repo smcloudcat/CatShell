@@ -20,6 +20,18 @@ const zh: Record<string, string> = {
 }
 
 const en: Record<string, string> = {
+  // 导航
+  'nav.home': 'Overview',
+  'nav.sessions': 'Sessions',
+  'nav.hosts': 'Hosts',
+  'nav.forward': 'Forwarding',
+  'nav.settings': 'Settings',
+  // 会话状态
+  'status.connected': 'Connected',
+  'status.connecting': 'Connecting',
+  'status.reconnecting': 'Reconnecting',
+  'status.disconnected': 'Disconnected',
+  'status.closing': 'Closing',
   'status.closed': 'Closed',
   // 通用
   '取消': 'Cancel',
@@ -233,7 +245,7 @@ const en: Record<string, string> = {
   '双击重命名': 'Double-click to rename',
   '第 ': 'Attempt ',
   ' 次重连 · 间隔 ': ' reconnecting · interval ',
-  '快捷键：Ctrl+1..9 切换标签 · Ctrl+Tab 循环 · Ctrl+W 关闭 · Ctrl+T 新建连接 · Ctrl+F 终端搜索': 'Shortcuts: Ctrl+1..9 switch tabs · Ctrl+Tab cycle · Ctrl+W close · Ctrl+T new connection · Ctrl+F search',
+  '快捷键：Ctrl+1..9 切换标签 · Ctrl+Tab 循环 · Ctrl+W 关闭 · Ctrl+Shift+W 断开并关闭 · Ctrl+T 新建连接 · Ctrl+F 终端搜索': 'Shortcuts: Ctrl+1..9 switch tabs · Ctrl+Tab cycle · Ctrl+W close · Ctrl+Shift+W disconnect and close · Ctrl+T new connection · Ctrl+F search',
   '选择命令片段': 'Choose a snippet',
   '发送命令片段': 'Send snippet',
   '发送': 'Send',
@@ -657,7 +669,12 @@ const en: Record<string, string> = {
   '上一个 (Shift+Enter)': 'Previous (Shift+Enter)',
   '下一个 (Enter)': 'Next (Enter)',
   // Sessions empty state / misc
-  'SFTP': 'SFTP'
+  'SFTP': 'SFTP',
+  // Close-session confirmation (Ctrl+W)
+  '关闭会话': 'Close session',
+  '仍在连接中，关闭标签会立即断开该连接。':
+    ' is still connected. Closing the tab will disconnect it immediately.',
+  '断开并关闭': 'Disconnect and close'
 }
 
 const dictionaries: Record<Language, Record<string, string>> = {

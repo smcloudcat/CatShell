@@ -169,6 +169,15 @@ impl SftpDiskTransfer {
     }
 
     fn finish_with_error(&self, message: String) {
+        tracing::error!(
+            transfer_id = self.id,
+            session_id = self.session_id,
+            direction = self.direction,
+            remote_path = %self.remote_path,
+            transferred = self.transferred.load(Ordering::SeqCst),
+            error = %message,
+            "磁盘 SFTP 传输失败"
+        );
         *self.error.lock().expect("磁盘传输错误锁") = Some(message);
         self.done.store(true, Ordering::SeqCst);
     }
@@ -204,6 +213,9 @@ fn part_file_path(local_path: &str) -> String {
     format!("{local_path}{DISK_PART_SUFFIX}")
 }
 
+/// 传输闲置回收阈值：超过该时长既未拉取分片、也未收到取消的传输会被回收并释放 SFTP 通道。
+const TRANSFER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// 跨 command 调用存活的一次 SFTP 流式传输（上传或下载）。
 /// 连接锁只在打开通道时短暂持有，之后所有读写都走独立的 SFTP 通道。
 pub struct SftpTransfer {
@@ -216,6 +228,48 @@ pub struct SftpTransfer {
     pub cancelled: AtomicBool,
     pub file: Mutex<Option<russh_sftp::client::fs::File>>,
     pub sftp: Mutex<Option<russh_sftp::client::SftpSession>>,
+    /// 最近一次有进展的时间。用于回收前端已放弃的传输（既不继续拉分片也不取消），
+    /// 否则该传输持有的 SFTP 通道会一直滞留到进程退出。
+    last_active: StdMutex<std::time::Instant>,
+}
+
+impl SftpTransfer {
+    fn new(
+        id: u64,
+        session_id: u64,
+        path: String,
+        direction: &'static str,
+        total: u64,
+        file: russh_sftp::client::fs::File,
+        sftp: russh_sftp::client::SftpSession,
+    ) -> Self {
+        SftpTransfer {
+            id,
+            session_id,
+            path,
+            direction,
+            total,
+            transferred: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+            file: Mutex::new(Some(file)),
+            sftp: Mutex::new(Some(sftp)),
+            last_active: StdMutex::new(std::time::Instant::now()),
+        }
+    }
+
+    /// 记录一次读写进展。锁中毒时静默跳过，不影响传输本身。
+    fn touch(&self) {
+        if let Ok(mut guard) = self.last_active.lock() {
+            *guard = std::time::Instant::now();
+        }
+    }
+
+    fn idle_for(&self) -> std::time::Duration {
+        self.last_active
+            .lock()
+            .map(|guard| guard.elapsed())
+            .unwrap_or_default()
+    }
 }
 
 fn segments_are_empty(path: &str) -> bool {
@@ -497,6 +551,8 @@ impl SshManager {
         id: u64,
         path: String,
     ) -> Result<SftpTransferStart, String> {
+        // 新建传输时顺带回收上一次被放弃的传输，避免闲置通道累积。
+        self.reap_idle_transfers(TRANSFER_IDLE_TIMEOUT).await;
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
         let metadata = sftp
@@ -509,17 +565,15 @@ impl SshManager {
             .await
             .map_err(|error| format!("打开远程文件失败: {error}"))?;
         let transfer_id = self.next_transfer_id.fetch_add(1, Ordering::SeqCst);
-        let transfer = Arc::new(SftpTransfer {
-            id: transfer_id,
-            session_id: id,
+        let transfer = Arc::new(SftpTransfer::new(
+            transfer_id,
+            id,
             path,
-            direction: "download",
+            "download",
             total,
-            transferred: AtomicU64::new(0),
-            cancelled: AtomicBool::new(false),
-            file: Mutex::new(Some(file)),
-            sftp: Mutex::new(Some(sftp)),
-        });
+            file,
+            sftp,
+        ));
         self.sftp_transfers
             .lock()
             .await
@@ -554,6 +608,7 @@ impl SshManager {
             .transferred
             .fetch_add(filled as u64, Ordering::SeqCst)
             + filled as u64;
+        transfer.touch();
         let done = filled == 0;
         if done {
             self.close_transfer(&transfer, false).await;
@@ -573,6 +628,8 @@ impl SshManager {
         path: String,
         total: u64,
     ) -> Result<SftpTransferStart, String> {
+        // 新建传输时顺带回收上一次被放弃的传输，避免闲置通道累积。
+        self.reap_idle_transfers(TRANSFER_IDLE_TIMEOUT).await;
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
         let file = sftp
@@ -580,17 +637,15 @@ impl SshManager {
             .await
             .map_err(|error| format!("创建远程文件失败: {error}"))?;
         let transfer_id = self.next_transfer_id.fetch_add(1, Ordering::SeqCst);
-        let transfer = Arc::new(SftpTransfer {
-            id: transfer_id,
-            session_id: id,
+        let transfer = Arc::new(SftpTransfer::new(
+            transfer_id,
+            id,
             path,
-            direction: "upload",
+            "upload",
             total,
-            transferred: AtomicU64::new(0),
-            cancelled: AtomicBool::new(false),
-            file: Mutex::new(Some(file)),
-            sftp: Mutex::new(Some(sftp)),
-        });
+            file,
+            sftp,
+        ));
         self.sftp_transfers
             .lock()
             .await
@@ -625,7 +680,47 @@ impl SshManager {
         transfer
             .transferred
             .fetch_add(data.len() as u64, Ordering::SeqCst);
+        transfer.touch();
         Ok(())
+    }
+
+    /// 回收长时间无进展的一次性传输。
+    ///
+    /// 前端若在 `begin` 之后既不拉取分片也不取消（页面重载、断网、逻辑分支遗漏），
+    /// 该传输持有的 SFTP 通道会一直滞留到进程退出。返回本次回收的数量。
+    pub async fn reap_idle_transfers(&self, idle: std::time::Duration) -> usize {
+        let stale: Vec<Arc<SftpTransfer>> = {
+            let transfers = self.sftp_transfers.lock().await;
+            transfers
+                .values()
+                .filter(|transfer| transfer.idle_for() >= idle)
+                .cloned()
+                .collect()
+        };
+        if !stale.is_empty() {
+            tracing::info!(
+                count = stale.len(),
+                idle_secs = idle.as_secs(),
+                "回收长期无进展的 SFTP 传输"
+            );
+        }
+        let mut reaped = 0;
+        for transfer in stale {
+            // 与显式取消保持一致：上传的中途文件是真实目标文件，需要清理，避免留下半截内容。
+            transfer.cancelled.store(true, Ordering::SeqCst);
+            self.close_transfer(&transfer, transfer.direction == "upload")
+                .await;
+            if self
+                .sftp_transfers
+                .lock()
+                .await
+                .remove(&transfer.id)
+                .is_some()
+            {
+                reaped += 1;
+            }
+        }
+        reaped
     }
 
     pub async fn sftp_upload_finish(&self, transfer_id: u64) -> Result<(), String> {
@@ -1076,5 +1171,27 @@ impl SshManager {
             })
             .map(|transfer| transfer.info())
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reaping_idle_transfers_on_empty_manager_is_a_noop() {
+        let manager = SshManager::default();
+        assert_eq!(manager.reap_idle_transfers(TRANSFER_IDLE_TIMEOUT).await, 0);
+        // 阈值为 0 时同样不应出错，只是没有可回收对象
+        assert_eq!(
+            manager.reap_idle_transfers(std::time::Duration::ZERO).await,
+            0
+        );
+    }
+
+    #[test]
+    fn idle_timeout_is_long_enough_to_survive_a_slow_but_alive_transfer() {
+        // 阈值必须明显大于单分片超时（60s），否则正常传输会被误回收
+        assert!(TRANSFER_IDLE_TIMEOUT >= DISK_CHUNK_TIMEOUT * 5);
     }
 }

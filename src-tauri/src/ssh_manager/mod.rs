@@ -36,8 +36,9 @@ pub use types::{
 };
 
 use types::{
-    reconnect_delay, CONNECT_TIMEOUT, HOST_KEY_CONFIRM_TIMEOUT, MANUAL_POLL_INTERVAL,
-    MAX_RECONNECT_ATTEMPTS,
+    advance_reconnect_attempt, classify_known_host, reconnect_delay, HostKeyVerdict,
+    CONNECT_TIMEOUT, HOST_KEY_CONFIRM_TIMEOUT, MANUAL_POLL_INTERVAL, OUTPUT_FLUSH_INTERVAL,
+    OUTPUT_FLUSH_THRESHOLD,
 };
 
 /// 终端输出的原始字节通道抽象。Tauri 前端通过 IPC Channel 实现，
@@ -250,18 +251,25 @@ impl client::Handler for SshHandler {
                 path,
             ),
             None => russh::keys::known_hosts::check_known_hosts(&self.host, self.port, &public_key),
-        };
-        match known {
-            Ok(true) => return Ok(true),
-            Err(err) => {
+        }
+        .map_err(|err| err.to_string());
+        match classify_known_host(known) {
+            HostKeyVerdict::Trusted => return Ok(true),
+            HostKeyVerdict::Changed(err) => {
                 let reason = format!("主机密钥与 known_hosts 不匹配: {err}");
+                tracing::warn!(
+                    host = %self.host,
+                    port = self.port,
+                    fingerprint = %fingerprint,
+                    "主机密钥与已记录指纹不一致，已阻断连接"
+                );
                 self.sink.emit(
                     "host-key-warning",
                     serde_json::json!({ "host": self.host, "port": self.port, "fingerprint": fingerprint, "reason": reason }),
                 );
                 return Ok(false);
             }
-            Ok(false) => {}
+            HostKeyVerdict::Unknown => {}
         }
 
         let token = format!("{}:{}:{}", self.host, self.port, fingerprint);
@@ -782,23 +790,55 @@ async fn open_shell(
     Ok((session, proxy_conn, read_half, write_half))
 }
 
+/// 累积 PTY 输出，凑够一个时间窗口或体积阈值再一次性发往 IPC。
+///
+/// `cat` 大文件、`tail -f`、编译日志等场景下，远端会在极短时间内产生海量小包；
+/// 逐包 emit 会把 WebView 主线程压垮（表现为界面卡顿甚至假死）。
+fn flush_output(sink: &dyn EventSink, session: &ActiveSession, pending: &mut Vec<u8>) {
+    if pending.is_empty() {
+        return;
+    }
+    dispatch_output(sink, session, std::mem::take(pending));
+}
+
 async fn shell_loop(
     sink: Arc<dyn EventSink>,
     session: Arc<ActiveSession>,
     mut channel_read: ChannelReadHalf,
 ) -> String {
     let mut reason = "连接已关闭".to_string();
+    let mut pending: Vec<u8> = Vec::new();
+
     loop {
-        tokio::select! {
-            msg = channel_read.wait() => match msg {
-                Some(ChannelMsg::Data { data }) => dispatch_output(sink.as_ref(), &session, data.to_vec()),
-                Some(ChannelMsg::ExtendedData { data, .. }) => dispatch_output(sink.as_ref(), &session, data.to_vec()),
-                Some(ChannelMsg::Eof) => {}
-                Some(ChannelMsg::Close) => return reason,
-                Some(_) => {}
-                None => return reason,
-            },
-            _ = tokio::time::sleep(MANUAL_POLL_INTERVAL) => {
+        // 有积压数据时用短窗口等聚合，空闲时退回手动关闭轮询间隔，不额外增加唤醒次数。
+        let wait = if pending.is_empty() {
+            MANUAL_POLL_INTERVAL
+        } else {
+            OUTPUT_FLUSH_INTERVAL
+        };
+
+        match tokio::time::timeout(wait, channel_read.wait()).await {
+            Ok(Some(ChannelMsg::Data { data })) => {
+                pending.extend_from_slice(&data);
+                if pending.len() >= OUTPUT_FLUSH_THRESHOLD {
+                    flush_output(sink.as_ref(), &session, &mut pending);
+                }
+            }
+            Ok(Some(ChannelMsg::ExtendedData { data, .. })) => {
+                pending.extend_from_slice(&data);
+                if pending.len() >= OUTPUT_FLUSH_THRESHOLD {
+                    flush_output(sink.as_ref(), &session, &mut pending);
+                }
+            }
+            Ok(Some(ChannelMsg::Eof)) => {}
+            Ok(Some(ChannelMsg::Close)) | Ok(None) => {
+                flush_output(sink.as_ref(), &session, &mut pending);
+                return reason;
+            }
+            Ok(Some(_)) => {}
+            // 窗口到期：发走已聚合字节，并顺带检查手动关闭标志。
+            Err(_elapsed) => {
+                flush_output(sink.as_ref(), &session, &mut pending);
                 if session.manual_closed.load(Ordering::SeqCst) {
                     reason = "已手动断开".to_string();
                     return reason;
@@ -838,6 +878,14 @@ async fn run_session(
         {
             Err(err) => {
                 let reason = err.message.clone();
+                tracing::warn!(
+                    session_id = id,
+                    attempt,
+                    permanent = err.permanent,
+                    host_key = err.host_key,
+                    error = %reason,
+                    "SSH 连接失败"
+                );
                 emit_status(
                     sink.as_ref(),
                     id,
@@ -849,11 +897,13 @@ async fn run_session(
                     || session.manual_closed.load(Ordering::SeqCst)
                     || err.host_key
                     || err.permanent
-                    || attempt >= MAX_RECONNECT_ATTEMPTS
                 {
                     break 'outer Some(reason);
                 }
-                attempt += 1;
+                let Some(next_attempt) = advance_reconnect_attempt(attempt) else {
+                    break 'outer Some(reason);
+                };
+                attempt = next_attempt;
                 tokio::time::sleep(reconnect_delay(attempt)).await;
             }
             Ok((conn, proxy_conn, read_half, write_half)) => {
@@ -864,7 +914,10 @@ async fn run_session(
                     if session.manual_closed.load(Ordering::SeqCst) || !creds.auto_reconnect {
                         break 'outer Some("远程端口转发恢复失败".to_string());
                     }
-                    attempt += 1;
+                    let Some(next_attempt) = advance_reconnect_attempt(attempt) else {
+                        break 'outer Some("远程端口转发恢复失败".to_string());
+                    };
+                    attempt = next_attempt;
                     tokio::time::sleep(reconnect_delay(attempt)).await;
                     continue;
                 }
@@ -899,16 +952,21 @@ async fn run_session(
                 if session.manual_closed.load(Ordering::SeqCst) || !creds.auto_reconnect {
                     break 'outer Some(reason);
                 }
-                attempt += 1;
-                if attempt >= MAX_RECONNECT_ATTEMPTS {
+                let Some(next_attempt) = advance_reconnect_attempt(attempt) else {
                     break 'outer Some(reason);
-                }
-                attempt += 1;
+                };
+                attempt = next_attempt;
                 tokio::time::sleep(reconnect_delay(attempt)).await;
             }
         }
     };
 
+    tracing::info!(
+        session_id = id,
+        reason = %final_reason.as_deref().unwrap_or("已关闭"),
+        attempts = attempt,
+        "会话结束"
+    );
     emit_status(sink.as_ref(), id, "closed", final_reason, 0);
     manager.stop_forwards_for_session(id).await;
     {
@@ -1018,6 +1076,8 @@ impl SshManager {
             output,
             manual_closed: AtomicBool::new(false),
         });
+        // 只记录连接目标与认证方式，绝不记录凭据（redacted_summary 已剔除口令字段）。
+        tracing::info!(session_id = id, target = %session.creds.redacted_summary(), "建立会话");
         self.sessions.lock().await.insert(id, session.clone());
         tauri::async_runtime::spawn(run_session(sink.clone(), manager, session));
         Ok(id)

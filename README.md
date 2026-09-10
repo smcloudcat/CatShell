@@ -30,32 +30,45 @@ CatShell 是一款面向 Windows 的桌面 SSH 运维工具，基于 **Tauri 2 +
 
 ## 技术栈
 
-- **前端**：React 19 + TypeScript + Vite + Zustand + xterm.js
-- **桌面壳**：Tauri 2（Rust），插件：dialog / opener / store
-- **SSH 核心**：`russh` 0.63 与 `russh-sftp`（Rust 实现，无 OpenSSH 依赖）
+- **前端**：React 19 + TypeScript + Vite 8 + Zustand 5 + xterm.js 6（fit / search / web-links / webgl）
+- **桌面壳**：Tauri 2（Rust），插件共 8 个：dialog / opener / store / notification / process / updater（跨平台）+ single-instance / window-state（桌面专用）
+- **SSH 核心**：`russh` 0.63 与 `russh-sftp` 2.4（Rust 实现，无 OpenSSH 依赖）
 
 ## 目录结构
 
 ```
-├─ src/                    # React 前端
-│  ├─ api/                 # Tauri command 调用与事件封装
-│  ├─ components/          # 通用 UI 组件
-│  ├─ store/               # Zustand 状态（主机、会话、设置、保险箱、审计…）
-│  ├─ types/               # 共享类型与常量
-│  └─ views/               # 页面与页面级组件（主机、会话、SFTP、监控、转发、设置）
-├─ src-tauri/              # Rust 后端
-│  ├─ src/ssh_manager.rs   # SSH 连接、认证、PTY、读写、重连、转发核心
-│  ├─ src/lib.rs           # Tauri 应用状态、command 注册、事件转发
-│  ├─ capabilities/        # 权限声明
-│  └─ tests/               # Rust 集成测试（含 SSH echo-server 生命周期测试）
-├─ open-dev.cmd            # Windows 一键启动开发服务器
+├─ src/                       # React 前端
+│  ├─ api/                    # Tauri command 调用与事件封装
+│  ├─ components/             # 通用 UI 组件（Icon / Feedback / ErrorBoundary）
+│  ├─ i18n/                   # 轻量 i18n（zh-CN 键名来源 + en-US 渐进补齐）
+│  ├─ store/                  # Zustand 状态（主机、会话、设置、保险箱、片段、审计、UI）
+│  ├─ styles/                 # 按视图拆分的样式（base / glass / sessions / sftp / …）
+│  ├─ types/                  # 共享类型与常量
+│  ├─ utils/                  # 纯函数工具（格式化、通知、保险箱加解密）
+│  ├─ views/                  # 页面与页面级组件（主机、会话、SFTP、监控、转发、设置）
+│  └─ __tests__/              # vitest 单元测试（snippet / theme / vaultCrypto）
+├─ src-tauri/                 # Rust 后端
+│  ├─ src/ssh_manager/        # SSH 核心目录模块
+│  │  ├─ mod.rs               # 会话生命周期、认证、重连、指纹确认、ProxyJump
+│  │  ├─ types.rs             # DTO 与常量
+│  │  ├─ config.rs            # known_hosts 与 ~/.ssh/config
+│  │  ├─ monitor.rs           # 监控 / 进程 / 网络诊断 / RTT
+│  │  ├─ sftp.rs              # SFTP、分块流式与磁盘级断点续传
+│  │  └─ forward.rs           # 端口转发与 SOCKS5
+│  ├─ src/lib.rs              # Tauri 应用状态、command 注册、事件转发、插件注册
+│  ├─ build.rs                # Tauri 构建脚本
+│  ├─ capabilities/           # 权限声明
+│  └─ tests/                  # Rust 集成测试（含 SSH echo-server 生命周期测试）
+├─ .github/workflows/         # CI（lint / test / build / clippy）与 tag 发布工作流
+├─ open-dev.cmd               # Windows 一键启动开发服务器
+├─ open-dev.ps1               # PowerShell 启动入口
 └─ index.html
 ```
 
 ## 环境要求
 
 - **操作系统**：Windows 10 / 11（需内置 WebView2 运行时，Win10 通常已预装）
-- **Node.js**：18+（建议 20 LTS 或更高）
+- **Node.js**：20+（建议 22；CI 与发布流程均使用 Node 22）
 - **Rust**：stable 工具链（含 `cargo`，建议通过 [rustup](https://rustup.rs/) 安装）
 - **MSVC 工具链**：Visual Studio 2022 生成工具（`cl.exe`），或安装 [Build Tools for Visual Studio](https://visualstudio.microsoft.com/zh-hans/downloads/#build-tools-for-visual-studio-2022) 时勾选「使用 C++ 的桌面开发」工作负载
 - **cargo 路径**：确认 `cargo` 与 `rustc` 已在 `PATH` 中
@@ -107,10 +120,29 @@ npm run tauri build
 
 - `msi/` — MSI 安装包（推荐用于企业分发）
 - `nsis/` —— EXE 安装程序
+- `*.sig` — 对应的更新签名文件（仅当配置了签名密钥时生成）
 
 安装包默认为 x64 架构，双击安装后即可从开始菜单启动 **CatShell**。
 
 > 提示：`npm run tauri build` 会先执行 `vite build` 再编译 Rust 发布版，整个过程可能需要 10 分钟以上；如仅验证前端可改用 `npm run build`。
+
+### 应用内更新与签名配置
+
+`src-tauri/tauri.conf.json` 已开启 `bundle.createUpdaterArtifacts`，因此**发布构建必须配置签名密钥**，否则无法生成 `.sig`，应用内的更新检查会失效：
+
+```powershell
+# 生成一对签名密钥（公钥内容填入 tauri.conf.json 的 plugins.updater.pubkey）
+npm run tauri signer generate -- -w "$HOME\.tauri\catshell.key"
+
+# 发布构建前设置环境变量（CI 中通过 repository secrets 注入）
+$env:TAURI_SIGNING_PRIVATE_KEY = "<私钥内容或私钥文件内容>"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<私钥口令，未设置口令时可为空>"
+npm run tauri build
+```
+
+仓库中 `tauri.conf.json` 的 `pubkey` 目前是占位符 `REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY`，正式发布前必须替换为真实公钥，并在仓库 secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（参见 `.github/workflows/release.yml`）。
+
+更新端点指向 GitHub Releases 的 `latest.json`。发布时**必须把安装包本体的 URL 加入 Release 资产**，因为 `latest.json` 中记录的下载地址就是这些资产地址；只上传 `latest.json` 会导致所有客户端更新时返回 404。
 
 ## 测试
 

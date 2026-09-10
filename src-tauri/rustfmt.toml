@@ -1,0 +1,4 @@
+# Rust 格式化配置。CI 执行 `cargo fmt --check`，本地执行 `cargo fmt`。
+edition = "2021"
+# 仓库内所有源文件统一使用 LF，避免 Windows 开发机与 CI 之间产生整文件级 diff。
+newline_style = "Unix"

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
+import { Modal } from './components/Modal'
 import { FeedbackHost } from './components/Feedback'
 import { confirmDialog } from './store/ui'
 import { useSettings } from './store/settings'
@@ -180,22 +181,42 @@ function App() {
         if (view !== 'sessions') setView('sessions')
         return
       }
+      // Ctrl+W / Ctrl+Shift+W 关闭当前会话标签。
+      // 活动连接属于破坏性操作：Ctrl+W 先确认，Ctrl+Shift+W 视为明确意图直接执行。
+      if (key === 'w') {
+        if (editable || view !== 'sessions' || state.activeId === null) return
+        event.preventDefault()
+        const id = state.activeId
+        const info = state.sessions[id]
+        const live =
+          info !== undefined &&
+          (info.status === 'connected' ||
+            info.status === 'connecting' ||
+            info.status === 'reconnecting')
+        void (async () => {
+          if (live && !event.shiftKey) {
+            const accepted = await confirmDialog({
+              title: t('关闭会话'),
+              message: `${t('会话')}「${info.name}」${t('仍在连接中，关闭标签会立即断开该连接。')}`,
+              confirmLabel: t('断开并关闭'),
+              cancelLabel: t('取消'),
+              danger: true
+            })
+            if (!accepted) return
+          }
+          if (live) {
+            void state.disconnect(id)
+          }
+          void state.closeTab(id)
+        })()
+        return
+      }
       if (event.shiftKey) return
       if (key === 't') {
         if (editable) return
         event.preventDefault()
         setView('hosts')
         return
-      }
-      if (key === 'w') {
-        if (editable || view !== 'sessions' || state.activeId === null) return
-        event.preventDefault()
-        const id = state.activeId
-        const info = state.sessions[id]
-        if (info && (info.status === 'connected' || info.status === 'connecting' || info.status === 'reconnecting')) {
-          void state.disconnect(id)
-        }
-        void state.closeTab(id)
       }
     }
     window.addEventListener('keydown', handler)
@@ -308,8 +329,13 @@ function App() {
         {view === 'settings' && <SettingsView />}
       </main>
       {hostKeyPrompt && (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal glass host-key-modal">
+        <Modal
+          className="host-key-modal"
+          ariaLabel={t('首次连接需要确认主机指纹')}
+          closeOnOverlayClick={false}
+          /* Escape 视为拒绝：指纹未确认时绝不默认放行 */
+          onClose={() => void confirmHostKey(false)}
+        >
             <header className="modal-header">
             <div className="modal-title">
               <Icon name="key" size={18} />
@@ -330,12 +356,16 @@ function App() {
               {t('信任并继续')}
             </button>
           </footer>
-          </div>
-        </div>
+        </Modal>
       )}
       {hostKeyWarning && (
-        <div className="modal-overlay" role="alertdialog" aria-modal="true">
-          <div className="modal glass host-key-modal">
+        <Modal
+          role="alertdialog"
+          className="host-key-modal"
+          ariaLabel={t('主机指纹发生变化')}
+          closeOnOverlayClick={false}
+          onClose={clearHostKeyWarning}
+        >
             <header className="modal-header">
             <div className="modal-title host-key-danger">
               <Icon name="key" size={18} />
@@ -352,12 +382,18 @@ function App() {
           <footer className="modal-footer">
             <button className="glass-btn" onClick={clearHostKeyWarning}>{t('关闭')}</button>
           </footer>
-          </div>
-        </div>
+        </Modal>
       )}
       {kbiPrompt && (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal glass host-key-modal">
+        <Modal
+          className="host-key-modal"
+          ariaLabel={kbiPrompt.name || t('服务器要求交互式验证')}
+          closeOnOverlayClick={false}
+          onClose={() => {
+            setKbiValues([])
+            cancelKbi()
+          }}
+        >
             <header className="modal-header">
               <div className="modal-title">
                 <Icon name="key" size={18} />
@@ -407,8 +443,7 @@ function App() {
                 {t('提交')}
               </button>
             </footer>
-          </div>
-        </div>
+        </Modal>
       )}
       <FeedbackHost />
     </div>

@@ -215,3 +215,108 @@ export const STATUS_TEXT: Record<SessionStatus, string> = {
   closing: '正在关闭',
   closed: '已关闭'
 }
+
+export const DEFAULT_SSH_PORT = 22
+export const DEFAULT_KEEPALIVE_SECONDS = 30
+/** 心跳间隔的合法区间，与连接表单的 min/max 保持一致。 */
+export const MIN_KEEPALIVE_SECONDS = 5
+export const MAX_KEEPALIVE_SECONDS = 300
+
+/** 连接参数归一化输入。宽进严出：接受表单字符串或已解析数值。 */
+export interface ConnectRequestInput {
+  /** 会话显示名；为空时回退为 `user@host`。 */
+  name?: string | null
+  host: string
+  port: number | string | null | undefined
+  username: string
+  authMethod: AuthMethod
+  password?: string | null
+  keyPath?: string | null
+  passphrase?: string | null
+  otpSecret?: string | null
+  keepalive?: number | string | null | undefined
+  autoReconnect?: boolean
+  proxy?: ProxyConfigInput | null
+}
+
+export interface ProxyConfigInput {
+  host: string
+  port: number | string
+  username: string
+  authMethod: 'password' | 'key'
+  password?: string | null
+  keyPath?: string | null
+  passphrase?: string | null
+}
+
+/** 归一化端口：非数字、非正整数或越界一律回退到 `fallback`（默认 22）。 */
+export function normalizePort(
+  value: number | string | null | undefined,
+  fallback = DEFAULT_SSH_PORT
+): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  const port = Math.trunc(parsed)
+  return port >= 1 && port <= 65535 ? port : fallback
+}
+
+/** 归一化心跳间隔（秒）：非正数或非数字回退到 30；真实取值范围由后端 clamp 到 5..300。 */
+/**
+ * 归一化心跳间隔：非正数或非数字回退到 `fallback`，其余截断为整数并夹到
+ * [5, 300]。表单里的 min/max 只是提示，用户仍可手输越界值，因此这里必须兜住。
+ */
+export function normalizeKeepalive(
+  value: number | string | null | undefined,
+  fallback = DEFAULT_KEEPALIVE_SECONDS
+): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(MAX_KEEPALIVE_SECONDS, Math.max(MIN_KEEPALIVE_SECONDS, Math.trunc(parsed)))
+}
+
+/** 跳板机配置归一化：凭据字段按 authMethod 择一保留，避免把无关凭据带进请求。 */
+export function buildProxyConfig(
+  input: ProxyConfigInput | null | undefined
+): ProxyConfig | null {
+  if (!input) return null
+  return {
+    host: input.host.trim(),
+    port: normalizePort(input.port),
+    username: input.username.trim(),
+    authMethod: input.authMethod,
+    password: input.authMethod === 'password' && input.password ? input.password : null,
+    keyPath: input.authMethod === 'key' ? (input.keyPath ?? '').trim() || null : null,
+    passphrase: input.authMethod === 'key' && input.passphrase ? input.passphrase : null
+  }
+}
+
+/**
+ * 唯一的 `ConnectRequest` 构建入口。
+ *
+ * 连接对话框与主机列表快速连接必须共用本函数：此前两处各自手工拼装请求，
+ * 新增认证字段时极易只改一处，出现「编辑连接能连、主机列表一键连却失败」的隐性 bug。
+ * 认证方式决定携带哪些凭据的规则集中在此，请勿在调用方重复实现。
+ */
+export function buildConnectRequest(input: ConnectRequestInput): ConnectRequest {
+  const host = input.host.trim()
+  const username = input.username.trim()
+  const isPasswordLike =
+    input.authMethod === 'password' || input.authMethod === 'keyboard-interactive'
+  return {
+    name: (input.name ?? '').trim() || `${username}@${host}`,
+    host,
+    port: normalizePort(input.port),
+    username,
+    authMethod: input.authMethod,
+    password: isPasswordLike && input.password ? input.password : null,
+    keyPath: input.authMethod === 'key' ? (input.keyPath ?? '').trim() || null : null,
+    passphrase: input.authMethod === 'key' && input.passphrase ? input.passphrase : null,
+    otpSecret:
+      input.authMethod === 'keyboard-interactive'
+        ? (input.otpSecret ?? '').trim() || null
+        : null,
+    keepalive: normalizeKeepalive(input.keepalive),
+    autoReconnect: input.autoReconnect ?? false,
+    proxy: buildProxyConfig(input.proxy)
+  }
+}

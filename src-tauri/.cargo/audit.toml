@@ -1,0 +1,12 @@
+# cargo audit 配置。在 src-tauri 目录下执行 `cargo audit` 时生效（CI 同）。
+
+[advisories]
+# RUSTSEC-2023-0071 —— rsa 的 Marvin Attack（时序侧信道可能导致密钥恢复）。
+#
+# 为什么忽略：
+#   * 该 rsa 版本由 russh 0.63 → ssh-key 0.7.0-rc 依赖链引入，本项目并未直接调用 RSA 解密；
+#   * 上游 advisory 明确标注 "No fixed upgrade is available"，当前没有可升级到的修复版本；
+#   * 触发条件苛刻：攻击者需能与客户端建立大量连接并做高精度计时测量。
+#
+# 处置：接受该风险，并在此显式记录。一旦上游发布修复版本，立即升级并删除本条。
+ignore = ["RUSTSEC-2023-0071"]

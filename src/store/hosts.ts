@@ -1,15 +1,18 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
-import { createHostProfile, HostProfile } from '../types/host'
+import { HostProfile } from '../types/host'
+import {
+  buildImportPreview,
+  ImportPreview,
+  isValidHost,
+  MAX_IMPORT_PROFILES,
+  normalizeHost
+} from '../utils/hostImport'
 import { recordAudit } from './audit'
 import { useVault } from './vault'
 
 const STORE_FILE = 'hosts.json'
 const HOSTS_KEY = 'hosts'
-const MAX_IMPORT_PROFILES = 1000
-const MAX_HOST_GROUP_LENGTH = 48
-const MAX_HOST_TAGS = 10
-const MAX_HOST_TAG_LENGTH = 24
 
 interface HostsState {
   ready: boolean
@@ -20,61 +23,9 @@ interface HostsState {
   importProfiles: (profiles: Partial<HostProfile>[]) => Promise<void>
 }
 
-export interface ImportPreviewItem {
-  profile: HostProfile
-  duplicateOf: HostProfile | null
-}
-
-export interface ImportPreview {
-  items: ImportPreviewItem[]
-  invalidCount: number
-}
+export type { ImportPreview, ImportPreviewItem } from '../utils/hostImport'
 
 let initializationPromise: Promise<void> | null = null
-
-function normalizeGroup(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const group = value.trim().slice(0, MAX_HOST_GROUP_LENGTH)
-  return group || null
-}
-
-function normalizeTags(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  const tags: string[] = []
-  for (const item of value) {
-    if (typeof item !== 'string') continue
-    const tag = item.trim().slice(0, MAX_HOST_TAG_LENGTH)
-    if (!tag || seen.has(tag)) continue
-    seen.add(tag)
-    tags.push(tag)
-    if (tags.length >= MAX_HOST_TAGS) break
-  }
-  return tags
-}
-
-function normalizeHost(value: Partial<HostProfile>): HostProfile {
-  return createHostProfile({
-    ...value,
-    password: null,
-    passphrase: null,
-    group: normalizeGroup(value.group),
-    tags: normalizeTags(value.tags),
-    port: Number(value.port) > 0 ? Number(value.port) : 22,
-    keepAliveInterval: Number(value.keepAliveInterval) > 0 ? Number(value.keepAliveInterval) : 30,
-    autoReconnect: value.autoReconnect !== false
-  })
-}
-
-function isValidHost(profile: HostProfile): boolean {
-  return Boolean(
-    profile.host.trim() &&
-      profile.username.trim() &&
-      Number.isInteger(profile.port) &&
-      profile.port >= 1 &&
-      profile.port <= 65535
-  )
-}
 
 async function persist(hosts: HostProfile[]) {
   try {
@@ -88,23 +39,11 @@ async function persist(hosts: HostProfile[]) {
 }
 
 /** 解析待导入的主机配置并标记与现有配置的冲突，导入前供预览弹窗使用 */
-export function previewHostImport(profiles: Partial<HostProfile>[], maxCount: number = MAX_IMPORT_PROFILES): ImportPreview {
-  const existing = useHosts.getState().hosts
-  const items: ImportPreviewItem[] = []
-  let invalidCount = 0
-  for (const profile of profiles) {
-    const normalized = normalizeHost(profile)
-    if (!isValidHost(normalized)) {
-      invalidCount += 1
-      continue
-    }
-    if (items.length >= maxCount) break
-    const duplicate = existing.find(
-      (host) => host.host === normalized.host && host.port === normalized.port && host.username === normalized.username
-    )
-    items.push({ profile: normalized, duplicateOf: duplicate ?? null })
-  }
-  return { items, invalidCount }
+export function previewHostImport(
+  profiles: Partial<HostProfile>[],
+  maxCount: number = MAX_IMPORT_PROFILES
+): ImportPreview {
+  return buildImportPreview(profiles, useHosts.getState().hosts, maxCount)
 }
 
 export const useHosts = create<HostsState>((set, get) => ({

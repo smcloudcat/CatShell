@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon, IconName } from '../components/Icon'
+import { Modal } from '../components/Modal'
 import { useUiFeedback, ToastKind } from '../store/ui'
 import { useVault } from '../store/vault'
 import { useT } from '../i18n'
@@ -52,8 +53,12 @@ export function FeedbackHost() {
   return (
     <>
       {vaultUnlockRequest && (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal glass vault-unlock-modal">
+        <Modal
+          className="vault-unlock-modal"
+          ariaLabel={t('解锁凭据保险箱')}
+          closeOnOverlayClick={false}
+          onClose={() => resolveVaultUnlock(false)}
+        >
             <header className="modal-header">
               <div className="modal-title"><Icon name="key" size={17} />{t('解锁凭据保险箱')}</div>
             </header>
@@ -80,12 +85,16 @@ export function FeedbackHost() {
                 {vaultBusy ? t('处理中…') : t('解锁保险箱')}
               </button>
             </footer>
-          </div>
-        </div>
+        </Modal>
       )}
       {confirmRequest && (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal glass confirm-modal">
+        <Modal
+          className="confirm-modal"
+          role={confirmRequest.danger ? 'alertdialog' : 'dialog'}
+          ariaLabel={confirmRequest.title}
+          closeOnOverlayClick={false}
+          onClose={() => resolveConfirm(false)}
+        >
             <header className="modal-header">
               <div className={`modal-title ${confirmRequest.danger ? 'host-key-danger' : ''}`}>
                 <Icon name={confirmRequest.danger ? 'x' : 'settings'} size={17} />
@@ -102,13 +111,13 @@ export function FeedbackHost() {
               <button
                 className={`glass-btn ${confirmRequest.danger ? 'danger' : 'primary'}`}
                 onClick={() => resolveConfirm(true)}
-                autoFocus
+                /* 危险操作不默认聚焦确认键：焦点落在「取消」上，避免回车误确认 */
+                autoFocus={!confirmRequest.danger}
               >
                 {confirmRequest.confirmLabel ?? t('确认')}
               </button>
             </footer>
-          </div>
-        </div>
+        </Modal>
       )}
       {toasts.length > 0 && (
         <div className="toast-stack" role="status" aria-live="polite">

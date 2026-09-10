@@ -6,7 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '../../components/Icon'
-import { useSessions } from '../../store/sessions'
+import { getSessionLog, useSessions } from '../../store/sessions'
 import { TerminalSettings, useSettings } from '../../store/settings'
 import { useT } from '../../i18n'
 
@@ -220,6 +220,11 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
     })
     observer.observe(container)
 
+    // 会话在未挂载期间（切到其他标签时）仍会持续输出并累积到会话日志。
+    // 取快照与注册必须同步完成：二者之间没有 await，事件回调无法插入，
+    // 因此不会出现「重复写入」或「丢帧」。
+    const history = getSessionLog(id)
+
     registerTerminal({
       id,
       write: (data: Uint8Array) => term.write(data),
@@ -229,6 +234,10 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
       },
       openSearch: () => openSearchRef.current()
     })
+
+    if (history.length) {
+      term.write(history)
+    }
 
     return () => {
       observer.disconnect()

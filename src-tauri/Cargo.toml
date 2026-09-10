@@ -25,10 +25,17 @@ tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-russh-keys = { version = "0.49.2", default-features = false, features = ["legacy-ed25519-pkcs8-parser"] }
+# 凭据（密码 / 私钥口令 / OTP 密钥）在会话结束时用零化覆盖内存，缩短明文驻留窗口
+zeroize = "1"
+# 结构化日志：release 构建没有控制台，连接/传输失败必须落盘才能事后追查
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "net", "io-util", "fs"] }
 bytes = "1.12.1"
-russh = { version = "0.63.2", default-features = false, features = ["flate2", "rsa", "ring"] }
+# legacy-ed25519-pkcs8-parser 必须开在 russh 上：russh 0.63 自带密钥处理，
+# 不依赖独立的 russh-keys crate，之前写在 russh-keys 上的同名 feature 实际不生效。
+russh = { version = "0.63.2", default-features = false, features = ["flate2", "rsa", "ring", "legacy-ed25519-pkcs8-parser"] }
 russh-sftp = "2.4.0"
 tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-window-state = "2.4.1"

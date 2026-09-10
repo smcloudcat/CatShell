@@ -1,0 +1,7 @@
+# Clippy 配置。CI 执行 `cargo clippy -- -D warnings`。
+#
+# 说明：这里只显式记录偏离默认值的决策，不重复默认值以免造成噪音。
+# 参数个数阈值放宽到 8 是因为 SSH/SFTP 的 Tauri command 入口天然参数较多，
+# 强行拆分反而会把内聚的逻辑打散。默认值 7 下当前代码本已通过，
+# 此处显式记录以免后续无谓地为此重构。
+too-many-arguments-threshold = 8
