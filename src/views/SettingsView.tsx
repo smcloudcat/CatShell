@@ -13,6 +13,7 @@ import { BackupPanel } from './settings/BackupPanel'
 import { MonitorThresholdPanel } from './settings/MonitorThresholdPanel'
 import { showToast } from '../store/ui'
 import { useT } from '../i18n'
+import { errorText } from '../i18n/errors'
 
 type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'backup' | 'update'
 
@@ -58,7 +59,7 @@ export function SettingsView() {
     } catch (err) {
       setCurrentUpdate(null)
       setUpdateState('error')
-      setUpdateInfo(err instanceof Error ? err.message : t('检查更新失败，请稍后重试或手动下载'))
+      setUpdateInfo(errorText(err, t, '检查更新失败，请稍后重试或手动下载'))
     }
   }
 
@@ -71,7 +72,7 @@ export function SettingsView() {
       await relaunch()
     } catch (err) {
       setUpdateState('error')
-      setUpdateInfo(err instanceof Error ? err.message : t('下载更新失败'))
+      setUpdateInfo(errorText(err, t, '下载更新失败'))
     }
   }
 

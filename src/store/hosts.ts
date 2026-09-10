@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { HostProfile } from '../types/host'
+import { AppError, ERROR_CODES } from '../types/errors'
 import {
   buildImportPreview,
   ImportPreview,
@@ -102,7 +103,9 @@ export const useHosts = create<HostsState>((set, get) => ({
     recordAudit('host.delete', removed ? `${removed.name} (${removed.host}:${removed.port})` : id, 'success', '删除主机配置')
   },
   importProfiles: async (profiles) => {
-    if (profiles.length > MAX_IMPORT_PROFILES) throw new Error(`单次导入不能超过 ${MAX_IMPORT_PROFILES} 条主机配置`)
+    if (profiles.length > MAX_IMPORT_PROFILES) {
+      throw new AppError(ERROR_CODES.HOST_IMPORT_TOO_MANY, { max: MAX_IMPORT_PROFILES })
+    }
     const existing = new Map(get().hosts.map((host) => [host.id, host]))
     for (const profile of profiles) {
       const normalized = normalizeHost(profile)

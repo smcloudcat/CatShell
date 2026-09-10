@@ -8,14 +8,15 @@ import {
   sftpUploadFinish
 } from '../../api/ssh'
 import { SftpEntry } from '../../types/session'
+import { AppError, ERROR_CODES, isAppError } from '../../types/errors'
 import { beginTransfer, cancelFlags, removeTransfer, updateTransfer } from './sftpTransferStore'
-import { CANCELLED_MESSAGE, SFTP_CHUNK_SIZE } from './sftpUtils'
+import { SFTP_CHUNK_SIZE } from './sftpUtils'
 
 /**
  * 分块传输的执行层。原先这两段循环内联在 `SessionSftpPanel` 里，
  * 既要处理进度上报、取消标记，又要处理失败清理，把组件撑得很大。
  *
- * 约定：取消通过 `cancelFlags` 传递，抛出 `CANCELLED_MESSAGE` 哨兵错误，
+ * 约定：取消通过 `cancelFlags` 传递，抛出 `AppError(TRANSFER_CANCELLED)` 哨兵错误，
  * 由调用方决定是「跳过」还是「报错」。无论成功失败都会清理传输记录。
  */
 
@@ -41,7 +42,7 @@ export async function uploadChunkedFile(sessionId: number, target: string, file:
   try {
     let offset = 0
     while (offset < file.size) {
-      if (cancelFlags.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+      if (cancelFlags.has(transferId)) throw new AppError(ERROR_CODES.TRANSFER_CANCELLED)
       const slice = await file.slice(offset, Math.min(offset + SFTP_CHUNK_SIZE, file.size)).arrayBuffer()
       await sftpUploadChunk(transferId, offset, new Uint8Array(slice))
       offset += slice.byteLength
@@ -71,7 +72,7 @@ export async function downloadChunkedFile(sessionId: number, entry: SftpEntry): 
   let received = 0
   try {
     for (;;) {
-      if (cancelFlags.has(transferId)) throw new Error(CANCELLED_MESSAGE)
+      if (cancelFlags.has(transferId)) throw new AppError(ERROR_CODES.TRANSFER_CANCELLED)
       const chunk = await sftpDownloadChunk(transferId)
       if (chunk.done) break
       const bytes = base64ToBytes(chunk.data)
@@ -91,5 +92,5 @@ export async function downloadChunkedFile(sessionId: number, entry: SftpEntry): 
 
 /** 判断一个错误是否是用户主动取消产生的哨兵错误。 */
 export function isCancellation(error: unknown): boolean {
-  return error instanceof Error && error.message === CANCELLED_MESSAGE
+  return isAppError(error) && error.code === ERROR_CODES.TRANSFER_CANCELLED
 }

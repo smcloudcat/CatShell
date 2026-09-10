@@ -323,9 +323,9 @@ if (key === 'w') {
 | P2-18 | Cargo 插件版本策略混用：部分 `"2"`、部分精确小版本，与前端版本可能漂移 | `Cargo.toml:21-37` | P2 |
 | P2-19 | 长列表未虚拟化：主机列表、SFTP 大目录全量渲染，行组件未 `memo` | `HostsView.tsx:345,351`、`SessionSftpPanel.tsx:679-699` | P2 |
 | P2-20 | 定时器依赖不稳定值被反复重建 | `SessionsView.tsx:104-108` | P2 |
-| P2-21 | 错误展示入口不统一：`.form-error` 内联与 Toast 混用 | 多个 view | P2 |
+| P2-21 | 错误展示入口不统一：`.form-error` 内联与 Toast 混用。**部分缓解**：错误文案的取值入口已统一为 `AppError` 错误码 + `errorText()`，内联/Toast 的展示形式仍按场景选择 | 多个 view | P2 |
 | P2-22 | `ErrorBoundary` 文案与 "SSH Agent" 字面量未走 `t()` | `ErrorBoundary.tsx:38,42`、`ConnectDialog.tsx:498,520` | P2 |
-| P2-23 | i18n 以中文为 key，漏翻静默回退无感知 | `i18n/index.ts:668-671` | P2 |
+| P2-23 | i18n 以中文为 key，漏翻静默回退无感知。**已缓解**：`npm run i18n:check`（含错误码文案表）接入 CI，`npm run i18n:audit` 复查常量表等间接引用 | `i18n/index.ts:668-671` | P2 |
 | P3-1 | 并发 host-key 确认令牌为 `host:port:fingerprint`，同 host:port 并发连接会覆盖 oneshot | `mod.rs:281-285` | P3 |
 | P3-2 | 重连退避无 jitter，多会话同时掉线会雷群重连；且重连成功即重置计数，可无限重连 | `types.rs:151-157`、`mod.rs:860` | P3 |
 | P3-3 | 取消传输时故意保留的 `.catshell-part` 无清理入口，长期残留 | `sftp.rs` | P3 |
@@ -483,7 +483,7 @@ if (key === 'w') {
 | `CONTRIBUTING.md` | 新建 | 环境准备、开发流程、验证清单、代码约定、提交信息规范、安全红线 |
 | `CHANGELOG.md` | 新建 | Keep a Changelog 格式；`0.1.0` 完整功能回填 + `Unreleased` 计划项 |
 | `.gitignore` | 修订 | **保留 `AGENTS.md` 忽略项**（项目方决定：该文件是本地 agent 配置，不纳入版本控制） |
-| `src/i18n/index.ts` | 修订 | **代码修复**：补全 `en` 字典缺失的 `nav.*`（5 条）与 `status.*`（5 条），英文覆盖率由 96.8% → 100% |
+| `src/i18n/index.ts` | 修订 | **代码修复**：补全 `en` 字典缺失的 `nav.*`（5 条）与 `status.*`（5 条）。**注**：此处所称「100%」是按字面量 `t()` 统计的；后续核查发现审计动作名等经常量表间接引用的键仍有缺口，已在 P1-6 收尾时补齐 43 条并加入 CI 校验（`npm run i18n:check`），避免再次高估 |
 
 **验证**：`npx tsc --noEmit` 通过；`npm test` 19/19 通过。
 
@@ -496,7 +496,7 @@ if (key === 'w') {
 
 - [x] **P0-1** 修复 `release.yml`，上传安装包与 `.sig` 到 Release
 - [x] **P1-1** 修复重连双重自增 bug + 补重连测试
-- [x] **P1-6** 补齐 `en` 字典 `nav.*` / `status.*` + CI 覆盖校验脚本
+- [x] **P1-6** 补齐 `en` 字典 `nav.*` / `status.*` + CI 覆盖校验脚本（脚本位于 `scripts/check-i18n.mjs`，已接入 CI；收尾时另补 43 条间接引用的缺口，并提供 `scripts/audit-untranslated.mjs` 复查常量表等间接引用）
 - [x] **P1-8** `Ctrl+W` 改为仅关标签，`Ctrl+Shift+W` 才断开
 - [x] **P1-4** 凭证 `zeroize` + 去 `Debug`/`Serialize`
 - [x] **P1-5** 引入 `tracing`（严格过滤敏感字段）

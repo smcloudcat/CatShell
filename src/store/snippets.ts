@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { CommandSnippet, createCommandSnippet } from '../types/snippet'
+import { AppError, ERROR_CODES } from '../types/errors'
 
 const STORE_FILE = 'command-snippets.json'
 const SNIPPETS_KEY = 'snippets'
@@ -73,7 +74,7 @@ export const useSnippets = create<SnippetsState>((set, get) => ({
   },
   upsert: async (snippet) => {
     const next = normalize(snippet)
-    if (!next.name || !next.command) throw new Error('片段名称和命令不能为空')
+    if (!next.name || !next.command) throw new AppError(ERROR_CODES.SNIPPET_FIELDS_EMPTY)
     const snippets = get().snippets.some((item) => item.id === next.id)
       ? get().snippets.map((item) => (item.id === next.id ? next : item))
       : [next, ...get().snippets]

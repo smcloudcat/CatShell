@@ -6,6 +6,7 @@ import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { useSettings } from '../../store/settings'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 export function KnownHostsPanel() {
   const t = useT()
@@ -21,7 +22,7 @@ export function KnownHostsPanel() {
     try {
       setSnapshot(await knownHostsList())
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorText(err, t, '加载已信任主机指纹失败'))
     }
   }
 
@@ -41,7 +42,7 @@ export function KnownHostsPanel() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       recordAudit('knownhosts.mode', mode, 'failure', message)
-      setError(message)
+      setError(errorText(err, t, '切换指纹存储位置失败'))
     }
   }
 
@@ -66,7 +67,7 @@ export function KnownHostsPanel() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       recordAudit('knownhosts.delete', pattern, 'failure', message)
-      showToast(`${t('删除失败：')}${message}`, 'error')
+      showToast(t('删除失败：') + errorText(err, t, '删除主机指纹失败'), 'error')
     } finally {
       setBusyId(null)
     }

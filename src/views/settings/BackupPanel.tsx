@@ -3,12 +3,14 @@ import { Icon } from '../../components/Icon'
 import { HostProfile } from '../../types/host'
 import { CommandSnippet } from '../../types/snippet'
 import { ThemeConfig } from '../../types/theme'
+import { AppError, ERROR_CODES } from '../../types/errors'
 import { useHosts } from '../../store/hosts'
 import { useSnippets } from '../../store/snippets'
 import { DEFAULT_MONITOR_THRESHOLDS, MonitorThresholds, useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 interface BackupFile {
   version: 1
@@ -106,11 +108,17 @@ export function BackupPanel() {
     if (!file) return
     try {
       const parsed: unknown = JSON.parse(await file.text())
-      if (!parsed || typeof parsed !== 'object' || !('version' in parsed) || parsed.version !== 1) throw new Error('格式不支持')
+      if (!parsed || typeof parsed !== 'object' || !('version' in parsed) || parsed.version !== 1) {
+        throw new AppError(ERROR_CODES.BACKUP_UNSUPPORTED_FORMAT)
+      }
       const backup = parsed as Partial<BackupFile>
       const restoredTheme = normalizeTheme(backup.theme)
-      if (!Array.isArray(backup.hosts) || !Array.isArray(backup.snippets) || !restoredTheme) throw new Error('内容不完整')
-      if (backup.monitorThresholds !== undefined && !isMonitorThresholds(backup.monitorThresholds)) throw new Error('告警设置无效')
+      if (!Array.isArray(backup.hosts) || !Array.isArray(backup.snippets) || !restoredTheme) {
+        throw new AppError(ERROR_CODES.BACKUP_INCOMPLETE)
+      }
+      if (backup.monitorThresholds !== undefined && !isMonitorThresholds(backup.monitorThresholds)) {
+        throw new AppError(ERROR_CODES.BACKUP_INVALID_THRESHOLDS)
+      }
       await importProfiles(backup.hosts)
       await importSnippets(backup.snippets)
       replaceTheme(restoredTheme)
@@ -121,7 +129,7 @@ export function BackupPanel() {
       showToast(t('配置还原完成，主题设置已持久化。'), 'success')
     } catch (err) {
       recordAudit('config.import', 'local-config', 'failure', t('备份文件无效'))
-      showToast(err instanceof Error ? t('还原失败：') + err.message : t('还原失败，请选择有效的 CatShell 备份文件。'), 'error')
+      showToast(t('还原失败：') + errorText(err, t, '请选择有效的 CatShell 备份文件。'), 'error')
     }
   }
 

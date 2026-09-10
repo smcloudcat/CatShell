@@ -1,3 +1,8 @@
+import { AppError, ERROR_CODES } from '../types/errors'
+
+/** 主密码最短长度，供校验与文案插值共用。 */
+export const MIN_MASTER_PASSWORD_LENGTH = 8
+
 export interface VaultCredential {
   password?: string
   passphrase?: string
@@ -31,7 +36,9 @@ export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 export function validatePassword(password: string) {
-  if (password.length < 8) throw new Error('主密码至少需要 8 个字符')
+  if (password.length < MIN_MASTER_PASSWORD_LENGTH) {
+    throw new AppError(ERROR_CODES.VAULT_PASSWORD_TOO_SHORT, { min: MIN_MASTER_PASSWORD_LENGTH })
+  }
 }
 
 export async function deriveKey(password: string, salt: Uint8Array, iterations: number) {
@@ -81,6 +88,8 @@ export async function decryptEntries(password: string, record: VaultRecord): Pro
     toArrayBuffer(base64ToBytes(record.data))
   )
   const parsed: unknown = JSON.parse(new TextDecoder().decode(decrypted))
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('保险箱数据格式无效')
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AppError(ERROR_CODES.VAULT_DATA_INVALID)
+  }
   return parsed as Record<string, VaultCredential>
 }

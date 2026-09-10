@@ -14,10 +14,10 @@ const ACCENT_SWATCHES = [
 ]
 
 const TERMINAL_FONT_OPTIONS = [
-  { label: 'Consolas（默认）', value: 'Consolas, "Cascadia Mono", "Courier New", monospace' },
-  { label: 'Cascadia Mono', value: '"Cascadia Mono", Consolas, "Courier New", monospace' },
-  { label: 'Courier New', value: '"Courier New", Consolas, monospace' },
-  { label: '系统等宽字体', value: 'ui-monospace, Consolas, "Cascadia Mono", monospace' }
+  { labelKey: 'Consolas（默认）', value: 'Consolas, "Cascadia Mono", "Courier New", monospace' },
+  { labelKey: 'Cascadia Mono', value: '"Cascadia Mono", Consolas, "Courier New", monospace' },
+  { labelKey: 'Courier New', value: '"Courier New", Consolas, monospace' },
+  { labelKey: '系统等宽字体', value: 'ui-monospace, Consolas, "Cascadia Mono", monospace' }
 ]
 
 export function Appearance() {
@@ -94,7 +94,7 @@ export function Appearance() {
         >
           {TERMINAL_FONT_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label.startsWith('Consolas') ? t('Consolas（默认）') : option.label}
+              {t(option.labelKey)}
             </option>
           ))}
         </select>

@@ -17,6 +17,7 @@ import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 /**
  * 会话工作区。
@@ -89,7 +90,7 @@ export function SessionsView() {
   const handleSelectTab = (id: number) => setActive(id)
 
   const handleReconnect = (id: number) => {
-    reconnect(id).catch(() => showToast(t('重连请求失败，请稍后重试'), 'error'))
+    reconnect(id).catch((err: unknown) => showToast(errorText(err, t, '重连请求失败，请稍后重试'), 'error'))
   }
 
   /** 关闭标签前先断开连接，避免后端会话在标签消失后继续存活。 */
@@ -104,7 +105,7 @@ export function SessionsView() {
   const handleRename = (id: number, name: string) => {
     renameSession(id, name)
       .then(() => recordAudit('session.rename', name, 'success', '重命名会话标签'))
-      .catch((err: unknown) => showToast(err instanceof Error ? err.message : t('重命名失败'), 'error'))
+      .catch((err: unknown) => showToast(errorText(err, t, '重命名失败'), 'error'))
   }
 
   const toggleSplit = () => {
@@ -132,7 +133,7 @@ export function SessionsView() {
       setSnippetPrompt(null)
     } catch (error) {
       recordAudit('snippet.send', snippet.name, 'failure', t('向当前会话发送命令模板失败'))
-      setSnippetError(error instanceof Error ? error.message : t('发送命令模板失败'))
+      setSnippetError(errorText(error, t, '发送命令模板失败'))
     }
   }
 

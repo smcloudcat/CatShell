@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint .",
+    "i18n:check": "node scripts/check-i18n.mjs",
+    "i18n:audit": "node scripts/audit-untranslated.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

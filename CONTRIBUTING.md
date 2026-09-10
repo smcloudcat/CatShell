@@ -34,16 +34,21 @@ npm run tauri dev
 
 ```powershell
 # 仓库根目录
+npx tsc --noEmit
 npm run lint
+npm run i18n:check
 npm test
 npm run build
 
 # src-tauri 目录
-cargo fmt
-cargo clippy -- -D warnings
-cargo check
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 ```
+
+`--all-targets` 会把集成测试代码一并纳入 Lint，请保留该参数——只写 `cargo clippy -- -D warnings` 时 `tests/` 下的代码不在检查范围内。
+
+`npm run i18n:check` 校验代码里的每个 `t('…')` 键都有对应的 `en` 条目，CI 会执行同一步。若新增了文案却忘了补 `en`，这一步会直接失败并列出缺失的键。常量表等**间接引用**的键不在其覆盖范围内，可用 `npm run i18n:audit` 人工复查。
 
 涉及 `invoke`、文件选择器、Tauri Store、插件或 Rust command 的改动，**必须**用 `npm run tauri dev` 或 `open-dev.cmd` 在真实 Tauri 窗口内验证；`npm run dev` 只跑 Vite，无法验证任何 Tauri API。
 
@@ -71,6 +76,7 @@ cargo test
 
 - 改动对外行为时同步更新 `README.md`；影响模块边界或开发约定的改动同步更新 `AGENTS.md`。
 - 用户可见的变更记入 `CHANGELOG.md` 的 `Unreleased` 段落。
+- 触碰安全边界的改动（凭据处理、指纹校验、日志内容、转发绑定、依赖审计接受项）同步更新 `SECURITY.md`。
 
 ## 提交信息
 
@@ -89,9 +95,12 @@ docs: align README plugin list with actual registrations
 以下改动不会被接受，详见 [`SECURITY.md`](./SECURITY.md)：
 
 - 把密码、私钥口令或凭据写入 Store、localStorage、日志、导出文件或测试
+- 让承载凭据的请求对象重新派生 `Debug` / `Serialize`，或移除其析构时的内存清除
+- 在日志中写入未脱敏的密码、口令或私钥内容
 - 放宽或移除主机指纹校验，为指纹变化提供绕过路径
 - 把端口转发绑定到 `0.0.0.0` 等非回环地址
 - 把未经校验的用户输入拼接进远程 shell 命令
+- 无理由地放宽依赖漏洞扫描的接受项
 - 为调试方便放宽 Tauri capability
 
 ## 行为准则

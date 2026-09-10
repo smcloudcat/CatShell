@@ -39,14 +39,14 @@ CatShell 是一款面向 Windows 的桌面 SSH 运维工具，基于 **Tauri 2 +
 ```
 ├─ src/                       # React 前端
 │  ├─ api/                    # Tauri command 调用与事件封装
-│  ├─ components/             # 通用 UI 组件（Icon / Feedback / ErrorBoundary）
+│  ├─ components/             # 通用 UI 组件（Icon / Feedback / Modal / ErrorBoundary）
 │  ├─ i18n/                   # 轻量 i18n（zh-CN 键名来源 + en-US 渐进补齐）
 │  ├─ store/                  # Zustand 状态（主机、会话、设置、保险箱、片段、审计、UI）
 │  ├─ styles/                 # 按视图拆分的样式（base / glass / sessions / sftp / …）
 │  ├─ types/                  # 共享类型与常量
-│  ├─ utils/                  # 纯函数工具（格式化、通知、保险箱加解密）
-│  ├─ views/                  # 页面与页面级组件（主机、会话、SFTP、监控、转发、设置）
-│  └─ __tests__/              # vitest 单元测试（snippet / theme / vaultCrypto）
+│  ├─ utils/                  # 纯函数工具（格式化、通知、保险箱加解密、主机导入与列表）
+│  ├─ views/                  # 页面与页面级组件；子目录 hosts/ sessions/ settings/ 存放各自的对话框与面板
+│  └─ __tests__/              # vitest 单元测试（连接请求、主机导入、SFTP 工具、会话视图等 9 个文件）
 ├─ src-tauri/                 # Rust 后端
 │  ├─ src/ssh_manager/        # SSH 核心目录模块
 │  │  ├─ mod.rs               # 会话生命周期、认证、重连、指纹确认、ProxyJump
@@ -55,11 +55,15 @@ CatShell 是一款面向 Windows 的桌面 SSH 运维工具，基于 **Tauri 2 +
 │  │  ├─ monitor.rs           # 监控 / 进程 / 网络诊断 / RTT
 │  │  ├─ sftp.rs              # SFTP、分块流式与磁盘级断点续传
 │  │  └─ forward.rs           # 端口转发与 SOCKS5
+│  ├─ src/logging.rs          # tracing 落盘日志（按日轮转）
 │  ├─ src/lib.rs              # Tauri 应用状态、command 注册、事件转发、插件注册
 │  ├─ build.rs                # Tauri 构建脚本
 │  ├─ capabilities/           # 权限声明
-│  └─ tests/                  # Rust 集成测试（含 SSH echo-server 生命周期测试）
-├─ .github/workflows/         # CI（lint / test / build / clippy）与 tag 发布工作流
+│  ├─ .cargo/audit.toml       # cargo audit 的已知接受项与理由
+│  └─ tests/                  # Rust 集成测试（common/ 基建 + ssh / sftp / forward 三个 e2e）
+├─ docs/                      # 项目审查报告与优先级路线图
+├─ scripts/                   # 仓库脚本（i18n 覆盖率校验与审计）
+├─ .github/workflows/         # CI（lint / test / i18n / build / clippy / audit）与 tag 发布工作流
 ├─ open-dev.cmd               # Windows 一键启动开发服务器
 ├─ open-dev.ps1               # PowerShell 启动入口
 └─ index.html
@@ -147,23 +151,35 @@ npm run tauri build
 ## 测试
 
 ```powershell
-# 前端类型检查 + 构建
+# 前端：类型检查、Lint、i18n 校验、单元测试与构建
+npx tsc --noEmit
+npm run lint
+npm run i18n:check
+npm test
 npm run build
 
-# Rust 检查与测试（在 src-tauri 目录执行）
-cargo check
+# Rust：格式、Lint 与测试（在 src-tauri 目录执行）
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-`cargo test` 会启动内存中的 echo SSH 服务器运行集成测试，验证连接、认证、PTY 事件与 known_hosts 指纹校验等核心链路。
+前端的 `npm test` 覆盖纯函数层：连接请求构建、主机导入的信任边界、SFTP 目录与传输工具、会话视图与主机列表等。
+
+`npm run i18n:check` 校验代码中的文案键是否都有 `en` 条目（CI 同步骤），`npm run i18n:audit` 用于复查常量表等间接引用的缺口。
+
+Rust 集成测试基于 `src-tauri/tests/common/` 的内存 SSH 服务器，覆盖连接与认证、PTY 事件、known_hosts 指纹校验与**指纹变更拒绝**、SFTP 全链路（增删改查与跨会话状态保持）以及 direct-tcpip 本地转发。
 
 ## 数据与安全
 
 - **凭据不入库**：连接密码与私钥口令只用于当前连接进程，不会写入主机配置、localStorage 或导出文件
+- **凭据内存清除**：凭据对象析构时用 `zeroize` 覆写，且不派生 `Debug` / `Serialize`，避免经由日志或序列化外泄
 - **凭据保险箱**：以 PBKDF2 派生密钥 + AES-GCM 加密存储；解锁后明文仅在内存中，锁定 / 退出即清除
 - **主机指纹校验（TOFU）**：首次连接必须人工确认 SHA-256 指纹并写入 known_hosts；密钥一旦变化立即阻断连接
 - **配置导出**：导入导出及备份文件均会剔除 `password` 与 `passphrase` 字段
+- **日志脱敏**：运行日志只记录脱敏后的会话摘要，不写入密码与口令
 - **审计留痕**：连接、传输、转发、导出等关键操作记录到本地审计日志，可检索与导出
+- **依赖审计**：CI 对前端与 Rust 依赖分别执行漏洞扫描；已知接受项在 `src-tauri/.cargo/audit.toml` 中记录理由
 
 ## 许可证
 

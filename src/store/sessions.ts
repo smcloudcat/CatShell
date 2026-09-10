@@ -13,6 +13,7 @@ import {
   type SshOutputChannel
 } from '../api/ssh'
 import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KbiPromptEvent, SessionInfo, SessionStatusEvent } from '../types/session'
+import { AppError, ERROR_CODES } from '../types/errors'
 import { recordAudit } from './audit'
 
 export interface TerminalRef {
@@ -269,7 +270,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   reconnect: async (id) => {
     const request = get().requests[id]
     const info = get().sessions[id]
-    if (!request || !info) throw new Error('该会话缺少可复用的连接参数，请从主机页重新连接')
+    if (!request || !info) throw new AppError(ERROR_CODES.SESSION_MISSING_CONNECTION_PARAMS)
     const idBox: { id: number } = { id: 0 }
     const newId = await sshConnect(request, createOutputChannel(idBox))
     idBox.id = newId
@@ -334,9 +335,9 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
   renameSession: async (id, name) => {
     const info = get().sessions[id]
-    if (!info) throw new Error('会话不存在')
+    if (!info) throw new AppError(ERROR_CODES.SESSION_NOT_FOUND)
     const trimmed = name.trim().slice(0, 80)
-    if (!trimmed) throw new Error('名称不能为空')
+    if (!trimmed) throw new AppError(ERROR_CODES.SESSION_NAME_EMPTY)
     const request = get().requests[id]
     set((s) => ({
       sessions: { ...s.sessions, [id]: { ...info, name: trimmed } },

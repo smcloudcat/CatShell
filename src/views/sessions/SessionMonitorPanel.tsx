@@ -97,11 +97,11 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
           const diskPercent = percent(next.diskUsedKb, next.diskTotalKb)
           const cpuPercentValue = next.cpuPercent ?? (next.cpuCores ? Math.min(100, (next.load1m / next.cpuCores) * 100) : 0)
           const checks = [
-            { key: 'cpu', label: 'CPU 使用率', value: cpuPercentValue, threshold: monitorThresholds.cpuPercent },
-            { key: 'memory', label: '内存使用率', value: memoryPercent, threshold: monitorThresholds.memoryPercent },
-            { key: 'disk', label: '根分区使用率', value: diskPercent, threshold: monitorThresholds.diskPercent }
+            { key: 'cpu', labelKey: 'CPU 使用率', value: cpuPercentValue, threshold: monitorThresholds.cpuPercent },
+            { key: 'memory', labelKey: '内存使用率', value: memoryPercent, threshold: monitorThresholds.memoryPercent },
+            { key: 'disk', labelKey: '根分区使用率', value: diskPercent, threshold: monitorThresholds.diskPercent }
           ]
-          const nextAlerts = checks.filter((check) => check.value >= check.threshold).map((check) => `${check.label} ${check.value.toFixed(0)}% 已超过 ${check.threshold}%`)
+          const nextAlerts = checks.filter((check) => check.value >= check.threshold).map((check) => `${t(check.labelKey)} ${check.value.toFixed(0)}% ${t('已超过 ')}${check.threshold}%`)
           setAlerts(nextAlerts)
           const state = alertState.current
           for (const check of checks) {
@@ -109,8 +109,8 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
             const exceeded = monitorThresholds.enabled && check.value >= check.threshold
             const wasExceeded = state[alertKey] ?? false
             if (exceeded && !wasExceeded) {
-      showToast(`${next.hostname}：${check.label} ${check.value.toFixed(0)}% ${t('已超过 ')}${check.threshold}%`, 'warning')
-            void sendSystemNotification('CatShell', `${next.hostname}：${check.label} ${check.value.toFixed(0)}% ${t('已超过 ')}${check.threshold}%`)
+            showToast(`${next.hostname}：${t(check.labelKey)} ${check.value.toFixed(0)}% ${t('已超过 ')}${check.threshold}%`, 'warning')
+            void sendSystemNotification('CatShell', `${next.hostname}：${t(check.labelKey)} ${check.value.toFixed(0)}% ${t('已超过 ')}${check.threshold}%`)
             }
             state[alertKey] = exceeded
           }

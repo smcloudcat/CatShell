@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SftpEntry } from '../types/session'
 import {
-  CANCELLED_MESSAGE,
   entryTitle,
   formatMode,
   isValidRemoteName,
@@ -229,11 +228,5 @@ describe('uploadWithRetry', () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-})
-
-describe('CANCELLED_MESSAGE', () => {
-  it('is the sentinel callers compare against', () => {
-    expect(CANCELLED_MESSAGE).toBe('已取消')
   })
 })

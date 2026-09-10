@@ -12,6 +12,7 @@ import { beginTransfer, cancelFlags, removeTransfer, useSftpTransferStore, type 
 import { useT } from '../../i18n'
 
 function TransferRow({ transfer }: { transfer: TransferProgress }) {
+  const t = useT()
   const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
   const requestCancel = () => {
     if (transfer.disk) {
@@ -30,7 +31,7 @@ function TransferRow({ transfer }: { transfer: TransferProgress }) {
         </div>
         <div className="metric-bar"><span style={{ width: `${percent}%` }} /></div>
       </div>
-      <button className="host-icon-btn danger" onClick={requestCancel} title="取消传输"><Icon name="x" size={13} /></button>
+      <button className="host-icon-btn danger" onClick={requestCancel} title={t('取消传输')}><Icon name="x" size={13} /></button>
     </div>
   )
 }

@@ -14,6 +14,7 @@ import { ImportPreview, previewHostImport } from '../store/hosts'
 import { requestVaultUnlock, showToast } from '../store/ui'
 import { collectTags, filterHosts, groupHosts } from '../utils/hostList'
 import { useT } from '../i18n'
+import { errorText } from '../i18n/errors'
 
 interface Props {
   onOpenSessions: () => void
@@ -181,7 +182,7 @@ export function HostsView({ onOpenSessions }: Props) {
       setPendingImport(preview)
     } catch (err) {
       recordAudit('host.import', 'hosts-file', 'failure', t('文件无效或解析失败'))
-      showToast(err instanceof Error ? t('导入失败：') + err.message : t('导入失败，请选择有效的 CatShell 主机配置文件。'), 'error')
+      showToast(t('导入失败：') + errorText(err, t, '请选择有效的 CatShell 主机配置文件。'), 'error')
     }
   }
 
@@ -196,7 +197,7 @@ export function HostsView({ onOpenSessions }: Props) {
       showToast(parts.join(t('，')), 'success')
     } catch (err) {
       recordAudit('host.import', 'hosts-file', 'failure', t('导入失败'))
-      showToast(err instanceof Error ? t('导入失败：') + err.message : t('导入失败'), 'error')
+      showToast(errorText(err, t, '导入失败'), 'error')
     }
   }
 

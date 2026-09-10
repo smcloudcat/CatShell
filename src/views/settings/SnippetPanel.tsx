@@ -3,6 +3,7 @@ import { Icon } from '../../components/Icon'
 import { useSnippets } from '../../store/snippets'
 import { CommandSnippet, createCommandSnippet, getSnippetParameters } from '../../types/snippet'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 export function SnippetPanel() {
   const t = useT()
@@ -25,7 +26,7 @@ export function SnippetPanel() {
       await upsert(editing)
       setEditing(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存片段失败')
+      setError(errorText(err, t, '保存片段失败'))
     }
   }
 

@@ -9,6 +9,7 @@ import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
 import { addressKey } from '../../utils/hostList'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 interface Props {
   onClose: () => void
@@ -93,7 +94,7 @@ export function SshConfigImportModal({ onClose, importProfiles }: Props) {
       showToast(t('已从 ~/.ssh/config 导入 ') + chosen.length + t(' 条主机配置。'), 'success')
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('导入失败'))
+      setError(errorText(err, t, '导入失败'))
     } finally {
       setBusy(false)
     }

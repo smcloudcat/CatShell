@@ -207,15 +207,6 @@ export interface ConnectRequest {
   proxy?: ProxyConfig | null
 }
 
-export const STATUS_TEXT: Record<SessionStatus, string> = {
-  connecting: '连接中',
-  connected: '已连接',
-  reconnecting: '重连中',
-  disconnected: '已断开',
-  closing: '正在关闭',
-  closed: '已关闭'
-}
-
 export const DEFAULT_SSH_PORT = 22
 export const DEFAULT_KEEPALIVE_SECONDS = 30
 /** 心跳间隔的合法区间，与连接表单的 min/max 保持一致。 */

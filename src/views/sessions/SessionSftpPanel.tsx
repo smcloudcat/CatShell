@@ -21,6 +21,7 @@ import { shellQuote } from '../../types/snippet'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog } from '../../store/ui'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 import { SftpToolbar } from './SftpToolbar'
 import { SftpEntryList } from './SftpEntryList'
 import { SftpDropZone } from './SftpDropZone'
@@ -82,9 +83,8 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const connected = sessions[sessionId]?.status === 'connected'
   const shown = visibleEntries(entries, { nameFilter, showHidden, sortKey, sortAsc })
 
-  /** 把 command 抛出的错误转成可展示文案；字符串错误直接用，其余走兜底文案。 */
-  const asMessage = (err: unknown, fallback: string): string =>
-    typeof err === 'string' ? err : err instanceof Error ? err.message : fallback
+  /** 把 command 抛出的错误转成可展示文案；AppError 走错误码映射，其余原样。 */
+  const asMessage = (err: unknown, fallback: string): string => errorText(err, t, fallback)
 
   const loadDirectory = async (nextPath?: string) => {
     const target = nextPath ?? path

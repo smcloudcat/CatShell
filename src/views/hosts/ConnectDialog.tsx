@@ -8,6 +8,7 @@ import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
 import { requestVaultUnlock } from '../../store/ui'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 import { HostAuthFields } from './HostAuthFields'
 import { HostProxyFields } from './HostProxyFields'
 import { HostIconPicker } from './HostIconPicker'
@@ -207,7 +208,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       onClose()
       onConnected?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : typeof err === 'string' ? err : t('连接失败'))
+      setError(errorText(err, t, '连接失败'))
     } finally {
       setBusy(false)
     }
@@ -274,7 +275,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setForm(emptyConnectForm())
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('保存失败'))
+      setError(errorText(err, t, '保存失败'))
     } finally {
       setBusy(false)
     }

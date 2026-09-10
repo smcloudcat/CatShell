@@ -19,6 +19,8 @@ jobs:
       - name: Audit dependencies (high and above)
         run: npm audit --audit-level=high
       - run: npm run lint
+      - name: Check i18n coverage
+        run: npm run i18n:check
       - run: npm test
       - run: npm run build
 
@@ -35,7 +37,7 @@ jobs:
           workspaces: src-tauri
       - run: cargo fmt --check
         working-directory: src-tauri
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
       - run: cargo check
         working-directory: src-tauri

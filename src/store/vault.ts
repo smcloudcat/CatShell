@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { recordAudit } from './audit'
 import { useSettings } from './settings'
+import { AppError, ERROR_CODES } from '../types/errors'
 import {
   PBKDF2_ITERATIONS,
   VaultCredential,
@@ -127,12 +128,12 @@ export const useVault = create<VaultState>((set, get) => ({
   },
   unlock: async (password) => {
     validatePassword(password)
-    if (!vaultRecord) throw new Error('请先设置保险箱主密码')
+    if (!vaultRecord) throw new AppError(ERROR_CODES.VAULT_NOT_CONFIGURED)
     let entries: Record<string, VaultCredential>
     try {
       entries = await decryptEntries(password, vaultRecord)
     } catch {
-      throw new Error('主密码错误或保险箱数据已损坏')
+      throw new AppError(ERROR_CODES.VAULT_UNLOCK_FAILED)
     }
     if (vaultRecord.iterations !== PBKDF2_ITERATIONS) {
       const salt = crypto.getRandomValues(new Uint8Array(16))
@@ -173,7 +174,7 @@ export const useVault = create<VaultState>((set, get) => ({
     recordAudit('vault.change-password', '凭据保险箱', 'success', '使用新盐重新加密保险箱')
   },
   saveCredential: async (id, credential) => {
-    if (!get().unlocked || !vaultRecord || !sessionKey) throw new Error('请先解锁凭据保险箱')
+    if (!get().unlocked || !vaultRecord || !sessionKey) throw new AppError(ERROR_CODES.VAULT_LOCKED)
     touchVaultActivity()
     const entries = { ...get().entries, [id]: credential }
     const record = await encryptEntriesWithKey(sessionKey, base64ToBytes(vaultRecord.salt), entries)

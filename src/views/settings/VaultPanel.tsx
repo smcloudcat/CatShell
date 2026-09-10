@@ -5,6 +5,7 @@ import { useSettings, VAULT_AUTO_LOCK_OPTIONS } from '../../store/settings'
 import { useHosts } from '../../store/hosts'
 import { confirmDialog } from '../../store/ui'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
 
 const AUTO_LOCK_LABELS: Record<number, string> = {
   0: '关闭',
@@ -77,7 +78,7 @@ export function VaultPanel() {
       setPassword('')
       setConfirm('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('保险箱操作失败'))
+      setError(errorText(err, t, '保险箱操作失败'))
     } finally {
       setBusy(false)
     }
@@ -106,7 +107,7 @@ export function VaultPanel() {
       setNewPassword('')
       setNewConfirm('')
     } catch (err) {
-      setChangeError(err instanceof Error ? err.message : t('修改主密码失败'))
+      setChangeError(errorText(err, t, '修改主密码失败'))
     } finally {
       setChangeBusy(false)
     }
@@ -123,7 +124,7 @@ export function VaultPanel() {
     try {
       await removeCredential(id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('删除凭据失败'))
+      setError(errorText(err, t, '删除凭据失败'))
     }
   }
 

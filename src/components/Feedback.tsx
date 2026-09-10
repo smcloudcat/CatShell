@@ -4,6 +4,7 @@ import { Modal } from '../components/Modal'
 import { useUiFeedback, ToastKind } from '../store/ui'
 import { useVault } from '../store/vault'
 import { useT } from '../i18n'
+import { errorText } from '../i18n/errors'
 
 const TOAST_ICONS: Record<ToastKind, IconName> = {
   info: 'terminal',
@@ -44,7 +45,7 @@ export function FeedbackHost() {
       setVaultPassword('')
       resolveVaultUnlock(true)
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : t('保险箱操作失败'))
+      setVaultError(errorText(error, t, '保险箱操作失败'))
     } finally {
       setVaultBusy(false)
     }

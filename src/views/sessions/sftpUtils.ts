@@ -13,9 +13,6 @@ export const SFTP_CHUNK_SIZE = 256 * 1024
 /** 超过此大小走 begin/chunk/finish 协议，避免一次性把整个文件读进内存。 */
 export const SFTP_CHUNKED_THRESHOLD = 16 * 1024 * 1024
 
-/** 用户主动取消时抛出的哨兵消息，调用方据此区分「取消」与「失败」。 */
-export const CANCELLED_MESSAGE = '已取消'
-
 export const CHMOD_PRESETS = ['644', '600', '755', '700', '777']
 
 export type SftpSortKey = 'name' | 'size' | 'modifiedAt'

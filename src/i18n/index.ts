@@ -139,7 +139,6 @@ const en: Record<string, string> = {
   '文件中没有有效的主机配置': 'No valid host profiles in file',
   '导入失败，文件中没有有效的主机配置（缺少主机地址、用户名或端口无效）。': 'Import failed: no valid host profiles (missing host, username, or invalid port).',
   '文件无效或解析失败': 'Invalid file or parse failure',
-  '导入失败，请选择有效的 CatShell 主机配置文件。': 'Import failed. Choose a valid CatShell host profile file.',
   '导入失败：': 'Import failed: ',
   '导入失败': 'Import failed',
   '已导入 ': 'Imported ',
@@ -185,6 +184,13 @@ const en: Record<string, string> = {
   '已从 ~/.ssh/config 导入 ': 'Imported ',
   ' 条主机配置。': ' host profiles from ~/.ssh/config.',
   '导入所选（': 'Import selected (',
+  '尝试更换搜索关键词或标签筛选。': 'Try a different search keyword or tag filter.',
+  '点击右上角「新建连接」创建第一条 SSH 主机配置。':
+    'Click "New connection" in the top right to create your first SSH host.',
+  '还没有主机配置': 'No host configurations yet',
+  '没有匹配的主机': 'No matching hosts',
+  ' 条。已存在的同 主机+端口+用户名 配置不会被覆盖。认证方式按 IdentityFile 推断；导入后请补齐凭据。':
+    ' entries. Existing host+port+username entries will not be overwritten. The auth method is inferred from IdentityFile; fill in credentials after importing.',
   // ConnectDialog
   '编辑并连接': 'Edit & connect',
   '名称（可选）': 'Name (optional)',
@@ -292,6 +298,7 @@ const en: Record<string, string> = {
   '发送命令': 'Send command',
   'm': 'm',
   'h': 'h',
+  '退出分屏': 'Exit split view',
   // SessionSftpPanel
   '在终端中打开此目录': 'Open this directory in terminal',
   '在终端中打开此目录失败': 'Failed to open in terminal',
@@ -415,10 +422,17 @@ const en: Record<string, string> = {
   '八进制权限（3~4 位，例如 644）': 'Octal permissions (3-4 digits, e.g. 644)',
   '权限 ': 'perm ',
   '修改于 ': 'modified ',
+  // 批量结果里的量词，英文不保留量词故为空串。
+  ' 个': '',
+  '递归删除远程目录失败': 'Failed to remove the remote directory recursively',
+  '分块下载失败': 'Chunked download failed',
+  '下载文件失败': 'Failed to download file',
+  '修改权限 ': 'Change permissions ',
   // SftpTransferList
   '已取消 ': 'Cancelled ',
   '磁盘级传输完成': 'Disk-level transfer finished',
   '完成：': ' finished: ',
+  '取消传输': 'Cancel transfer',
   // SessionMonitorPanel
   '已超过 ': ' exceeded ',
   '无法采集服务器状态': 'Could not collect server status',
@@ -460,6 +474,13 @@ const en: Record<string, string> = {
   'Trace 路由': 'Traceroute',
   '域名或 IP 地址': 'Domain or IP',
   '远程主机未返回输出': 'Remote host returned no output',
+  '进程': 'Processes',
+  '网络诊断': 'Network diagnostics',
+  '折叠面板': 'Collapse panel',
+  '终止进程': 'Terminate process',
+  'CPU 使用率': 'CPU usage',
+  '内存使用率': 'Memory usage',
+  '根分区使用率': 'Root partition usage',
   // ForwardView
   '端口转发': 'Port forwarding',
   '管理 SSH 本地、远程和 SOCKS5 动态转发，监听地址限制在回环接口': 'Manage SSH local, remote and SOCKS5 dynamic forwards; bind addresses are restricted to loopback',
@@ -489,6 +510,9 @@ const en: Record<string, string> = {
   '运行中的转发': 'Active forwards',
   '暂无运行中的端口转发。': 'No active port forwards.',
   '会话 ': 'Session ',
+  '启动转发': 'Start forwarding',
+  '停止转发': 'Stop forwarding',
+  '停止端口转发失败': 'Failed to stop port forwarding',
   // SettingsView
   '设置': 'Settings',
   '外观实时调整 · 效果即时预览': 'Live appearance tuning with instant preview',
@@ -570,12 +594,15 @@ const en: Record<string, string> = {
   '保险箱解锁后，若在设定时长内没有任何凭据操作，将自动锁定并清除内存中的明文凭据。': 'After unlocking, the vault locks automatically after the idle timeout and clears plaintext credentials from memory.',
   '窗口失焦时自动锁定': 'Lock when window loses focus',
   '开启后，只要应用窗口失去焦点（切换到其他窗口），保险箱立即锁定并清除内存凭据。关闭的窗口（如文件选择器）不会触发锁定。': 'When enabled, the vault locks immediately whenever the app window loses focus (e.g. switching windows) and clears in-memory credentials. Closed windows such as file pickers do not trigger locking.',
+  '私钥口令': 'Key passphrase',
   // MonitorThresholdPanel
   '启用本地阈值告警': 'Enable local threshold alerts',
   'CPU 负载率 (%)': 'CPU load (%)',
   '内存使用率 (%)': 'Memory usage (%)',
   '根分区使用率 (%)': 'Root partition usage (%)',
   '保存告警设置': 'Save alert settings',
+  '监控页轮询时检查当前服务器。超过阈值只在进入告警状态时通知一次。':
+    'Checks the current server on each monitor poll. Threshold breaches notify once on entering the alert state.',
   // SnippetPanel
   '保存常用只读检查、发布和维护命令，发送前请确认目标会话。': 'Save common read-only checks, release and maintenance commands. Confirm the target session before sending.',
   '新建片段': 'New snippet',
@@ -598,6 +625,26 @@ const en: Record<string, string> = {
   '没有匹配的审计记录。': 'No matching audit entries.',
   '加载更多（已显示 ': 'Load more (',
   ' 条）': ' shown)',
+  // 审计动作名：由 ACTION_LABELS 的值经 t() 间接引用
+  '编辑文件': 'Edit file',
+  '创建目录': 'Create directory',
+  '创建主机': 'Create host',
+  '导出会话日志': 'Export session log',
+  '导出配置': 'Export configuration',
+  '导出主机': 'Export hosts',
+  '导入主机': 'Import hosts',
+  '读取目录': 'List directory',
+  '断开连接': 'Disconnect',
+  '发送片段': 'Send snippet',
+  '更新主机': 'Update host',
+  '还原配置': 'Restore configuration',
+  '会话重命名': 'Rename session',
+  '会话状态': 'Session status',
+  '批量上传': 'Batch upload',
+  '删除 known_hosts 条目': 'Delete known_hosts entry',
+  '升级保险箱加密': 'Upgrade vault encryption',
+  '锁定保险箱': 'Lock vault',
+  '修改保险箱主密码': 'Change vault master password',
   // BackupPanel
   '配置备份': 'Config backup',
   '导出主机、命令片段、主题和监控告警设置。密码与私钥口令永远不会写入备份文件。': 'Export hosts, snippets, theme and alert settings. Passwords and key passphrases are never written to the backup.',
@@ -605,7 +652,6 @@ const en: Record<string, string> = {
   '还原备份': 'Restore backup',
   '配置还原完成，主题设置已持久化。': 'Backup restored; theme settings persisted.',
   '还原失败：': 'Restore failed: ',
-  '还原失败，请选择有效的 CatShell 备份文件。': 'Restore failed. Choose a valid CatShell backup file.',
   '备份文件无效': 'Invalid backup file',
   // KnownHostsPanel
   '已信任主机指纹': 'Trusted host fingerprints',
@@ -676,7 +722,33 @@ const en: Record<string, string> = {
   '关闭会话': 'Close session',
   '仍在连接中，关闭标签会立即断开该连接。':
     ' is still connected. Closing the tab will disconnect it immediately.',
-  '断开并关闭': 'Disconnect and close'
+  '断开并关闭': 'Disconnect and close',
+  // 业务错误码文案（键由 src/i18n/errors.ts 的 ERROR_MESSAGE_KEYS 定义）
+  '该会话缺少可复用的连接参数，请从主机页重新连接':
+    'This session has no reusable connection parameters. Reconnect from the Hosts page.',
+  '会话不存在': 'Session not found',
+  '名称不能为空': 'Name cannot be empty',
+  '片段名称和命令不能为空': 'Snippet name and command cannot be empty',
+  '主机地址、用户名或端口无效': 'Invalid host address, username, or port',
+  '单次导入不能超过 {max} 条主机配置': 'Cannot import more than {max} host profiles at once',
+  '请先设置保险箱主密码': 'Set the vault master password first',
+  '主密码错误或保险箱数据已损坏': 'Incorrect master password, or the vault data is corrupted',
+  '原主密码不正确': 'The current master password is incorrect',
+  '请先解锁凭据保险箱': 'Unlock the credential vault first',
+  '主密码至少需要 {min} 个字符': 'The master password must be at least {min} characters',
+  '保险箱数据格式无效': 'Invalid vault data format',
+  '格式不支持': 'Unsupported format',
+  '内容不完整': 'Incomplete content',
+  '告警设置无效': 'Invalid alert settings',
+  '已取消': 'Cancelled',
+  '请选择有效的 CatShell 备份文件。': 'Choose a valid CatShell backup file.',
+  '请选择有效的 CatShell 主机配置文件。': 'Choose a valid CatShell host profile file.',
+  '加载已信任主机指纹失败': 'Failed to load trusted host fingerprints',
+  '切换指纹存储位置失败': 'Failed to switch the fingerprint storage location',
+  '删除主机指纹失败': 'Failed to delete the host fingerprint',
+  // 其它兜底文案
+  '跳板机配置无效': 'Invalid jump host configuration',
+  '系统等宽字体': 'System monospace'
 }
 
 const dictionaries: Record<Language, Record<string, string>> = {
@@ -684,13 +756,16 @@ const dictionaries: Record<Language, Record<string, string>> = {
   'en-US': en
 }
 
+/** 翻译函数签名；`src/i18n/errors.ts` 等工具模块需要接收它作为参数。 */
+export type Translator = (key: string) => string
+
 export function t(key: string): string {
   const language = useSettings.getState().language
   return dictionaries[language]?.[key] ?? zh[key] ?? key
 }
 
 /** 响应语言设置的 t()，供组件内使用；订阅语言状态，切换语言时触发重渲染。 */
-export function useT(): (key: string) => string {
+export function useT(): Translator {
   useSettings((s) => s.language)
   return t
 }
