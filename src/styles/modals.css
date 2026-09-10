@@ -38,6 +38,10 @@
   animation: modal-in 0.22s var(--ease-out);
 }
 
+.vault-unlock-modal {
+  width: min(440px, calc(100vw - 32px));
+}
+
 /* 寮圭獥鍐呯殑杈撳叆涓庢寜閽敼鐢ㄥ崐閫忔槑琛ㄩ潰鑹诧紝閬垮厤鐧藉簳鐧藉瓧/鐧藉簳鐧介挳 */
 .modal .glass-input,
 .modal .seg-btn:not(.active),

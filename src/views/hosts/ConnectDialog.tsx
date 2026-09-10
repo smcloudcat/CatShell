@@ -7,6 +7,7 @@ import { HostProfile, HOST_ICON_OPTIONS, normalizeHostIcon, HostProxyProfile } f
 import { HostIconName } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
+import { requestVaultUnlock } from '../../store/ui'
 import { useT } from '../../i18n'
 
 interface Props {
@@ -122,7 +123,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
   useEffect(() => {
     if (!visible) return
     const next = formFromProfile(profile)
-    if (profile && vaultUnlocked) {
+    if (profile && useVault.getState().unlocked) {
       const credential = getCredential(profile.id)
       if (credential) {
         next.password = credential.password ?? ''
@@ -135,7 +136,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       }
     }
     setForm(next)
-  }, [getCredential, profile, vaultUnlocked, visible])
+  }, [getCredential, profile, visible])
 
   if (!visible) return null
 
@@ -159,7 +160,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     }
   }
 
-  const buildProxy = ():
+  const buildProxy = (password = form.proxyPassword, passphrase = form.proxyPassphrase):
     | { ok: true; proxy: ConnectRequest['proxy'] }
     | { ok: false; error: string } => {
     if (!form.proxyEnabled) return { ok: true, proxy: null }
@@ -181,9 +182,9 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         port: proxyPort,
         username: proxyUsername,
         authMethod: form.proxyAuthMethod,
-        password: form.proxyAuthMethod === 'password' && form.proxyPassword ? form.proxyPassword : null,
+        password: form.proxyAuthMethod === 'password' && password ? password : null,
         keyPath: form.proxyAuthMethod === 'key' ? form.proxyKeyPath.trim() : null,
-        passphrase: form.proxyAuthMethod === 'key' && form.proxyPassphrase ? form.proxyPassphrase : null
+        passphrase: form.proxyAuthMethod === 'key' && passphrase ? passphrase : null
       }
     }
   }
@@ -203,6 +204,28 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
 
   const submit = async () => {
     setError(null)
+    let password = form.password
+    let passphrase = form.passphrase
+    let proxyPassword = form.proxyPassword
+    let proxyPassphrase = form.proxyPassphrase
+    const shouldLoadSavedCredentials = Boolean(
+      profile &&
+      vaultConfigured &&
+      !useVault.getState().unlocked &&
+      ((form.authMethod === 'password' && !password) ||
+        form.authMethod === 'key' ||
+        (form.proxyEnabled && (form.proxyAuthMethod === 'password' || form.proxyAuthMethod === 'key')))
+    )
+    if (shouldLoadSavedCredentials) {
+      if (!(await requestVaultUnlock())) return
+      const credential = getCredential(profile!.id)
+      const proxyCredential = getCredential(`proxy:${profile!.id}`)
+      password ||= credential?.password ?? ''
+      passphrase ||= credential?.passphrase ?? ''
+      proxyPassword ||= proxyCredential?.password ?? ''
+      proxyPassphrase ||= proxyCredential?.passphrase ?? ''
+      setForm((current) => ({ ...current, password, passphrase, proxyPassword, proxyPassphrase }))
+    }
     const host = form.host.trim()
     const port = Number(form.port)
     if (!host) {
@@ -217,7 +240,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setError(t('端口必须是 1 到 65535 之间的整数'))
       return
     }
-    if (form.authMethod === 'password' && !form.password) {
+    if (form.authMethod === 'password' && !password) {
       setError(t('请输入登录密码'))
       return
     }
@@ -225,7 +248,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       setError(t('请选择私钥文件'))
       return
     }
-    const proxy = buildProxy()
+    const proxy = buildProxy(proxyPassword, proxyPassphrase)
     if (!proxy.ok) {
       setError(proxy.error)
       return
@@ -236,13 +259,16 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       port: Number.isFinite(port) && port > 0 ? port : 22,
       username: form.username.trim(),
       authMethod: form.authMethod,
-      password: form.authMethod === 'password' || form.authMethod === 'keyboard-interactive' ? form.password : null,
+      password: form.authMethod === 'password' || form.authMethod === 'keyboard-interactive' ? password : null,
       keyPath: form.authMethod === 'key' ? form.keyPath.trim() : null,
-      passphrase: form.authMethod === 'key' && form.passphrase ? form.passphrase : null,
+      passphrase: form.authMethod === 'key' && passphrase ? passphrase : null,
       otpSecret: form.authMethod === 'keyboard-interactive' ? form.otpSecret.trim() : null,
       keepalive: Number(form.keepalive) || 30,
       autoReconnect: form.autoReconnect,
       proxy: proxy.proxy
+    }
+    if (vaultConfigured && !useVault.getState().unlocked && (request.password || request.passphrase || proxy.proxy?.password || proxy.proxy?.passphrase)) {
+      if (!(await requestVaultUnlock())) return
     }
     const hostId = profile?.id ?? crypto.randomUUID()
     setBusy(true)
@@ -277,13 +303,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           createdAt: profile?.createdAt ?? now,
           updatedAt: now
         })
-       if (vaultUnlocked && (request.password || request.passphrase)) {
+        if (useVault.getState().unlocked && (request.password || request.passphrase)) {
           await saveCredential(hostId, {
             password: request.password ?? undefined,
             passphrase: request.passphrase ?? undefined
           })
         }
-        if (vaultUnlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
+        if (useVault.getState().unlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
           await saveCredential(`proxy:${hostId}`, {
             password: proxy.proxy.password ?? undefined,
             passphrase: proxy.proxy.passphrase ?? undefined
@@ -328,6 +354,9 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
 
     const now = Date.now()
     const hostId = profile?.id ?? crypto.randomUUID()
+    if (vaultConfigured && !useVault.getState().unlocked && (form.password || form.passphrase || proxy.proxy?.password || proxy.proxy?.passphrase)) {
+      if (!(await requestVaultUnlock())) return
+    }
     setBusy(true)
     try {
       await upsertHost({
@@ -357,13 +386,13 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         createdAt: profile?.createdAt ?? now,
         updatedAt: now
         })
-      if (vaultUnlocked && (form.password || form.passphrase)) {
+      if (useVault.getState().unlocked && (form.password || form.passphrase)) {
         await saveCredential(hostId, {
           password: form.password || undefined,
           passphrase: form.passphrase || undefined
         })
       }
-      if (vaultUnlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
+      if (useVault.getState().unlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
         await saveCredential(`proxy:${hostId}`, {
           password: proxy.proxy.password ?? undefined,
           passphrase: proxy.proxy.passphrase ?? undefined

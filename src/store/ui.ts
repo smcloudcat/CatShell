@@ -8,6 +8,10 @@ export interface ConfirmOptions {
   danger?: boolean
 }
 
+export interface VaultUnlockRequest {
+  resolve: (unlocked: boolean) => void
+}
+
 interface ConfirmRequest extends ConfirmOptions {
   resolve: (accepted: boolean) => void
 }
@@ -22,9 +26,12 @@ export interface ToastItem {
 
 interface UiState {
   confirmRequest: ConfirmRequest | null
+  vaultUnlockRequest: VaultUnlockRequest | null
   toasts: ToastItem[]
   confirm: (options: ConfirmOptions) => Promise<boolean>
   resolveConfirm: (accepted: boolean) => void
+  requestVaultUnlock: () => Promise<boolean>
+  resolveVaultUnlock: (unlocked: boolean) => void
   toast: (message: string, kind?: ToastKind) => void
   dismissToast: (id: number) => void
 }
@@ -40,6 +47,7 @@ const TOAST_DURATION_MS: Record<ToastKind, number> = {
 
 export const useUiFeedback = create<UiState>((set, get) => ({
   confirmRequest: null,
+  vaultUnlockRequest: null,
   toasts: [],
   confirm: (options) =>
     new Promise<boolean>((resolve) => {
@@ -53,6 +61,18 @@ export const useUiFeedback = create<UiState>((set, get) => ({
     set({ confirmRequest: null })
     request.resolve(accepted)
   },
+  requestVaultUnlock: () =>
+    new Promise<boolean>((resolve) => {
+      const pending = get().vaultUnlockRequest
+      if (pending) pending.resolve(false)
+      set({ vaultUnlockRequest: { resolve } })
+    }),
+  resolveVaultUnlock: (unlocked) => {
+    const request = get().vaultUnlockRequest
+    if (!request) return
+    set({ vaultUnlockRequest: null })
+    request.resolve(unlocked)
+  },
   toast: (message, kind = 'info') => {
     const id = nextId
     nextId += 1
@@ -65,6 +85,10 @@ export const useUiFeedback = create<UiState>((set, get) => ({
 
 export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
   return useUiFeedback.getState().confirm(options)
+}
+
+export function requestVaultUnlock(): Promise<boolean> {
+  return useUiFeedback.getState().requestVaultUnlock()
 }
 
 export function showToast(message: string, kind: ToastKind = 'info') {

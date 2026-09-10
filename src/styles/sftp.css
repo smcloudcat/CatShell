@@ -113,6 +113,9 @@
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--soft-bg);
+  flex: 0 0 auto;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .sftp-transfer {
@@ -156,6 +159,8 @@
 }
 
 .sftp-entries {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -229,4 +234,3 @@
   color: var(--ok);
   font-size: 12px;
 }
-

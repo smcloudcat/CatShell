@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Icon, IconName } from '../components/Icon'
 import { useUiFeedback, ToastKind } from '../store/ui'
+import { useVault } from '../store/vault'
 import { useT } from '../i18n'
 
 const TOAST_ICONS: Record<ToastKind, IconName> = {
@@ -13,11 +15,74 @@ export function FeedbackHost() {
   const t = useT()
   const confirmRequest = useUiFeedback((state) => state.confirmRequest)
   const resolveConfirm = useUiFeedback((state) => state.resolveConfirm)
+  const vaultUnlockRequest = useUiFeedback((state) => state.vaultUnlockRequest)
+  const resolveVaultUnlock = useUiFeedback((state) => state.resolveVaultUnlock)
   const toasts = useUiFeedback((state) => state.toasts)
   const dismissToast = useUiFeedback((state) => state.dismissToast)
+  const unlock = useVault((state) => state.unlock)
+  const [vaultPassword, setVaultPassword] = useState('')
+  const [vaultError, setVaultError] = useState<string | null>(null)
+  const [vaultBusy, setVaultBusy] = useState(false)
+
+  useEffect(() => {
+    if (!vaultUnlockRequest) return
+    setVaultPassword('')
+    setVaultError(null)
+    setVaultBusy(false)
+  }, [vaultUnlockRequest])
+
+  const submitVaultUnlock = async () => {
+    if (!vaultPassword) {
+      setVaultError(t('请输入主密码'))
+      return
+    }
+    setVaultBusy(true)
+    setVaultError(null)
+    try {
+      await unlock(vaultPassword)
+      setVaultPassword('')
+      resolveVaultUnlock(true)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : t('保险箱操作失败'))
+    } finally {
+      setVaultBusy(false)
+    }
+  }
 
   return (
     <>
+      {vaultUnlockRequest && (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <div className="modal glass vault-unlock-modal">
+            <header className="modal-header">
+              <div className="modal-title"><Icon name="key" size={17} />{t('解锁凭据保险箱')}</div>
+            </header>
+            <div className="modal-body">
+              <p className="section-tip">{t('连接需要读取保险箱中的凭据，请输入主密码继续。')}</p>
+              <label className="field">
+                <span className="field-label">{t('主密码')}</span>
+                <input
+                  className="glass-input"
+                  type="password"
+                  value={vaultPassword}
+                  onChange={(event) => setVaultPassword(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !vaultBusy) void submitVaultUnlock() }}
+                  autoFocus
+                  autoComplete="current-password"
+                />
+              </label>
+              {vaultError && <div className="form-error">{vaultError}</div>}
+            </div>
+            <footer className="modal-footer">
+              <button className="glass-btn" onClick={() => resolveVaultUnlock(false)} disabled={vaultBusy}>{t('取消')}</button>
+              <button className="glass-btn primary" onClick={() => void submitVaultUnlock()} disabled={vaultBusy || !vaultPassword}>
+                <Icon name="key" size={15} />
+                {vaultBusy ? t('处理中…') : t('解锁保险箱')}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
       {confirmRequest && (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <div className="modal glass confirm-modal">

@@ -126,6 +126,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  flex-wrap: wrap;
+  width: 100%;
   flex-shrink: 0;
 }
 
@@ -145,18 +147,32 @@
   padding: 0;
 }
 
+.session-tool .glass-btn {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.session-tool .snippet-select {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+
 .session-workspace {
   display: flex;
   flex-direction: row;
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
   gap: 8px;
   padding: 0;
 }
 
 .session-monitor-panel {
   flex: 0 0 320px;
+  width: 320px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -190,8 +206,9 @@
 }
 
 .session-sftp-panel {
-  flex: 0 0 224px;
-  min-height: 160px;
+  flex: 0 0 280px;
+  height: 280px;
+  min-height: 180px;
   margin: 0 10px 10px;
   overflow: hidden;
   border: 1px solid var(--hairline);
@@ -202,6 +219,7 @@
 .session-sftp-panel .sftp-panel-body {
   height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .session-sftp-panel .sftp-toolbar {
@@ -214,7 +232,7 @@
   flex-direction: column;
   gap: 12px;
   height: 100%;
-  min-height: 420px;
+  min-height: 0;
   padding: 12px;
   box-sizing: border-box;
 }
@@ -240,6 +258,12 @@
   }
   .session-monitor-panel {
     flex: 0 0 280px;
+    flex-basis: 280px !important;
+    width: auto !important;
+  }
+
+  .session-resize-horizontal {
+    display: none;
   }
 }
 
@@ -538,6 +562,47 @@
   align-items: stretch;
 }
 
+.session-resize-handle {
+  position: relative;
+  flex: 0 0 8px;
+  z-index: 4;
+  touch-action: none;
+}
+
+.session-resize-handle::after {
+  content: '';
+  position: absolute;
+  background: var(--hairline);
+  transition: background 0.15s ease;
+}
+
+.session-resize-handle:hover::after,
+.session-resizing .session-resize-handle::after {
+  background: var(--accent);
+}
+
+.session-resize-horizontal {
+  cursor: col-resize;
+}
+
+.session-resize-horizontal::after {
+  inset: 0 3px;
+}
+
+.session-resize-vertical {
+  height: 8px;
+  cursor: row-resize;
+}
+
+.session-resize-vertical::after {
+  inset: 3px 0;
+}
+
+.session-resizing,
+.session-resizing * {
+  user-select: none !important;
+}
+
 .session-sftp-rail {
   height: 40px;
 }
@@ -679,4 +744,3 @@
   gap: 7px;
   flex-shrink: 0;
 }
-

@@ -65,6 +65,10 @@ const en: Record<string, string> = {
   '下载': 'Download',
   '锁定': 'Lock',
   '确认发送': 'Send now',
+  '解锁凭据保险箱': 'Unlock credential vault',
+  '连接需要读取保险箱中的凭据，请输入主密码继续。': 'This connection needs credentials from the vault. Enter the master password to continue.',
+  '拖动调整监控面板宽度': 'Drag to resize monitor width',
+  '拖动调整 SFTP 面板高度': 'Drag to resize SFTP height',
   // 侧栏
   '展开侧栏': 'Expand sidebar',
   '收起侧栏': 'Collapse sidebar',

@@ -46,6 +46,55 @@ export function SessionsView() {
   const [snippetValues, setSnippetValues] = useState<Record<string, string>>({})
   const [snippetError, setSnippetError] = useState<string | null>(null)
   const [, setDurationTick] = useState(0)
+  const [monitorWidth, setMonitorWidth] = useState(() => readSessionSize('session-monitor-width', 320))
+  const [sftpHeight, setSftpHeight] = useState(() => readSessionSize('session-sftp-height', 280))
+  const monitorWidthRef = useRef(monitorWidth)
+  const sftpHeightRef = useRef(sftpHeight)
+  const resizeRef = useRef<{ type: 'monitor' | 'sftp'; startX: number; startY: number; startSize: number } | null>(null)
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const resize = resizeRef.current
+      if (!resize) return
+      if (resize.type === 'monitor') {
+        const next = clamp(resize.startSize - (event.clientX - resize.startX), 240, 560)
+        monitorWidthRef.current = next
+        setMonitorWidth(next)
+      } else {
+        const next = clamp(resize.startSize - (event.clientY - resize.startY), 180, Math.max(220, window.innerHeight * 0.62))
+        sftpHeightRef.current = next
+        setSftpHeight(next)
+      }
+    }
+    const stop = () => {
+      const resize = resizeRef.current
+      if (!resize) return
+      const size = resize.type === 'monitor' ? monitorWidthRef.current : sftpHeightRef.current
+      localStorage.setItem(resize.type === 'monitor' ? 'session-monitor-width' : 'session-sftp-height', String(size))
+      resizeRef.current = null
+      document.body.classList.remove('session-resizing')
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+      document.body.classList.remove('session-resizing')
+    }
+  }, [])
+
+  const startResize = (type: 'monitor' | 'sftp', event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    resizeRef.current = {
+      type,
+      startX: event.clientX,
+      startY: event.clientY,
+      startSize: type === 'monitor' ? monitorWidth : sftpHeight
+    }
+    document.body.classList.add('session-resizing')
+  }
 
   useEffect(() => {
     void init()
@@ -372,15 +421,18 @@ export function SessionsView() {
                 <span>{t('监控')}</span>
               </button>
             </aside>
-          ) : (
-            <aside className="session-monitor-panel">
-              <SessionMonitorPanel
-                key={activeId}
-                sessionId={activeId}
-                onCollapse={() => void setSessionPanelCollapsed('monitor', true)}
-              />
-            </aside>
-          )
+           ) : (
+             <>
+               <div className="session-resize-handle session-resize-horizontal" onPointerDown={(event) => startResize('monitor', event)} title={t('拖动调整监控面板宽度')} />
+               <aside className="session-monitor-panel" style={{ flexBasis: `${monitorWidth}px`, width: `${monitorWidth}px` }}>
+                 <SessionMonitorPanel
+                   key={activeId}
+                   sessionId={activeId}
+                   onCollapse={() => void setSessionPanelCollapsed('monitor', true)}
+                 />
+               </aside>
+             </>
+           )
         )}
       </div>
       {activeId !== null && (
@@ -396,13 +448,16 @@ export function SessionsView() {
               </button>
             </div>
         ) : (
-          <div className="session-sftp-panel">
-            <SessionSftpPanel
-              key={activeId}
-              sessionId={activeId}
-              onCollapse={() => void setSessionPanelCollapsed('sftp', true)}
-            />
-          </div>
+          <>
+            <div className="session-resize-handle session-resize-vertical" onPointerDown={(event) => startResize('sftp', event)} title={t('拖动调整 SFTP 面板高度')} />
+            <div className="session-sftp-panel" style={{ flexBasis: `${sftpHeight}px`, height: `${sftpHeight}px` }}>
+              <SessionSftpPanel
+                key={activeId}
+                sessionId={activeId}
+                onCollapse={() => void setSessionPanelCollapsed('sftp', true)}
+              />
+            </div>
+          </>
         )
       )}
       {bulkOpen && (
@@ -474,4 +529,13 @@ function cleanTerminalLog(value: string): string {
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\r(?!\n)/g, '\n')
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function readSessionSize(key: string, fallback: number): number {
+  const value = Number(localStorage.getItem(key))
+  return Number.isFinite(value) && value > 0 ? value : fallback
 }

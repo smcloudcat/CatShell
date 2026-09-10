@@ -9,7 +9,7 @@ import { ConnectRequest, SshConfigEntry } from '../types/session'
 import { sshConfigParse } from '../api/ssh'
 import { recordAudit } from '../store/audit'
 import { ImportPreview, previewHostImport } from '../store/hosts'
-import { confirmDialog, showToast } from '../store/ui'
+import { confirmDialog, requestVaultUnlock, showToast } from '../store/ui'
 import { useT } from '../i18n'
 
 interface Props {
@@ -33,7 +33,7 @@ export function HostsView({ onOpenSessions }: Props) {
   const importProfiles = useHosts((s) => s.importProfiles)
   const [pendingImport, setPendingImport] = useState<ImportPreview | null>(null)
   const openSession = useSessions((s) => s.open)
-  const vaultUnlocked = useVault((s) => s.unlocked)
+  const vaultConfigured = useVault((s) => s.configured)
   const getCredential = useVault((s) => s.getCredential)
 
   useEffect(() => {
@@ -94,8 +94,15 @@ export function HostsView({ onOpenSessions }: Props) {
   }
 
   const reconnect = async (host: HostProfile) => {
-    const credential = vaultUnlocked ? getCredential(host.id) : null
-    const proxyCredential = host.proxy.enabled && vaultUnlocked ? getCredential(`proxy:${host.id}`) : null
+    const needsVault =
+      host.authMethod === 'password' ||
+      host.authMethod === 'key' ||
+      (host.proxy.enabled && (host.proxy.authMethod === 'password' || host.proxy.authMethod === 'key'))
+    if (vaultConfigured && !useVault.getState().unlocked && needsVault) {
+      if (!(await requestVaultUnlock())) return
+    }
+    const credential = useVault.getState().unlocked ? getCredential(host.id) : null
+    const proxyCredential = host.proxy.enabled && useVault.getState().unlocked ? getCredential(`proxy:${host.id}`) : null
     const hasAuth =
       host.authMethod === 'key'
         ? Boolean(host.keyPath)
