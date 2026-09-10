@@ -1,5 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
+import type { Event } from '@tauri-apps/api/event'
 import {
   ConnectRequest,
   HostKeyPrompt,
@@ -21,8 +22,30 @@ import {
   SftpEntry,
   SshConfigEntry
 } from '../types/session'
+import { EVENT_SCHEMA_VERSION, shouldDropEvent } from '../utils/eventSchema'
+import { logger } from '../utils/logger'
 
 const BASE64_CHUNK = 0x8000
+
+/**
+ * 事件版本守卫（P2-13）。
+ *
+ * Rust 侧每条事件都带 `v`（schema 版本）。版本不匹配时丢弃该事件并留下诊断日志——
+ * 否则字段改名后前端只会静默读到 `undefined`，界面上表现为某个值莫名变空，无从排查。
+ */
+function versioned<T extends { v?: number }>(name: string, handle: (payload: T) => void) {
+  return (event: Event<T>): void => {
+    const payload = event.payload
+    if (shouldDropEvent(payload)) {
+      logger.warn(`忽略协议版本不匹配的事件 ${name}`, {
+        received: payload.v,
+        expected: EVENT_SCHEMA_VERSION
+      })
+      return
+    }
+    handle(payload)
+  }
+}
 
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -252,7 +275,10 @@ export async function sftpDiskTransferList(sessionId: number): Promise<SftpDiskT
 export async function subscribeSftpDiskProgress(
   handler: (progress: SftpDiskProgress) => void
 ): Promise<() => void> {
-  const unlisten = await listen<SftpDiskProgress>('sftp-disk-progress', (e) => handler(e.payload))
+  const unlisten = await listen<SftpDiskProgress>(
+    'sftp-disk-progress',
+    versioned<SftpDiskProgress>('sftp-disk-progress', handler)
+  )
   // UnlistenFn 是同步签名，取消订阅无需 await
   return () => {
     try {
@@ -293,20 +319,46 @@ export interface SshEventHandlers {
 
 export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => void> {
   const unlisteners: UnlistenFn[] = []
-  unlisteners.push(await listen<SessionStatusEvent>('session-status', (e) => handlers.onStatus(e.payload)))
   unlisteners.push(
-    await listen<SessionOutputEvent>('session-output', (e) => {
-      handlers.onOutput(e.payload.id, base64ToBytes(e.payload.data))
-    })
+    await listen<SessionStatusEvent>(
+      'session-status',
+      versioned<SessionStatusEvent>('session-status', handlers.onStatus)
+    )
+  )
+  unlisteners.push(
+    await listen<SessionOutputEvent>(
+      'session-output',
+      versioned<SessionOutputEvent>('session-output', (payload) => {
+        handlers.onOutput(payload.id, base64ToBytes(payload.data))
+      })
+    )
   )
   if (handlers.onHostKeyPrompt) {
-    unlisteners.push(await listen<HostKeyPrompt>('host-key-prompt', (e) => handlers.onHostKeyPrompt?.(e.payload)))
+    const onHostKeyPrompt = handlers.onHostKeyPrompt
+    unlisteners.push(
+      await listen<HostKeyPrompt>(
+        'host-key-prompt',
+        versioned<HostKeyPrompt>('host-key-prompt', (payload) => onHostKeyPrompt(payload))
+      )
+    )
   }
   if (handlers.onHostKeyWarning) {
-    unlisteners.push(await listen<HostKeyWarning>('host-key-warning', (e) => handlers.onHostKeyWarning?.(e.payload)))
+    const onHostKeyWarning = handlers.onHostKeyWarning
+    unlisteners.push(
+      await listen<HostKeyWarning>(
+        'host-key-warning',
+        versioned<HostKeyWarning>('host-key-warning', (payload) => onHostKeyWarning(payload))
+      )
+    )
   }
   if (handlers.onKbiPrompt) {
-    unlisteners.push(await listen<KbiPromptEvent>('kbi-prompt', (e) => handlers.onKbiPrompt?.(e.payload)))
+    const onKbiPrompt = handlers.onKbiPrompt
+    unlisteners.push(
+      await listen<KbiPromptEvent>(
+        'kbi-prompt',
+        versioned<KbiPromptEvent>('kbi-prompt', (payload) => onKbiPrompt(payload))
+      )
+    )
   }
   return () => {
     for (const unlisten of unlisteners) {

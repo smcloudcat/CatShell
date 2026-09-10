@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { ConnectDialog } from './hosts/ConnectDialog'
 import { HostRow } from './hosts/HostRow'
@@ -54,7 +54,12 @@ export function HostsView({ onOpenSessions }: Props) {
   const groups = useMemo(() => groupHosts(filteredHosts, t('未分组')), [filteredHosts, t])
   const hasGroups = useMemo(() => hosts.some((host) => host.group), [hosts])
 
-  const toggleTag = (tag: string) => setActiveTag((current) => (current === tag ? null : tag))
+  // 回调一律用 useCallback 固定引用：传给 HostRow 的 props 稳定，行组件的 memo 才有效，
+  // 否则每次列表刷新都会整表重渲染（P2-19）。
+  const toggleTag = useCallback(
+    (tag: string) => setActiveTag((current) => (current === tag ? null : tag)),
+    []
+  )
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((current) => {
@@ -70,16 +75,16 @@ export function HostsView({ onOpenSessions }: Props) {
     setDialogOpen(true)
   }
 
-  const openEdit = (host: HostProfile) => {
+  const openEdit = useCallback((host: HostProfile) => {
     setEditingHost(host)
     setDialogOpen(true)
-  }
+  }, [])
 
   /**
    * 从列表一键连接。
    * 缺少可用凭据（或保险箱锁定）时不硬连，直接把连接对话框打开让用户补齐。
    */
-  const reconnect = async (host: HostProfile) => {
+  const reconnect = useCallback(async (host: HostProfile) => {
     const needsVault =
       host.authMethod === 'password' ||
       host.authMethod === 'key' ||
@@ -134,12 +139,19 @@ export function HostsView({ onOpenSessions }: Props) {
       recordAudit('session.connect', label, 'failure', '快速连接失败，打开连接对话框')
       openEdit(host)
     }
-  }
+  }, [getCredential, openEdit, openSession, onOpenSessions, vaultConfigured])
 
-  const handleDelete = async (host: HostProfile) => {
-    await removeHost(host.id)
-    recordAudit('host.delete', `${host.name || host.host}`, 'success', '删除主机配置')
-  }
+  const handleDelete = useCallback(
+    async (host: HostProfile) => {
+      await removeHost(host.id)
+      recordAudit('host.delete', `${host.name || host.host}`, 'success', '删除主机配置')
+    },
+    [removeHost]
+  )
+
+  // 行组件的回调签名要求返回 void；这里包一层显式 `void`，既满足 lint，也保持引用稳定。
+  const connectRow = useCallback((host: HostProfile) => { void reconnect(host) }, [reconnect])
+  const deleteRow = useCallback((host: HostProfile) => { void handleDelete(host) }, [handleDelete])
 
   const exportHosts = () => {
     // 导出前显式剔除敏感字段，且只信任白名单以外的字段被丢弃这件事由类型保证。
@@ -205,16 +217,19 @@ export function HostsView({ onOpenSessions }: Props) {
     }
   }
 
-  const renderHostRow = (host: HostProfile) => (
-    <HostRow
-      key={host.id}
-      host={host}
-      activeTag={activeTag}
-      onToggleTag={toggleTag}
-      onConnect={(item) => void reconnect(item)}
-      onEdit={openEdit}
-      onDelete={(item) => void handleDelete(item)}
-    />
+  const renderHostRow = useCallback(
+    (host: HostProfile) => (
+      <HostRow
+        key={host.id}
+        host={host}
+        activeTag={activeTag}
+        onToggleTag={toggleTag}
+        onConnect={connectRow}
+        onEdit={openEdit}
+        onDelete={deleteRow}
+      />
+    ),
+    [activeTag, connectRow, deleteRow, openEdit, toggleTag]
   )
 
   return (

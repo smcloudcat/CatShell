@@ -8,12 +8,9 @@
 
   <body>
     <div id="root"></div>
-    <script>
-      // 首帧前设置外观模式，避免浅色系统用户看到深色令牌闪烁
-      document.documentElement.dataset.mode = window.matchMedia('(prefers-color-scheme: light)').matches
-        ? 'light'
-        : 'dark'
-    </script>
+    <!-- 首帧前设置外观模式，避免浅色系统用户看到深色令牌闪烁。
+         必须是同源外部脚本：生产 CSP 的 script-src 已收紧为 'self'（见 tauri.conf.json）。 -->
+    <script src="/theme-boot.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   sftpChmod,
   sftpDiskDownloadPick,
@@ -24,6 +24,7 @@ import { useT } from '../../i18n'
 import { errorText } from '../../i18n/errors'
 import { SftpToolbar } from './SftpToolbar'
 import { SftpEntryList } from './SftpEntryList'
+import type { SftpEntryActions } from './SftpEntryList'
 import { SftpDropZone } from './SftpDropZone'
 import { SftpEditorModal } from './SftpEditorModal'
 import { SftpChmodDialog } from './SftpChmodDialog'
@@ -478,6 +479,34 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }
 
+  /**
+   * 行操作集合：交给 ref 转发到每次渲染新建的实现，使传给 `SftpEntryList` 的对象
+   * 保持恒定引用。否则行组件的 `memo` 每次渲染都会被新引用击穿（P2-19）。
+   * 必须在提前 return 之前调用，遵守 Hooks 规则。
+   */
+  const entryActionsRef = useRef<SftpEntryActions | null>(null)
+  const entryActions = useMemo<SftpEntryActions>(
+    () => ({
+      open: (entry) => entryActionsRef.current?.open(entry),
+      download: (entry) => entryActionsRef.current?.download(entry),
+      edit: (entry) => entryActionsRef.current?.edit(entry),
+      rename: (entry) => entryActionsRef.current?.rename(entry),
+      move: (entry) => entryActionsRef.current?.move(entry),
+      chmod: (entry) => entryActionsRef.current?.chmod(entry),
+      remove: (entry) => entryActionsRef.current?.remove(entry)
+    }),
+    []
+  )
+  entryActionsRef.current = {
+    open: (entry) => void loadDirectory(entry.path),
+    download: (entry) => void handleDownload(entry),
+    edit: (entry) => void openEditor(entry),
+    rename: (entry) => setNameDialog({ mode: 'rename', target: entry, value: entry.name }),
+    move: (entry) => setNameDialog({ mode: 'move', target: entry, value: path }),
+    chmod: (entry) => setChmodDialog({ target: entry, value: formatMode(entry.permissions ?? 0o644) }),
+    remove: (entry) => void handleDelete(entry)
+  }
+
   if (!connected) {
     return (
       <div className="sftp-empty">
@@ -507,20 +536,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       />
       {error && <div className="form-error">{error}</div>}
       {notice && <div className="form-notice">{notice}</div>}
-      <SftpEntryList
-        entries={shown}
-        totalCount={entries.length}
-        busy={busy}
-        actions={{
-          open: (entry) => void loadDirectory(entry.path),
-          download: (entry) => void handleDownload(entry),
-          edit: (entry) => void openEditor(entry),
-          rename: (entry) => setNameDialog({ mode: 'rename', target: entry, value: entry.name }),
-          move: (entry) => setNameDialog({ mode: 'move', target: entry, value: path }),
-          chmod: (entry) => setChmodDialog({ target: entry, value: formatMode(entry.permissions ?? 0o644) }),
-          remove: (entry) => void handleDelete(entry)
-        }}
-      />
+      <SftpEntryList entries={shown} totalCount={entries.length} busy={busy} actions={entryActions} />
       {editor && (
         <SftpEditorModal
           entry={editor.entry}

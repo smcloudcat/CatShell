@@ -305,25 +305,25 @@ if (key === 'w') {
 
 | 编号 | 问题 | 证据 | 级别 |
 | --- | --- | --- | --- |
-| P2-1 | 锁风格混用：`known_hosts_path` 用 `std::sync::RwLock`，其余用 `tokio::sync::Mutex`，且在异步上下文中 `expect` | `mod.rs:70,92,931,939` | P2 |
-| P2-2 | 长持 `session.conn` 锁跨 await 执行远程命令（监控最长 8s、ping 10s），串行化同会话其他操作 | `monitor.rs:180-196`、`sftp.rs:454-469` | P2 |
-| P2-3 | `panic = "abort"`（`Cargo.toml:45`）下多处 `.expect()` 会终止整个应用；spawn 的任务无 `catch_unwind` 隔离 | `mod.rs:931,939`、`sftp.rs:153,167,172`、`mod.rs:1022`、`sftp.rs:754,910` | P2 |
-| P2-4 | `known_hosts` 切到 openssh 模式会直接改写用户真实 `~/.ssh/known_hosts`，副作用超出预期且无 UI 提示 | `lib.rs:534-536` | P2 |
-| P2-5 | 磁盘传输与会话生命周期脱节：`disconnect`/`remove` 不取消进行中的 `SftpDiskTransfer` | `mod.rs:1061-1078` | P2 |
-| P2-6 | 转发每连接的子任务未跟踪，`stop_forward` 只 abort listener，在飞连接不受影响 | `forward.rs:139-164,341-342` | P2 |
-| P2-7 | 无 `Drop` 兜底清理，依赖 Arc 归零隐式关闭 | `ActiveSession` / `SftpTransfer` / `SftpDiskTransfer` | P2 |
-| P2-8 | 断点续传未校验远端文件是否变更，仅比对 part 长度，远端文件被替换会续到错误偏移 | `sftp.rs:855-863,702-708` | P2 |
-| P2-9 | 并发同名上传共用 `{target}.catshell-part`，互相覆盖，rename 可能把半成品当成品 | `sftp.rs:865-878` | P2 |
-| P2-10 | CSP 含 `script-src 'unsafe-inline'`，对处理凭证的桌面应用放宽了 XSS 防护 | `tauri.conf.json:24` | P2 |
-| P2-11 | 错误类型未统一，全项目用 `Result<_, String>`，无 `thiserror`，难以分类与国际化 | 全局 | P2 |
+| P2-1 | 锁风格混用：`known_hosts_path` 用 `std::sync::RwLock`，其余用 `tokio::sync::Mutex`，且在异步上下文中 `expect`。**已修复**：改用 `tokio::sync::RwLock`，读写接口转 async，`tokio` 的守卫不返回 `Result`，`expect` 路径从类型上消失 | `mod.rs:70,92,931,939` | P2 |
+| P2-2 | 长持 `session.conn` 锁跨 await 执行远程命令（监控最长 8s、ping 10s），串行化同会话其他操作。**已修复**：新增 `open_session_channel`，连接锁只覆盖通道协商；通道建立后即可脱离 `Handle` 独立收发（`exec` 取 `&self`、`split` 消费自身），监控/SFTP 子系统/进程列表/网络诊断全部改为锁外执行 | `monitor.rs:180-196`、`sftp.rs:454-469` | P2 |
+| P2-3 | `panic = "abort"`（`Cargo.toml:45`）下多处 `.expect()` 会终止整个应用；spawn 的任务无 `catch_unwind` 隔离。**已修复**：`SftpDiskTransfer::error_guard` 改 `unwrap_or_else(\|p\| p.into_inner())` 容忍锁中毒并补守护测试。仅保留 `lib.rs` 启动处的 `expect`（进程引导点，此前无任何可回收状态，失败也不存在"降级继续运行"的语义） | `mod.rs:931,939`、`sftp.rs:153,167,172`、`mod.rs:1022`、`sftp.rs:754,910` | P2 |
+| P2-4 | `known_hosts` 切到 openssh 模式会直接改写用户真实 `~/.ssh/known_hosts`，副作用超出预期且无 UI 提示。**已修复**：切回 OpenSSH 模式前弹确认框，明确说明该文件与 `ssh` / `scp` / `git` 共享；取消时同步回弹下拉框 | `lib.rs:534-536` | P2 |
+| P2-5 | 磁盘传输与会话生命周期脱节：`disconnect`/`remove` 不取消进行中的 `SftpDiskTransfer`。**已修复**：新增 `cancel_transfers_for_session`，两类传输（流式 + 磁盘）一并置取消位 | `mod.rs:1061-1078` | P2 |
+| P2-6 | 转发每连接的子任务未跟踪，`stop_forward` 只 abort listener，在飞连接不受影响。**已修复**：新增 `forward_children` 登记子任务句柄，停止转发与 listener 自行退出时都一并 abort | `forward.rs:139-164,341-342` | P2 |
+| P2-7 | 无 `Drop` 兜底清理，依赖 Arc 归零隐式关闭。**已修复**：`ActiveSession` 实现 `Drop`，最后一处释放时兜底置位 `manual_closed`（收束仍在跑的重连循环）并留诊断日志 | `ActiveSession` / `SftpTransfer` / `SftpDiskTransfer` | P2 |
+| P2-8 | 断点续传未校验远端文件是否变更，仅比对 part 长度，远端文件被替换会续到错误偏移。**已修复**：新增 `ResumeStamp`（长度 + mtime）随半成品落盘，续传前必须完全一致，否则从 0 重传；`resume_offset` 纯函数 4 例单测覆盖指纹不符/缺失/长度越界 | `sftp.rs:855-863,702-708` | P2 |
+| P2-9 | 并发同名上传共用 `{target}.catshell-part`，互相覆盖，rename 可能把半成品当成品。**已修复**：基准半成品路径已被占用时改用带传输号的一次性路径并禁用续传（`part_path_for`），保证「单条可续传、并发互不干扰」 | `sftp.rs:865-878` | P2 |
+| P2-10 | CSP 含 `script-src 'unsafe-inline'`，对处理凭证的桌面应用放宽了 XSS 防护。**已修复**：生产 `csp` 收紧为 `script-src 'self'`——`index.html` 的内联主题脚本移为同源文件 `public/theme-boot.js`（构建产物已确认无内联脚本）；`style-src` 保留 `'unsafe-inline'`（xterm 动态注入样式 + React 内联 style），开发期另设 `devCsp` 保留 Vite / React Refresh 所需的内联脚本与 ws 连接 | `tauri.conf.json:24` | P2 |
+| P2-11 | 错误类型未统一，全项目用 `Result<_, String>`，无 `thiserror`，难以分类与国际化。**未处理**：Tauri command 边界必须返回 `Serialize` 错误，全量换 `thiserror` 需同时改约百处签名与前端契约，收益与风险不匹配，留待单独排期 | 全局 | P2 |
 | P2-12 | 前端无统一 Logger，6 处散落 `console.*`。**已修复**：新增 `src/utils/logger.ts` 统一出口（`[CatShell]` 前缀，`debug` 仅开发构建输出），6 处全部收编并补 3 例守护测试 | `src/utils/logger.ts` | P2 |
-| P2-13 | 事件 payload 无版本号 / 无 schema 校验，前端字段改名即静默失效 | `mod.rs:159,170,278,407` | P2 |
+| P2-13 | 事件 payload 无版本号 / 无 schema 校验，前端字段改名即静默失效。**已修复**：所有事件 payload 加 `v`（Rust `EVENT_SCHEMA_VERSION`）；前端 `versioned()` 守卫丢弃版本不符的事件并告警；vitest 直接读取 Rust 源码交叉校验两侧常量 | `mod.rs:159,170,278,407` | P2 |
 | P2-14 | `vite.config.ts` 无任何 `build` 配置：无分包、无 sourcemap、无显式 target | `vite.config.ts:1-32` | P2 |
 | P2-15 | `tsconfig.json` 缺 `noUncheckedIndexedAccess`、`noImplicitOverride`、`exactOptionalPropertyTypes`。**已修复**：三项全部开启，共修正 40 处——数组索引与 `Record` 取值加显式守卫、class 组件补 `override`、可选属性在类型上显式并入 `| undefined` | `tsconfig.json:18-21` | P2 |
 | P2-16 | `build` 脚本为 `tsc && vite build`（非 `tsc -b`），`tsconfig.node.json` 游离于类型检查外。**已修复**：改为 `tsc -b && vite build`，`vite.config.ts` 首次纳入检查（顺带发现一条过期的 `@ts-expect-error`），`tsconfig.node.json` 的构建产物落在 `node_modules/.tmp` | `package.json:8`、`tsconfig.json:23` | P2 |
 | P2-17 | ESLint 仅用 `recommended`，未启用 `recommendedTypeChecked` / `strict`。**已修复**：启用 `recommendedTypeChecked` + `parserOptions.projectService`，17 处全部修正 | `eslint.config.js:7-34` | P2 |
 | P2-18 | Cargo 插件版本策略混用：部分 `"2"`、部分精确小版本，与前端版本可能漂移。**已修复**：Tauri 生态统一声明 `"2"`，底层行为依赖（`tokio` / `bytes` / `russh`）保持精确小版本并注释说明理由 | `Cargo.toml:21-47` | P2 |
-| P2-19 | 长列表未虚拟化：主机列表、SFTP 大目录全量渲染，行组件未 `memo` | `HostsView.tsx:345,351`、`SessionSftpPanel.tsx:679-699` | P2 |
+| P2-19 | 长列表未虚拟化：主机列表、SFTP 大目录全量渲染，行组件未 `memo`。**部分修复**：SFTP 大目录（> 120 行）改为按可视区间渲染（`computeVirtualWindow` 纯函数 9 例单测 + `useVirtualWindow`），行组件 `memo` 化并把 `actions` 用 ref 转发成恒定引用，`SessionSftpPanel` 的 `entryActions` 因此可稳定；主机列表行高可变（标签会换行），窗口化需真机测量，本轮只做 `memo` + 回调 `useCallback` 稳定化 | `HostsView.tsx:345,351`、`SessionSftpPanel.tsx:679-699` | P2 |
 | P2-20 | 定时器依赖不稳定值被反复重建。**已修复**：改为依赖稳定的布尔量，仅在「有无已连接会话」翻转时重建；此前依赖每次刷新都换引用的 `order` / `sessions`，30 秒定时器被反复重建、实际从不触发 | `SessionsView.tsx:104-108` | P2 |
 | P2-21 | 错误展示入口不统一：`.form-error` 内联与 Toast 混用。**部分缓解**：错误文案的取值入口已统一为 `AppError` 错误码 + `errorText()`，内联/Toast 的展示形式仍按场景选择 | 多个 view | P2 |
 | P2-22 | `ErrorBoundary` 的兜底文案 "界面发生错误" / "重新加载" 未走 `t()`。**已修复**：改用非 hook 的 `t()` 并补 `en` 条目。原条目并提的 `ConnectDialog` "SSH Agent" 字面量已随组件拆分消失 | `ErrorBoundary.tsx:38,42` | P2 |
@@ -519,7 +519,28 @@ if (key === 'w') {
 
 **同期修复的构建故障**：`npm run tauri dev` 编译 `catshell_lib` 时 rustc 1.98.1 ICE（`rustc_metadata/rmeta/encoder.rs:2474 -- no entry found for key`）。根因是「多 crate-type（`staticlib` + `cdylib` + `rlib`）叠加 `-C incremental`」，同源的另一种表现是 `cargo test` 报 `os error 5` 拒绝访问；与业务代码无关。处置：清掉 12G 陈旧增量缓存（内含改名前的 `ssh_ops_lib-*` 化石条目），并新增 `src-tauri/.cargo/config.toml` 设 `[build] incremental = false` 根治。
 
-**仍待处理**：P2-1~P2-9 / P2-11 / P2-13（Rust 正确性与生命周期，11 项）、P2-19（长列表虚拟化）、P2-10（CSP 收紧）。后两项需在真机窗口内验证滚动行为与是否白屏，不宜在无 GUI 环境下盲改。
+**仍待处理**：P2-11（错误类型统一，见该行说明）。P2-19 的主机列表窗口化需在真机窗口内按可变行高实测；P2-10 的 CSP 收紧已在构建产物层确认 `index.html` 不再含内联脚本，但仍建议在真机 `npm run tauri dev` / 安装包各跑一次确认无白屏。
+
+### 6.6 技术债推进（同日，P2 收尾批）
+
+第三批清掉 Rust 正确性与生命周期 11 项中的 10 项，外加 P2-13 / P2-19 / P2-10：
+
+| 项 | 处理 |
+| --- | --- |
+| `P2-1` | `known_hosts_path` 换 `tokio::sync::RwLock`，`set_/effective_known_hosts_path` 转 async（4 处调用点同步改造） |
+| `P2-2` | 新增 `open_session_channel`：锁只覆盖通道协商。已确认 russh 0.63 的 `client::Handle` 不可克隆且 `channel_open_session` 需要 `&mut self`，但 `Channel::exec` 取 `&self`、`split(self)` 消费自身——通道一旦建立即可脱离 `Handle` 收发，这正是把锁范围收缩到协商一步的依据 |
+| `P2-3` | 锁中毒不再 panic，补「中毒后仍能记录错误」的守护测试 |
+| `P2-4` | 切回 OpenSSH 存储前弹确认；受控 `select` 取消后需一次重渲染才回弹，用 `bumpSelectTick` 显式触发 |
+| `P2-5` `P2-6` `P2-7` | 生命周期收口：会话取消名下全部传输、转发登记并 abort 在飞子任务、`ActiveSession` 加 `Drop` 兜底 |
+| `P2-8` | 续传指纹（长度 + mtime）落本地 `{part}.meta`；下载跟随远端源文件、上传跟随本地源文件。**方向修正**：上传的半成品在远端而源文件在本地，指纹必须落在本地源文件旁，否则会写到远端路径同名的工作目录相对路径 |
+| `P2-9` | 半成品路径占用检测 + 一次性后缀；`transfer_id` 因此提前到打开文件之前分配 |
+| `P2-13` | 事件 `v` 字段 + 前端守卫；Rust 与前端两份常量由 vitest 直接读 Rust 源码交叉校验，防止各改一份 |
+| `P2-19` | SFTP 大目录窗口化 + 行 `memo` + `actions` 引用稳定化。SFTP 行高固定 52px（`min-height: 42px` + 上下 5px padding，且名称 `nowrap`），窗口化时显式给 `height + box-sizing: border-box` 以精确预测总高 |
+| `P2-10` | 内联主题脚本外移为 `public/theme-boot.js`（经典脚本，执行时机不变），生产 `script-src 'self'`；新增 `devCsp` 供 Vite HMR 与 React Refresh |
+
+**顺带修掉一条既有 lint 失败**：`SessionMonitorPanel` 把 Promise 返回函数直接交给 `window.setInterval`，触发 `@typescript-eslint/no-misused-promises`。已用 HEAD 版本内容经 `eslint --stdin` 复现确认是既有问题（非本轮引入），同一轮修掉，`npm run lint` 现为全绿。
+
+**验证**：`cargo fmt --check` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **42 例**（32 单测 + 10 集成）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check`（101 文件）✓ · 前端 **171 例**（13 文件）✓ · `build` ✓。
 
 ---
 
@@ -590,7 +611,10 @@ npm run tauri dev
 3. 会话中执行 `cat /var/log/syslog` 或大文件输出，观察界面是否卡顿（验证 P1-3）
 4. 开 20+ 会话后观察内存占用（验证 P1-9）
 5. 会话页按 `Ctrl+W`，确认是否直接断连（验证 P1-8）
-6. 断点续传过程中替换远端文件，观察是否续到错误偏移（验证 P2-8）
+6. 断点续传过程中替换远端文件，观察是否续到错误偏移（验证 P2-8：现应在指纹不符时从 0 重传）
+7. 进入含数千项的 SFTP 目录，滚动到底部确认行高与滚动条长度正常（验证 P2-19 窗口化）
+8. 生产构建（`npm run tauri build` 或 `tauri dev --release` 的 dist 产物）启动后确认不白屏，且首帧主题仍按系统外观生效（验证 P2-10）
+9. 停止一条已建立连接的本地端口转发，确认在飞连接被立即断开（验证 P2-6）
 
 ---
 

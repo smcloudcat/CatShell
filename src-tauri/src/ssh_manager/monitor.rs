@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use russh::{client, ChannelMsg, ChannelReadHalf};
+use russh::{ChannelMsg, ChannelReadHalf};
 
 use super::types::{NetworkDiagnostic, PartitionMetric, ProcessInfo, ServerMetrics};
-use super::SshHandler;
 use super::SshManager;
 
 pub(super) const MONITOR_COMMAND: &str = r#"printf '__SSHOPS_METRICS_V1__\n'; printf 'os='; (uname -s 2>/dev/null || echo unknown); printf 'hostname='; (hostname 2>/dev/null || echo unknown); printf 'cpu_cores='; (getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0); printf 'load1='; (awk '{print $1}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load averages?: ' '{print $2}' | awk '{print $1}' || echo 0); printf 'cpu_percent='; (st1=$(awk 'NR==1 {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}' /proc/stat 2>/dev/null); sleep 0.4; st2=$(awk 'NR==1 {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6}' /proc/stat 2>/dev/null); awk -v a="$st1" -v b="$st2" 'BEGIN{split(a,x," ");split(b,y," ");t=y[1]-x[1];i=y[2]-x[2];if(t<=0){printf "0"}else{p=(t-i)/t*100;printf "%.1f",(p<0?0:(p>100?100:p))}}' 2>/dev/null || echo 0); printf '\n'; printf 'mem_total_kb='; (awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'mem_available_kb='; (awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || awk '/^MemFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0); printf 'disk_total_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $2}' || echo 0); printf 'disk_used_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $3}' || echo 0); printf 'disk_available_kb='; (df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0); printf 'partitions='; (df -Pk 2>/dev/null | awk 'NR>1 && $1 ~ /^\// {print $6"|"$2"|"$3"|"$4}' | awk '!seen[$1]++' | head -n 8 | tr '\n' ';' || echo); printf '\n'; printf 'network_rx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); rx += $2} END {print rx+0}' /proc/net/dev 2>/dev/null || echo 0); printf 'network_tx_bytes='; (awk 'NR>2 && $1 !~ /^lo:/ {gsub(":", "", $1); tx += $10} END {print tx+0}' /proc/net/dev 2>/dev/null || echo 0); printf '__SSHOPS_METRICS_END__\n'"#;
@@ -116,14 +115,14 @@ async fn read_exec_output(mut read: ChannelReadHalf) -> Result<Vec<u8>, String> 
     Ok(output)
 }
 
+/// 在已建立的会话通道上执行命令并收集输出。
+///
+/// 通道由 `SshManager::open_session_channel` 在**释放连接锁之后**返回（P2-2），
+/// 因此这里的等待不会阻塞同会话的终端输入或其他操作。
 pub(super) async fn exec_command(
-    connection: &mut client::Handle<SshHandler>,
+    channel: russh::Channel<russh::client::Msg>,
     command: &str,
 ) -> Result<Vec<u8>, String> {
-    let channel = connection
-        .channel_open_session()
-        .await
-        .map_err(|error| format!("打开远程命令通道失败: {error}"))?;
     channel
         .exec(false, command)
         .await
@@ -176,15 +175,7 @@ fn now_unix_seconds() -> u64 {
 
 impl SshManager {
     pub async fn monitor(&self, id: u64) -> Result<ServerMetrics, String> {
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
-        let channel = connection
-            .channel_open_session()
-            .await
-            .map_err(|error| format!("打开监控通道失败: {error}"))?;
+        let channel = self.open_session_channel(id).await?;
         channel
             .exec(false, MONITOR_COMMAND)
             .await
@@ -198,21 +189,13 @@ impl SshManager {
 
     /// RTT 探测：执行空命令并测量整个 SSH 往返耗时（毫秒）。
     pub async fn ping(&self, id: u64) -> Result<u64, String> {
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
         let started = std::time::Instant::now();
-        let mut channel = connection
-            .channel_open_session()
-            .await
-            .map_err(|error| format!("打开探测通道失败: {error}"))?;
+        let mut channel = self.open_session_channel(id).await?;
         channel
             .exec(true, ":")
             .await
             .map_err(|error| format!("执行探测命令失败: {error}"))?;
-        // 整体限时，避免无响应服务器让通道排水循环永久持有连接锁
+        // 整体限时，避免无响应服务器让通道排水循环空转；连接锁已释放，不影响其他操作。
         let drain = async {
             while let Some(message) = channel.wait().await {
                 match message {
@@ -228,13 +211,9 @@ impl SshManager {
     }
 
     pub async fn list_processes(&self, id: u64) -> Result<Vec<ProcessInfo>, String> {
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
+        let channel = self.open_session_channel(id).await?;
         Ok(parse_processes(
-            &exec_command(connection, PROCESS_COMMAND).await?,
+            &exec_command(channel, PROCESS_COMMAND).await?,
         ))
     }
 
@@ -247,13 +226,9 @@ impl SshManager {
             "KILL" => "KILL",
             _ => return Err("不支持的终止信号，仅允许 TERM 或 KILL".to_string()),
         };
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
+        let channel = self.open_session_channel(id).await?;
         let command = format!("kill -{signal} {pid}");
-        exec_command(connection, &command).await.map(|_| ())
+        exec_command(channel, &command).await.map(|_| ())
     }
 
     pub async fn network_diagnostic(
@@ -272,12 +247,8 @@ impl SshManager {
         } else {
             format!("(tracepath -m 12 -w 2 {target} || traceroute -m 12 -w 2 {target} || ping -c 1 -W 2 {target}) 2>&1")
         };
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
-        let output = exec_command(connection, &command).await?;
+        let channel = self.open_session_channel(id).await?;
+        let output = exec_command(channel, &command).await?;
         Ok(NetworkDiagnostic {
             session_id: id,
             kind,

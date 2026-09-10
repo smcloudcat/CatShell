@@ -675,6 +675,9 @@ const en: Record<string, string> = {
   '切换为 OpenSSH known_hosts 存储': 'Switched to OpenSSH known_hosts storage',
   '已切换为应用数据目录独立存储，之后的首次连接将重新确认指纹': 'Switched to app data storage; next first-connections prompt for fingerprints again',
   '切换为应用数据目录独立存储': 'Switched to app data directory storage',
+  '切换到 OpenSSH 兼容存储': 'Switch to OpenSSH-compatible storage',
+  '该模式直接读写你真实的 ~/.ssh/known_hosts，与 ssh / scp / git 等 OpenSSH 命令行共享同一份文件：这里新增或删除指纹，会同时改变命令行的主机信任状态。确认切换？': 'This mode reads and writes your real ~/.ssh/known_hosts, sharing the same file with the ssh / scp / git command line: fingerprints added or removed here also change host trust for those tools. Switch anyway?',
+  '确认切换': 'Switch',
   // Appearance / ThemeParams
   '外观模式': 'Appearance mode',
   '跟随系统': 'System',

@@ -63,14 +63,41 @@ pub struct ActiveSession {
     pub manual_closed: AtomicBool,
 }
 
+/// P2-7：`ActiveSession` 的生命周期依赖 Arc 归零，一旦外部仍持有 `Arc`（前端回调、
+/// 挂起的任务）而管理表已移除该会话，重连循环仍有被重新拉起的可能。这里在最后一次
+/// 释放时兜底置位手动关闭标记，让任何仍在运行的重连循环立即收束，并留一条诊断日志。
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        self.manual_closed.store(true, Ordering::SeqCst);
+        tracing::debug!(
+            session_id = self.session_id,
+            target = %self.creds.redacted_summary(),
+            "会话对象释放"
+        );
+    }
+}
+
+/// 一条本地/动态转发下已建立连接的子任务集合（P2-6）。
+///
+/// 只 abort listener 只会停止接受新连接，已在转发中的隧道会一直存活到对端关闭，
+/// 所以单独登记子任务句柄，停止转发时一并 abort。
+pub type ForwardChildren = Arc<Mutex<Vec<JoinHandle<()>>>>;
+
 pub struct SshManager {
     pub sessions: Mutex<HashMap<u64, Arc<ActiveSession>>>,
     pub host_key_confirmations: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// 等待前端应答的交互式（keyboard-interactive）认证提示，按会话 id 索引。
     pub kbi_prompts: KbiPromptMap,
-    known_hosts_path: std::sync::RwLock<Option<PathBuf>>,
+    /// 运行时生效的 known_hosts 路径（None = OpenSSH 默认）。
+    ///
+    /// 与其他共享状态统一使用 `tokio::sync::RwLock`（P2-1）：本结构的方法都在异步上下文中
+    /// 调用，混用 `std::sync::RwLock` 一旦发生锁中毒，`expect` 会在 `panic = "abort"` 下
+    /// 直接终止整个应用。`tokio::sync::RwLock` 的守卫不返回 `Result`，从类型上消除了该路径。
+    known_hosts_path: tokio::sync::RwLock<Option<PathBuf>>,
     next_id: AtomicU64,
     pub forwards: Mutex<HashMap<u64, JoinHandle<()>>>,
+    /// 每条本地/动态转发下已建立的连接子任务（P2-6），停止转发时一并 abort。
+    pub forward_children: Mutex<HashMap<u64, ForwardChildren>>,
     pub forward_info: Mutex<HashMap<u64, PortForwardInfo>>,
     remote_forwards: Mutex<HashMap<u64, forward::RemoteForwardInfo>>,
     remote_routes: Arc<Mutex<HashMap<(u64, u16), forward::RemoteForwardRoute>>>,
@@ -90,9 +117,10 @@ impl Default for SshManager {
             sessions: Mutex::new(HashMap::new()),
             host_key_confirmations: Arc::new(Mutex::new(HashMap::new())),
             kbi_prompts: Arc::new(Mutex::new(HashMap::new())),
-            known_hosts_path: std::sync::RwLock::new(None),
+            known_hosts_path: tokio::sync::RwLock::new(None),
             next_id: AtomicU64::new(1),
             forwards: Mutex::new(HashMap::new()),
+            forward_children: Mutex::new(HashMap::new()),
             forward_info: Mutex::new(HashMap::new()),
             remote_forwards: Mutex::new(HashMap::new()),
             remote_routes: Arc::new(Mutex::new(HashMap::new())),
@@ -107,9 +135,16 @@ impl Default for SshManager {
     }
 }
 
+/// 事件 payload 的 schema 版本号（P2-13）。
+///
+/// 前端按版本号校验 payload；字段改名/语义变化时递增，前端即可显式拒绝而不是
+/// 静默读到 `undefined`。Rust 与前端各持一份常量，由测试锁定两者一致。
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusPayload {
+    v: u32,
     id: u64,
     status: String,
     reason: Option<String>,
@@ -119,6 +154,7 @@ struct StatusPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OutputPayload {
+    v: u32,
     id: u64,
     data: String,
 }
@@ -126,6 +162,7 @@ struct OutputPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostKeyPayload {
+    v: u32,
     token: String,
     host: String,
     port: u16,
@@ -135,6 +172,7 @@ struct HostKeyPayload {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KbiPromptPayload {
+    v: u32,
     session_id: u64,
     name: String,
     instructions: String,
@@ -150,6 +188,7 @@ struct KbiPromptField {
 
 fn emit_status(sink: &dyn EventSink, id: u64, status: &str, reason: Option<String>, attempt: u32) {
     let payload = StatusPayload {
+        v: EVENT_SCHEMA_VERSION,
         id,
         status: status.to_string(),
         reason,
@@ -163,6 +202,7 @@ fn emit_status(sink: &dyn EventSink, id: u64, status: &str, reason: Option<Strin
 
 fn emit_output(sink: &dyn EventSink, id: u64, data: Vec<u8>) {
     let payload = OutputPayload {
+        v: EVENT_SCHEMA_VERSION,
         id,
         data: BASE64_STANDARD.encode(&data),
     };
@@ -265,7 +305,7 @@ impl client::Handler for SshHandler {
                 );
                 self.sink.emit(
                     "host-key-warning",
-                    serde_json::json!({ "host": self.host, "port": self.port, "fingerprint": fingerprint, "reason": reason }),
+                    serde_json::json!({ "v": EVENT_SCHEMA_VERSION, "host": self.host, "port": self.port, "fingerprint": fingerprint, "reason": reason }),
                 );
                 return Ok(false);
             }
@@ -278,6 +318,7 @@ impl client::Handler for SshHandler {
         self.sink.emit(
             "host-key-prompt",
             serde_json::to_value(HostKeyPayload {
+                v: EVENT_SCHEMA_VERSION,
                 token: token.clone(),
                 host: self.host.clone(),
                 port: self.port,
@@ -401,6 +442,7 @@ async fn request_kbi_answers(
     sink.emit(
         "kbi-prompt",
         serde_json::to_value(KbiPromptPayload {
+            v: EVENT_SCHEMA_VERSION,
             session_id,
             name: name.to_string(),
             instructions: instructions.to_string(),
@@ -871,7 +913,7 @@ async fn run_session(
             sink.clone(),
             manager.host_key_confirmations.clone(),
             manager.kbi_prompts.clone(),
-            manager.effective_known_hosts_path(),
+            manager.effective_known_hosts_path().await,
             manager.remote_routes.clone(),
         )
         .await
@@ -978,24 +1020,20 @@ async fn run_session(
 impl SshManager {
     pub fn with_known_hosts_path(path: PathBuf) -> Self {
         Self {
-            known_hosts_path: std::sync::RwLock::new(Some(path)),
+            known_hosts_path: tokio::sync::RwLock::new(Some(path)),
             ..Self::default()
         }
     }
 
     /// 运行时切换 known_hosts 存储位置（None = OpenSSH 兼容的 ~/.ssh/known_hosts）。
     /// 只影响之后建立的新连接，已建立会话不受影响。
-    pub fn set_known_hosts_path(&self, path: Option<&std::path::Path>) {
-        *self.known_hosts_path.write().expect("known_hosts_path 锁") =
-            path.map(std::path::Path::to_path_buf);
+    pub async fn set_known_hosts_path(&self, path: Option<&std::path::Path>) {
+        *self.known_hosts_path.write().await = path.map(std::path::Path::to_path_buf);
     }
 
     /// 当前生效的 known_hosts 路径（None 表示使用默认 ~/.ssh/known_hosts）。
-    pub fn effective_known_hosts_path(&self) -> Option<PathBuf> {
-        self.known_hosts_path
-            .read()
-            .expect("known_hosts_path 锁")
-            .clone()
+    pub async fn effective_known_hosts_path(&self) -> Option<PathBuf> {
+        self.known_hosts_path.read().await.clone()
     }
 
     pub(super) async fn session_ref(&self, id: u64) -> Result<Arc<ActiveSession>, String> {
@@ -1005,6 +1043,58 @@ impl SshManager {
             .get(&id)
             .cloned()
             .ok_or_else(|| "会话不存在".to_string())
+    }
+
+    /// 打开一个会话通道，**只在通道协商期间**持有连接锁（P2-2）。
+    ///
+    /// `russh` 的 `client::Handle` 不可克隆、`channel_open_session` 需要 `&mut self`，
+    /// 因此此前 monitor/ping/进程列表/SFTP 等实现把连接锁一直握到命令执行完毕
+    /// （监控 8s、探测 10s），同会话的终端输入与其他操作在此期间全部被串行化。
+    /// 通道一旦建立即可脱离 `Handle` 独立收发（`exec` 取 `&self`，`split` 消费自身），
+    /// 所以把锁的持有范围收缩到协商这一步。
+    pub(super) async fn open_session_channel(
+        &self,
+        id: u64,
+    ) -> Result<russh::Channel<russh::client::Msg>, String> {
+        let session = self.session_ref(id).await?;
+        let mut connection = session.conn.lock().await;
+        let connection = connection
+            .as_mut()
+            .ok_or_else(|| "会话尚未连接".to_string())?;
+        connection
+            .channel_open_session()
+            .await
+            .map_err(|error| format!("打开会话通道失败: {error}"))
+    }
+
+    /// 会话结束时收束其名下所有传输（P2-5）。
+    ///
+    /// `disconnect` / `remove` 此前只停转发与终端通道，磁盘级传输与前端一次性传输仍会
+    /// 继续读写（磁盘传输还持有独立 SFTP 通道），表现为「会话已关闭但传输还在动」。
+    async fn cancel_transfers_for_session(&self, session_id: u64) {
+        let streaming: Vec<Arc<sftp::SftpTransfer>> = {
+            let transfers = self.sftp_transfers.lock().await;
+            transfers
+                .values()
+                .filter(|transfer| transfer.session_id == session_id)
+                .cloned()
+                .collect()
+        };
+        for transfer in streaming {
+            transfer.cancelled.store(true, Ordering::SeqCst);
+        }
+
+        let disk: Vec<Arc<sftp::SftpDiskTransfer>> = {
+            let transfers = self.sftp_disk_transfers.lock().await;
+            transfers
+                .values()
+                .filter(|transfer| transfer.session_id == session_id)
+                .cloned()
+                .collect()
+        };
+        for transfer in disk {
+            transfer.cancelled.store(true, Ordering::SeqCst);
+        }
     }
 
     pub async fn confirm_host_key(&self, token: String, accepted: bool) -> Result<(), String> {
@@ -1120,6 +1210,7 @@ impl SshManager {
 
     pub async fn disconnect(&self, sink: Arc<dyn EventSink>, id: u64) {
         self.stop_forwards_for_session(id).await;
+        self.cancel_transfers_for_session(id).await;
         if let Ok(session) = self.session_ref(id).await {
             session.manual_closed.store(true, Ordering::SeqCst);
             if let Some(half) = session.write.lock().await.as_mut() {
@@ -1131,6 +1222,7 @@ impl SshManager {
 
     pub async fn remove(&self, id: u64) {
         self.stop_forwards_for_session(id).await;
+        self.cancel_transfers_for_session(id).await;
         if let Ok(session) = self.session_ref(id).await {
             session.manual_closed.store(true, Ordering::SeqCst);
         }

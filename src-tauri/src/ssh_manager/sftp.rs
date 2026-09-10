@@ -100,6 +100,7 @@ pub struct SftpDiskTransferInfo {
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SftpDiskProgress {
+    v: u32,
     transfer_id: u64,
     session_id: u64,
     direction: String,
@@ -138,6 +139,15 @@ fn now_millis() -> u64 {
 }
 
 impl SftpDiskTransfer {
+    /// 错误槽的锁可能因其他线程 panic 而中毒。`panic = "abort"` 构建下，
+    /// 把「读取一个错误字符串」升级成 `expect` 崩溃会直接终止整个应用，
+    /// 这里退化为取回中毒锁的内部数据（P2-3）。
+    fn error_guard(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn info(&self) -> SftpDiskTransferInfo {
         SftpDiskTransferInfo {
             transfer_id: self.id,
@@ -150,12 +160,13 @@ impl SftpDiskTransfer {
             total: self.total,
             done: self.done.load(Ordering::SeqCst),
             cancelled: self.cancelled.load(Ordering::SeqCst),
-            error: self.error.lock().expect("磁盘传输错误锁").clone(),
+            error: self.error_guard().clone(),
         }
     }
 
     fn progress(&self) -> SftpDiskProgress {
         SftpDiskProgress {
+            v: super::EVENT_SCHEMA_VERSION,
             transfer_id: self.id,
             session_id: self.session_id,
             direction: self.direction.to_string(),
@@ -164,7 +175,7 @@ impl SftpDiskTransfer {
             total: self.total,
             done: self.done.load(Ordering::SeqCst),
             cancelled: self.cancelled.load(Ordering::SeqCst),
-            error: self.error.lock().expect("磁盘传输错误锁").clone(),
+            error: self.error_guard().clone(),
         }
     }
 
@@ -178,7 +189,7 @@ impl SftpDiskTransfer {
             error = %message,
             "磁盘 SFTP 传输失败"
         );
-        *self.error.lock().expect("磁盘传输错误锁") = Some(message);
+        *self.error_guard() = Some(message);
         self.done.store(true, Ordering::SeqCst);
     }
 }
@@ -211,6 +222,85 @@ pub fn validate_local_path(path: &str) -> Result<String, String> {
 
 fn part_file_path(local_path: &str) -> String {
     format!("{local_path}{DISK_PART_SUFFIX}")
+}
+
+/// 断点续传的「源文件指纹」：长度 + 修改时间。
+///
+/// 只比对半成品长度是不安全的（P2-8）：源文件被替换后长度可能恰好不短于半成品，
+/// 续传就会把新内容接到旧偏移之后，产出静默损坏的文件。因此首次写入半成品时把源文件
+/// 指纹落盘，续传前必须完全一致，否则从 0 重传。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ResumeStamp {
+    total: u64,
+    mtime: Option<i64>,
+}
+
+const RESUME_STAMP_SUFFIX: &str = ".meta";
+
+/// 指纹文件路径。`stamp_base` 必须是**本地**路径：
+/// 下载时为本地半成品路径，上传时为「本地源文件 + 半成品后缀」——
+/// 上传的半成品在远端，但源文件在本地，指纹必须跟着源文件落盘。
+fn resume_stamp_path(stamp_base: &str) -> String {
+    format!("{stamp_base}{RESUME_STAMP_SUFFIX}")
+}
+
+fn read_resume_stamp(stamp_base: &str) -> Option<ResumeStamp> {
+    let raw = std::fs::read_to_string(resume_stamp_path(stamp_base)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_resume_stamp(stamp_base: &str, stamp: &ResumeStamp) {
+    if let Ok(raw) = serde_json::to_string(stamp) {
+        let _ = std::fs::write(resume_stamp_path(stamp_base), raw);
+    }
+}
+
+fn clear_resume_stamp(stamp_base: &str) {
+    let _ = std::fs::remove_file(resume_stamp_path(stamp_base));
+}
+
+/// 本地源文件的指纹（上传方向用）。
+fn local_file_stamp(path: &str, total: u64) -> ResumeStamp {
+    ResumeStamp {
+        total,
+        mtime: std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as i64),
+    }
+}
+
+/// 纯函数：决定本次续传的起始偏移。
+///
+/// 返回 `Some(offset)` 当且仅当半成品非空、短于源文件，且指纹与首次写入时一致；
+/// 指纹缺失（旧版本残留半成品）或不一致时返回 `None`，由调用方从 0 重新开始。
+/// 原则是「宁可重传，不可续错」。
+fn resume_offset(
+    part_len: u64,
+    recorded: Option<&ResumeStamp>,
+    source: &ResumeStamp,
+) -> Option<u64> {
+    if part_len == 0 || part_len >= source.total {
+        return None;
+    }
+    match recorded {
+        Some(recorded) if recorded == source => Some(part_len),
+        _ => None,
+    }
+}
+
+/// 纯函数：为本次传输选择半成品路径（P2-9）。
+///
+/// 并发发起的同名上传/下载若共用 `{target}.catshell-part`，会互相覆盖，
+/// 收尾 rename 时可能把别人写到一半的内容当成成品。当基准路径已被另一条进行中的
+/// 传输占用时，改用带传输号的一次性路径（该路径不支持续传）。
+fn part_path_for(base: &str, transfer_id: u64, occupied: bool) -> String {
+    if occupied {
+        format!("{base}-{transfer_id}")
+    } else {
+        base.to_string()
+    }
 }
 
 /// 传输闲置回收阈值：超过该时长既未拉取分片、也未收到取消的传输会被回收并释放 SFTP 通道。
@@ -498,29 +588,31 @@ impl SshManager {
             .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
     }
 
-    /// 打开独立的 SFTP 子系统通道。连接锁仅在通道建立期间持有，
-    /// 返回后的 SFTP 读写不再阻塞该会话的终端输入。
+    /// 打开独立的 SFTP 子系统通道。连接锁仅在通道协商期间持有（见
+    /// `SshManager::open_session_channel`），子系统握手与后续读写都不再阻塞终端输入。
     pub(super) async fn open_sftp_channel(
         &self,
         id: u64,
     ) -> Result<russh_sftp::client::SftpSession, String> {
-        let session = self.session_ref(id).await?;
-        let mut connection = session.conn.lock().await;
-        let connection = connection
-            .as_mut()
-            .ok_or_else(|| "会话尚未连接".to_string())?;
-        let channel = connection
-            .channel_open_session()
-            .await
-            .map_err(|error| format!("打开 SFTP 通道失败: {error}"))?;
+        let channel = self.open_session_channel(id).await?;
         channel
             .request_subsystem(true, "sftp")
             .await
             .map_err(|error| format!("请求 SFTP 子系统失败: {error}"))?;
-        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+        russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
-            .map_err(|error| format!("初始化 SFTP 失败: {error}"))?;
-        Ok(sftp)
+            .map_err(|error| format!("初始化 SFTP 失败: {error}"))
+    }
+
+    /// 基准半成品路径是否已被另一条进行中的磁盘传输占用（P2-9）。
+    async fn part_path_claimed(&self, part_path: &str) -> bool {
+        self.sftp_disk_transfers
+            .lock()
+            .await
+            .values()
+            .any(|transfer| {
+                transfer.part_path == part_path && !transfer.done.load(Ordering::SeqCst)
+            })
     }
 
     pub(super) async fn transfer_ref(&self, transfer_id: u64) -> Result<Arc<SftpTransfer>, String> {
@@ -789,17 +881,26 @@ impl SshManager {
             .await
             .map_err(|error| format!("读取远程文件信息失败: {error}"))?;
         let total = metadata.size.unwrap_or(0);
-        let part_path = part_file_path(&local_path);
+        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
+        let part_base = part_file_path(&local_path);
+        let occupied = self.part_path_claimed(&part_base).await;
+        let part_path = part_path_for(&part_base, transfer_id, occupied);
 
+        // 源文件指纹：续传前必须与原文件完全一致，否则从 0 重传（P2-8）。
+        let source_stamp = ResumeStamp {
+            total,
+            mtime: metadata.mtime.map(i64::from),
+        };
         let mut start_offset: u64 = 0;
         let mut resumed = false;
-        if resume {
-            if let Ok(part_meta) = std::fs::metadata(&part_path) {
-                let part_len = part_meta.len();
-                if part_len > 0 && part_len < total {
-                    start_offset = part_len;
-                    resumed = true;
-                }
+        if resume && !occupied {
+            let part_len = std::fs::metadata(&part_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            let recorded = read_resume_stamp(&part_path);
+            if let Some(offset) = resume_offset(part_len, recorded.as_ref(), &source_stamp) {
+                start_offset = offset;
+                resumed = true;
             }
         }
 
@@ -820,12 +921,14 @@ impl SshManager {
                 .await
                 .map_err(|error| format!("打开本地半成品文件失败: {error}"))?
         } else {
-            tokio::fs::File::create(&part_path)
+            let file = tokio::fs::File::create(&part_path)
                 .await
-                .map_err(|error| format!("创建本地文件失败: {error}"))?
+                .map_err(|error| format!("创建本地文件失败: {error}"))?;
+            // 半成品与源文件指纹同时落盘，中途中断也能安全续传。
+            write_resume_stamp(&part_path, &source_stamp);
+            file
         };
 
-        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
         let transfer = Arc::new(SftpDiskTransfer {
             id: transfer_id,
             session_id: id,
@@ -889,6 +992,7 @@ impl SshManager {
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
                         }
+                        clear_resume_stamp(&part_path);
                         transfer.done.store(true, Ordering::SeqCst);
                         emit_disk_progress(sink.as_ref(), &transfer, true);
                         break;
@@ -942,18 +1046,30 @@ impl SshManager {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .ok_or_else(|| "本地路径无效".to_string())?;
-        let part_path = format!("{remote_path}{DISK_PART_SUFFIX}");
+        let part_base = format!("{remote_path}{DISK_PART_SUFFIX}");
+        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
+        let occupied = self.part_path_claimed(&part_base).await;
+        let part_path = part_path_for(&part_base, transfer_id, occupied);
+        // 上传方向的指纹跟随本地源文件落盘（半成品在远端）。
+        let stamp_base = format!("{local_path}{DISK_PART_SUFFIX}");
+        let source_stamp = local_file_stamp(&local_path, total);
 
         let sftp = self.open_sftp_channel(id).await?;
         let mut start_offset: u64 = 0;
         let mut resumed = false;
-        if resume {
-            if let Ok(part_meta) = sftp.metadata(&part_path).await {
-                let part_len = part_meta.size.unwrap_or(0);
-                if part_len > 0 && part_len < total {
-                    start_offset = part_len;
-                    resumed = true;
-                }
+        if resume && !occupied {
+            let recorded = read_resume_stamp(&stamp_base);
+            let part_len = match recorded {
+                Some(_) => sftp
+                    .metadata(&part_path)
+                    .await
+                    .map(|meta| meta.size.unwrap_or(0))
+                    .unwrap_or(0),
+                None => 0,
+            };
+            if let Some(offset) = resume_offset(part_len, recorded.as_ref(), &source_stamp) {
+                start_offset = offset;
+                resumed = true;
             }
         }
 
@@ -967,9 +1083,13 @@ impl SshManager {
                 .map_err(|error| format!("远程文件定位断点失败: {error}"))?;
             file
         } else {
-            sftp.create(&part_path)
+            let file = sftp
+                .create(&part_path)
                 .await
-                .map_err(|error| format!("创建远程半成品文件失败: {error}"))?
+                .map_err(|error| format!("创建远程半成品文件失败: {error}"))?;
+            // 半成品与源文件指纹同时就位，中途中断也能安全续传。
+            write_resume_stamp(&stamp_base, &source_stamp);
+            file
         };
         let mut local_file = tokio::fs::File::open(&local_path)
             .await
@@ -981,7 +1101,6 @@ impl SshManager {
                 .map_err(|error| format!("本地文件定位断点失败: {error}"))?;
         }
 
-        let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
         let transfer = Arc::new(SftpDiskTransfer {
             id: transfer_id,
             session_id: id,
@@ -1044,6 +1163,7 @@ impl SshManager {
                             }
                         }
                         let _ = sftp.close().await;
+                        clear_resume_stamp(&stamp_base);
                         transfer.done.store(true, Ordering::SeqCst);
                         emit_disk_progress(sink.as_ref(), &transfer, true);
                         break;
@@ -1193,5 +1313,80 @@ mod tests {
     fn idle_timeout_is_long_enough_to_survive_a_slow_but_alive_transfer() {
         // 阈值必须明显大于单分片超时（60s），否则正常传输会被误回收
         assert!(TRANSFER_IDLE_TIMEOUT >= DISK_CHUNK_TIMEOUT * 5);
+    }
+
+    fn stamp(total: u64, mtime: Option<i64>) -> ResumeStamp {
+        ResumeStamp { total, mtime }
+    }
+
+    #[test]
+    fn resumes_only_when_the_source_fingerprint_matches() {
+        let source = stamp(1000, Some(42));
+        assert_eq!(resume_offset(400, Some(&source), &source), Some(400));
+    }
+
+    #[test]
+    fn refuses_to_resume_after_the_source_file_changed() {
+        let source = stamp(1000, Some(42));
+        let stale = stamp(1000, Some(7));
+        assert_eq!(resume_offset(400, Some(&stale), &source), None);
+        // 长度也变了（源文件被替换）
+        let replaced = stamp(2000, Some(99));
+        assert_eq!(resume_offset(400, Some(&replaced), &source), None);
+    }
+
+    #[test]
+    fn refuses_to_resume_without_a_recorded_fingerprint() {
+        // 旧版本留下的半成品没有指纹文件，必须保守地从 0 重传
+        let source = stamp(1000, Some(42));
+        assert_eq!(resume_offset(400, None, &source), None);
+    }
+
+    #[test]
+    fn refuses_to_resume_on_empty_or_oversized_partial() {
+        let source = stamp(1000, Some(42));
+        assert_eq!(resume_offset(0, Some(&source), &source), None);
+        assert_eq!(resume_offset(1000, Some(&source), &source), None);
+        assert_eq!(resume_offset(9999, Some(&source), &source), None);
+    }
+
+    #[test]
+    fn concurrent_transfers_get_distinct_partial_paths() {
+        let base = "/upload/report.bin.catshell-part";
+        assert_eq!(part_path_for(base, 7, false), base);
+        let unique = part_path_for(base, 7, true);
+        assert_ne!(unique, base);
+        assert!(unique.starts_with(base));
+        // 另一条并发任务拿到的是另一种后缀，二者不会互相覆盖
+        assert_ne!(unique, part_path_for(base, 8, true));
+    }
+
+    #[test]
+    fn poisoned_error_slot_does_not_abort_the_transfer() {
+        let transfer = SftpDiskTransfer {
+            id: 1,
+            session_id: 1,
+            remote_path: "/r".to_string(),
+            local_path: "/l".to_string(),
+            part_path: "/l.catshell-part".to_string(),
+            file_name: "f".to_string(),
+            direction: "download",
+            total: 10,
+            transferred: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            error: StdMutex::new(None),
+            last_emit: AtomicU64::new(0),
+        };
+        // 模拟其他线程在持锁时 panic，导致错误槽中毒
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = transfer.error.lock().unwrap();
+            panic!("poison");
+        }));
+        assert!(transfer.error.is_poisoned());
+        // panic = "abort" 构建下这里若走 expect 会终止整个应用
+        transfer.finish_with_error("boom".to_string());
+        assert!(transfer.done.load(Ordering::SeqCst));
+        assert_eq!(transfer.info().error.as_deref(), Some("boom"));
     }
 }

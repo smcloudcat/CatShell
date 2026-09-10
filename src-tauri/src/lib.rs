@@ -505,7 +505,8 @@ async fn ssh_confirm_host_key(
 async fn known_hosts_list(
     state: State<'_, AppState>,
 ) -> Result<ssh_manager::KnownHostsSnapshot, String> {
-    load_known_hosts_snapshot(state.ssh.effective_known_hosts_path().as_deref())
+    let path = state.ssh.effective_known_hosts_path().await;
+    load_known_hosts_snapshot(path.as_deref())
 }
 
 #[tauri::command]
@@ -517,14 +518,15 @@ async fn known_hosts_remove(
     if pattern.trim().is_empty() || key_type.trim().is_empty() {
         return Err("主机指纹条目无效".to_string());
     }
-    remove_known_hosts_entry(
-        state.ssh.effective_known_hosts_path().as_deref(),
-        pattern.trim(),
-        key_type.trim(),
-    )
+    let path = state.ssh.effective_known_hosts_path().await;
+    remove_known_hosts_entry(path.as_deref(), pattern.trim(), key_type.trim())
 }
 
 /// 切换 known_hosts 存储策略：openssh = ~/.ssh/known_hosts（默认），appdata = 应用数据目录独立存储。
+///
+/// 注意（P2-4）：`openssh` 模式会直接读写用户真实的 `~/.ssh/known_hosts`——这与 OpenSSH
+/// 命令行共享同一份文件，删除条目会影响 `ssh` 命令行的信任状态。前端在切回该模式前必须
+/// 明确告知用户这一副作用。
 #[tauri::command]
 async fn known_hosts_set_mode(
     app: AppHandle,
@@ -533,7 +535,7 @@ async fn known_hosts_set_mode(
 ) -> Result<(), String> {
     match mode.as_str() {
         "openssh" => {
-            state.ssh.set_known_hosts_path(None);
+            state.ssh.set_known_hosts_path(None).await;
         }
         "appdata" => {
             let dir = app
@@ -543,7 +545,8 @@ async fn known_hosts_set_mode(
             std::fs::create_dir_all(&dir).map_err(|err| format!("创建应用数据目录失败: {err}"))?;
             state
                 .ssh
-                .set_known_hosts_path(Some(&dir.join("known_hosts")));
+                .set_known_hosts_path(Some(&dir.join("known_hosts")))
+                .await;
         }
         other => return Err(format!("未知的 known_hosts 存储模式: {other}")),
     }

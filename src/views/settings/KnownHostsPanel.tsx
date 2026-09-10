@@ -13,6 +13,8 @@ export function KnownHostsPanel() {
   const [snapshot, setSnapshot] = useState<KnownHostsSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // 受控 select 在用户取消切换后需要一次重渲染才能回弹到当前存储模式。
+  const [, bumpSelectTick] = useState(0)
   const knownHostsMode = useSettings((state) => state.knownHostsMode)
   const setKnownHostsMode = useSettings((state) => state.setKnownHostsMode)
   const saveKnownHostsMode = useSettings((state) => state.saveKnownHostsMode)
@@ -32,6 +34,22 @@ export function KnownHostsPanel() {
 
   const changeMode = async (mode: 'openssh' | 'appdata') => {
     setError(null)
+    if (mode === 'openssh' && knownHostsMode !== 'openssh') {
+      // P2-4：该模式直接读写用户真实的 ~/.ssh/known_hosts，与 ssh / scp / git 等
+      // OpenSSH 命令行共享同一份文件。在此处的增删会改变命令行的信任状态，
+      // 属于超出本应用的副作用，切换前必须显式告知。
+      const accepted = await confirmDialog({
+        title: t('切换到 OpenSSH 兼容存储'),
+        message: t(
+          '该模式直接读写你真实的 ~/.ssh/known_hosts，与 ssh / scp / git 等 OpenSSH 命令行共享同一份文件：这里新增或删除指纹，会同时改变命令行的主机信任状态。确认切换？'
+        ),
+        confirmLabel: t('确认切换')
+      })
+      if (!accepted) {
+        bumpSelectTick((tick) => tick + 1)
+        return
+      }
+    }
     try {
       await knownHostsSetMode(mode)
       setKnownHostsMode(mode)

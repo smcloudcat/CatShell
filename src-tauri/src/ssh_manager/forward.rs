@@ -1,13 +1,15 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use super::monitor::validate_network_target;
 use super::types::PortForwardInfo;
-use super::SshHandler;
-use super::SshManager;
+use super::{ForwardChildren, SshHandler, SshManager};
 
 #[derive(Clone, Debug)]
 pub(super) struct RemoteForwardRoute {
@@ -82,6 +84,26 @@ async fn write_socks_reply(stream: &mut TcpStream, status: u8) {
 }
 
 impl SshManager {
+    /// 登记一个转发子任务，顺带剔除已结束的句柄，避免句柄表无界增长。
+    async fn track_forward_child(children: &ForwardChildren, handle: JoinHandle<()>) {
+        let mut guard = children.lock().await;
+        guard.retain(|handle| !handle.is_finished());
+        guard.push(handle);
+    }
+
+    /// abort 一条转发下所有在飞连接（P2-6）。
+    ///
+    /// 只 abort listener 只能停止接受新连接，已经建立的隧道会一直存活到对端关闭，
+    /// 用户看到的是「转发已停止但连接还在」。这里连同子任务一起终止。
+    async fn abort_forward_children(&self, forward_id: u64) {
+        let children = self.forward_children.lock().await.remove(&forward_id);
+        if let Some(children) = children {
+            for handle in children.lock().await.drain(..) {
+                handle.abort();
+            }
+        }
+    }
+
     pub async fn start_local_forward(
         &self,
         manager: std::sync::Arc<SshManager>,
@@ -125,6 +147,8 @@ impl SshManager {
             target_port,
         };
         let task_info = info.clone();
+        let children: ForwardChildren = Arc::new(Mutex::new(Vec::new()));
+        let task_children = children.clone();
         let task = tokio::spawn(async move {
             let session_id = task_info.session_id;
             let target_host = task_info.target_host.clone();
@@ -136,7 +160,7 @@ impl SshManager {
                 };
                 let manager = manager.clone();
                 let target_host = target_host.clone();
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let channel = {
                         let Ok(session) = manager.session_ref(session_id).await else {
                             return;
@@ -162,9 +186,13 @@ impl SshManager {
                     let mut local = local;
                     let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
                 });
+                SshManager::track_forward_child(&task_children, handle).await;
             }
+            // listener 主动退出（accept 失败）时同样收束在飞连接，避免任务表泄漏。
+            manager.abort_forward_children(task_info.id).await;
         });
         self.forwards.lock().await.insert(id, task);
+        self.forward_children.lock().await.insert(id, children);
         self.forward_info.lock().await.insert(id, info.clone());
         Ok(info)
     }
@@ -270,14 +298,18 @@ impl SshManager {
             target_host: "SOCKS5".to_string(),
             target_port: 0,
         };
+        let task_info = info.clone();
+        let children: ForwardChildren = Arc::new(Mutex::new(Vec::new()));
+        let task_children = children.clone();
         let task = tokio::spawn(async move {
+            let session_id = task_info.session_id;
             loop {
                 let (mut local, peer) = match listener.accept().await {
                     Ok(connection) => connection,
                     Err(_) => break,
                 };
                 let manager = manager.clone();
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let (target_host, target_port) = match tokio::time::timeout(
                         Duration::from_secs(10),
                         read_socks_target(&mut local),
@@ -326,9 +358,12 @@ impl SshManager {
                     let mut remote = channel.into_stream();
                     let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
                 });
+                SshManager::track_forward_child(&task_children, handle).await;
             }
+            manager.abort_forward_children(task_info.id).await;
         });
         self.forwards.lock().await.insert(id, task);
+        self.forward_children.lock().await.insert(id, children);
         self.forward_info.lock().await.insert(id, info.clone());
         Ok(info)
     }
@@ -338,6 +373,8 @@ impl SshManager {
     }
 
     pub async fn stop_forward(&self, id: u64) -> Result<(), String> {
+        // 先收束该转发下的在飞连接，再停 listener（P2-6）。
+        self.abort_forward_children(id).await;
         if let Some(task) = self.forwards.lock().await.remove(&id) {
             task.abort();
             self.forward_info.lock().await.remove(&id);

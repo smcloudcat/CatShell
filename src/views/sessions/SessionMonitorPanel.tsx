@@ -122,7 +122,10 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
       }
     }
     void refresh()
-    const timer = window.setInterval(refresh, monitorIntervalSeconds * 1000)
+    // setInterval 期望返回 void 的回调：包一层显式忽略 refresh 的 Promise。
+    const timer = window.setInterval(() => {
+      void refresh()
+    }, monitorIntervalSeconds * 1000)
     return () => {
       cancelled = true
       window.clearInterval(timer)

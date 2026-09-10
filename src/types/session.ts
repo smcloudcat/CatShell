@@ -17,26 +17,31 @@ export interface SessionInfo {
   attempt?: number | null
 }
 
-export interface SessionStatusEvent {
+/** 事件 payload 的协议版本，由 Rust 侧 `EVENT_SCHEMA_VERSION` 写入（P2-13）。 */
+export interface VersionedEvent {
+  v: number
+}
+
+export interface SessionStatusEvent extends VersionedEvent {
   id: number
   status: SessionStatus
   reason?: string | null
   attempt: number
 }
 
-export interface SessionOutputEvent {
+export interface SessionOutputEvent extends VersionedEvent {
   id: number
   data: string
 }
 
-export interface HostKeyPrompt {
+export interface HostKeyPrompt extends VersionedEvent {
   token: string
   host: string
   port: number
   fingerprint: string
 }
 
-export interface HostKeyWarning {
+export interface HostKeyWarning extends VersionedEvent {
   host: string
   port: number
   fingerprint: string
@@ -123,7 +128,7 @@ export interface SftpDiskUploadPick {
   remotePath: string
 }
 
-export interface SftpDiskProgress {
+export interface SftpDiskProgress extends VersionedEvent {
   transferId: number
   sessionId: number
   direction: 'upload' | 'download'
@@ -185,7 +190,7 @@ export interface KbiPromptQuestion {
   echo: boolean
 }
 
-export interface KbiPromptEvent {
+export interface KbiPromptEvent extends VersionedEvent {
   sessionId: number
   name: string
   instructions: string

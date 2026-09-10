@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Icon } from '../../components/Icon'
 import { HostProfile, normalizeHostIcon } from '../../types/host'
 import { confirmDialog } from '../../store/ui'
@@ -13,8 +14,13 @@ interface Props {
   onDelete: (host: HostProfile) => void
 }
 
-/** 主机列表中的一行：图标、名称、连接信息、标签与操作按钮。 */
-export function HostRow({ host, activeTag, onToggleTag, onConnect, onEdit, onDelete }: Props) {
+/**
+ * 主机列表中的一行：图标、名称、连接信息、标签与操作按钮。
+ *
+ * `memo` 生效的前提是父组件传入的回调引用稳定（`HostsView` 已用 `useCallback` 保证），
+ * 否则列表里任意一行的状态变化都会让整表重渲染（P2-19）。
+ */
+export const HostRow = memo(function HostRow({ host, activeTag, onToggleTag, onConnect, onEdit, onDelete }: Props) {
   const t = useT()
   const displayName = host.name || `${host.username}@${host.host}`
   const authLabel = host.authMethod === 'key'
@@ -67,4 +73,4 @@ export function HostRow({ host, activeTag, onToggleTag, onConnect, onEdit, onDel
       </div>
     </article>
   )
-}
+})
