@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 *.rs text
 *.ts text
 *.tsx text
@@ -9,6 +9,7 @@
 *.yml text
 *.yaml text
 *.toml text
+*.bat text eol=crlf
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.png binary

@@ -16,6 +16,8 @@
 - **心跳间隔未夹范围**：`keepalive` 有两套归一化口径且都未夹到声明的 `[5, 300]`，现统一到 `types/session`。
 - **残留 i18n 缺口**：审计面板的动作名、监控阈值指标名等文案缺少 `en` 条目，英文界面下会回退成中文。已补齐 43 条，并修掉监控告警与传输列表按钮的硬编码中文；零引用的 `STATUS_TEXT` 死代码一并删除。
 - **业务错误提示未本地化**：store 与 `src/utils/` 直接抛中文 `Error`，英文界面下错误提示仍是中文。现改为抛携带错误码的 `AppError`（`src/types/errors.ts`），由 UI 层统一经 `errorText()` 按当前语言映射文案；`check-i18n.mjs` 已把错误码文案表纳入覆盖校验。终端字体选项与跳板机校验两处漏翻文案一并补齐。
+- **样式表注释乱码**：`src/styles/*.css` 的中文注释曾被按 GBK 重写，出现「閫氱敤瑙嗗浘」式乱码，并夹带 BOM 与丢失的换行。已依历史版本逐行还原（9 个文件 / 31 行），并新增乱码校验防止复发。
+- **错误边界文案未本地化**：`ErrorBoundary` 的兜底文案未走 `t()`，英文界面下仍显示中文，现改为 `t('界面发生错误')` / `t('重新加载')`。
 
 ### 安全
 
@@ -40,6 +42,7 @@
 - Rust 测试由 30 例增至 36 例：共享测试基建把内存 SSH 服务器扩展到 SFTP 子系统与 direct-tcpip 转发，新增 SFTP 全链路、本地转发、主机指纹变更拒绝等用例。
 - 新增 `rustfmt.toml`、`clippy.toml`、`.editorconfig`，统一格式与行尾约束。
 - 新增 i18n 覆盖率校验（`npm run i18n:check`）并接入 CI，新增文案漏补 `en` 条目时直接失败；另提供 `npm run i18n:audit`，用于审计常量表等间接引用的缺口。
+- 新增乱码校验（`npm run mojibake:check`）并接入 CI：利用「UTF-8 字节被按 GBK 解读」这一过程的可逆性自动识别源码注释乱码，无需额外依赖。
 - CI 的 clippy 改用 `--all-targets`，让 `tests/` 下的集成测试代码也纳入 Lint。
 
 详细评估与优先级见 [`docs/PROJECT-REVIEW.md`](./docs/PROJECT-REVIEW.md)。

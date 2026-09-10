@@ -1,4 +1,4 @@
-/* ============ 涓绘満瑙嗗浘 ============ */
+/* ============ 主机视图 ============ */
 .hosts-header {
   display: flex;
   align-items: center;
@@ -187,7 +187,7 @@
   background: color-mix(in srgb, var(--err) 10%, transparent);
 }
 
-/* ============ 涓绘満鎸囩汗寮圭獥 ============ */
+/* ============ 主机指纹弹窗 ============ */
 .host-key-modal {
   max-width: 560px;
 }
@@ -227,7 +227,7 @@
   line-height: 1.7;
 }
 
-/* ============ 涓绘満椤?============ */
+/* ============ 主机页 ============ */
 .quick-card {
   padding: 16px 18px;
   display: flex;

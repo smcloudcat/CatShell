@@ -21,6 +21,8 @@ jobs:
       - run: npm run lint
       - name: Check i18n coverage
         run: npm run i18n:check
+      - name: Check for source mojibake
+        run: npm run mojibake:check
       - run: npm test
       - run: npm run build
 

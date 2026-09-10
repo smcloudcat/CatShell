@@ -1,4 +1,4 @@
-/* ============ 甯冨眬 ============ */
+/* ============ 布局 ============ */
 .app-shell {
   display: flex;
   height: 100vh;
@@ -129,7 +129,7 @@
   font-weight: 600;
 }
 
-/* 渚ф爮鎶樺彔 */
+/* 侧栏折叠 */
 .sidebar-toggle {
   margin-top: auto;
   flex-shrink: 0;
@@ -246,7 +246,7 @@
   }
 }
 
-/* ============ 閫氱敤瑙嗗浘 ============ */
+/* ============ 通用视图 ============ */
 .view {
   flex: 1;
   min-height: 0;
@@ -280,7 +280,7 @@
   margin-top: 5px;
 }
 
-/* ============ 绌虹姸鎬?============ */
+/* ============ 空状态 ============ */
 .empty-state {
   padding: 48px 24px;
   text-align: center;
@@ -315,7 +315,7 @@
   line-height: 1.7;
 }
 
-/* ============ 椤佃剼鎻愮ず ============ */
+/* ============ 页脚提示 ============ */
 .view-footer {
   font-size: 11px;
   color: var(--text-faint);
@@ -323,7 +323,7 @@
   padding: 4px 0 8px;
 }
 
-/* ============ 鍝嶅簲寮?============ */
+/* ============ 响应式 ============ */
 @media (max-width: 900px) {
   .monitor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));

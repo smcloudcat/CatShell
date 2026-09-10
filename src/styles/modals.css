@@ -1,4 +1,4 @@
-/* ============ 寮圭獥 ============ */
+/* ============ 弹窗 ============ */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -26,7 +26,7 @@
   max-height: calc(100vh - 80px);
   border-radius: 18px;
   border: 1px solid var(--hairline-strong);
-  /* 寮圭獥琛ㄩ潰涓嶉殢銆屽崱鐗囦笉閫忔槑搴︺€嶈缃彉鍖栵紝淇濊瘉浠讳綍鑳屾櫙璁剧疆涓嬫枃瀛楀彲璇?*/
+  /* 弹窗表面不随「卡片不透明度」设置变化，保证任何背景设置下文字可读 */
   background: rgb(var(--glass-bg) / 0.95);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
   backdrop-filter: blur(calc(var(--glass-blur) + 8px)) saturate(1.4);
@@ -42,7 +42,7 @@
   width: min(440px, calc(100vw - 32px));
 }
 
-/* 寮圭獥鍐呯殑杈撳叆涓庢寜閽敼鐢ㄥ崐閫忔槑琛ㄩ潰鑹诧紝閬垮厤鐧藉簳鐧藉瓧/鐧藉簳鐧介挳 */
+/* 弹窗内的输入与按钮改用半透明表面色，避免白底白字/白底白钮 */
 .modal .glass-input,
 .modal .seg-btn:not(.active),
 .modal .glass-btn:not(.primary) {

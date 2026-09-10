@@ -748,7 +748,9 @@ const en: Record<string, string> = {
   '删除主机指纹失败': 'Failed to delete the host fingerprint',
   // 其它兜底文案
   '跳板机配置无效': 'Invalid jump host configuration',
-  '系统等宽字体': 'System monospace'
+  '系统等宽字体': 'System monospace',
+  '界面发生错误': 'Something went wrong',
+  '重新加载': 'Reload'
 }
 
 const dictionaries: Record<Language, Record<string, string>> = {

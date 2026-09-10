@@ -37,6 +37,7 @@ npm run tauri dev
 npx tsc --noEmit
 npm run lint
 npm run i18n:check
+npm run mojibake:check
 npm test
 npm run build
 
@@ -49,6 +50,8 @@ cargo test
 `--all-targets` 会把集成测试代码一并纳入 Lint，请保留该参数——只写 `cargo clippy -- -D warnings` 时 `tests/` 下的代码不在检查范围内。
 
 `npm run i18n:check` 校验代码里的每个 `t('…')` 键都有对应的 `en` 条目，CI 会执行同一步。若新增了文案却忘了补 `en`，这一步会直接失败并列出缺失的键。常量表等**间接引用**的键不在其覆盖范围内，可用 `npm run i18n:audit` 人工复查。
+
+`npm run mojibake:check` 扫描源码与样式中的注释，识别被按 GBK 误读的乱码（例如把「通用视图」写成「閫氱敤瑙嗗浘」），CI 同步骤。
 
 涉及 `invoke`、文件选择器、Tauri Store、插件或 Rust command 的改动，**必须**用 `npm run tauri dev` 或 `open-dev.cmd` 在真实 Tauri 窗口内验证；`npm run dev` 只跑 Vite，无法验证任何 Tauri API。
 
@@ -64,6 +67,7 @@ cargo test
 - 复用 `Icon` 组件与 CSS 变量，不要手写重复 SVG。
 - 异步操作必须有失败处理，并向用户给出可理解的提示。
 - 新增文案走 `t('中文原文')`，并补齐 `src/i18n/index.ts` 的 `en` 条目，不要把中文硬编码进 JSX。
+- 中文注释一律以 UTF-8 保存，不要用会写入 GBK 的编辑器或脚本覆盖源文件；提交前跑 `npm run mojibake:check` 自查（历史上有一次提交把整个 `src/styles/` 的注释写成了乱码）。
 
 ### 后端
 

@@ -3,6 +3,8 @@
 > 审计日期：2026-09-10
 > 审计范围：`src/`（前端）、`src-tauri/`（Rust 后端）、构建与 CI 配置、文档一致性
 > 审计方式：全量源码通读 + 静态检索取证 + 交叉验证（所有结论均带 `文件:行号` 证据）
+>
+> 注：第二、三节中的行数、覆盖率等数据是**审计时点**（commit `a559a0f`）的快照，用于佐证问题；各问题的当前修复进度以第六节执行记录与第七节路线图为准。
 
 ---
 
@@ -271,7 +273,7 @@ if (key === 'w') {
 
 | 缺口 | 补法 | 落地 |
 |---|---|---|
-| 前端纯函数层 | 新增 6 个 vitest 文件 | `connectRequest` / `connectForm` / `hostImport` / `hostList` / `sftpUtils` / `sessionViewUtils`，合计 141 例 |
+| 前端纯函数层 | 新增 6 个 vitest 文件 | `connectRequest` / `connectForm` / `hostImport` / `hostList` / `sftpUtils` / `sessionViewUtils`，合计 141 例（后续补齐错误码映射等用例后为 155 例） |
 | SFTP 全链路 | 新增 `tests/sftp_e2e.rs` | list / read / write / 覆盖写 / mkdir / rename / chmod / remove，并验证状态跨 SFTP 会话保持 |
 | 端口转发端到端 | 新增 `tests/forward_e2e.rs` | 本地转发的流量确实穿过 SSH 到达目标服务；非回环绑定被拒绝 |
 | 指纹变更拒绝 | `tests/ssh_e2e.rs` 新增用例 | 篡改 known_hosts 后连接必须阻断，且**不得**重新弹确认框 |
@@ -324,7 +326,7 @@ if (key === 'w') {
 | P2-19 | 长列表未虚拟化：主机列表、SFTP 大目录全量渲染，行组件未 `memo` | `HostsView.tsx:345,351`、`SessionSftpPanel.tsx:679-699` | P2 |
 | P2-20 | 定时器依赖不稳定值被反复重建 | `SessionsView.tsx:104-108` | P2 |
 | P2-21 | 错误展示入口不统一：`.form-error` 内联与 Toast 混用。**部分缓解**：错误文案的取值入口已统一为 `AppError` 错误码 + `errorText()`，内联/Toast 的展示形式仍按场景选择 | 多个 view | P2 |
-| P2-22 | `ErrorBoundary` 文案与 "SSH Agent" 字面量未走 `t()` | `ErrorBoundary.tsx:38,42`、`ConnectDialog.tsx:498,520` | P2 |
+| P2-22 | `ErrorBoundary` 的兜底文案 "界面发生错误" / "重新加载" 未走 `t()`。**已修复**：改用非 hook 的 `t()` 并补 `en` 条目。原条目并提的 `ConnectDialog` "SSH Agent" 字面量已随组件拆分消失 | `ErrorBoundary.tsx:38,42` | P2 |
 | P2-23 | i18n 以中文为 key，漏翻静默回退无感知。**已缓解**：`npm run i18n:check`（含错误码文案表）接入 CI，`npm run i18n:audit` 复查常量表等间接引用 | `i18n/index.ts:668-671` | P2 |
 | P3-1 | 并发 host-key 确认令牌为 `host:port:fingerprint`，同 host:port 并发连接会覆盖 oneshot | `mod.rs:281-285` | P3 |
 | P3-2 | 重连退避无 jitter，多会话同时掉线会雷群重连；且重连成功即重置计数，可无限重连 | `types.rs:151-157`、`mod.rs:860` | P3 |
@@ -469,7 +471,7 @@ if (key === 'w') {
 
 - `package.json:4`、`Cargo.toml:3`、`tauri.conf.json:4` 版本号均为 `0.1.0`，**三处一致** ✓
 - `Cargo.toml:41-46` release profile 优化到位（`codegen-units = 1`、`lto = true`、`opt-level = 3`、`panic = "abort"`、`strip = true`）✓
-- `ci.yml:23-41` 确实执行 `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo check` → `cargo test`，与 AGENTS.md 要求一致 ✓
+- `ci.yml:38-44` 确实执行 `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo check` → `cargo test`，与 AGENTS.md 要求一致 ✓（`--all-targets` 为收尾补入，使 `tests/` 也纳入 Lint）
 - `tauri.conf.json:32-38` 图标（png/icns/ico）与 `identifier` 完整 ✓
 - `lib.rs` 实际注册 **42 个 command** 与 **8 个插件**，`generate_handler!` 与文档描述已对齐 ✓
 
@@ -485,7 +487,20 @@ if (key === 'w') {
 | `.gitignore` | 修订 | **保留 `AGENTS.md` 忽略项**（项目方决定：该文件是本地 agent 配置，不纳入版本控制） |
 | `src/i18n/index.ts` | 修订 | **代码修复**：补全 `en` 字典缺失的 `nav.*`（5 条）与 `status.*`（5 条）。**注**：此处所称「100%」是按字面量 `t()` 统计的；后续核查发现审计动作名等经常量表间接引用的键仍有缺口，已在 P1-6 收尾时补齐 43 条并加入 CI 校验（`npm run i18n:check`），避免再次高估 |
 
-**验证**：`npx tsc --noEmit` 通过；`npm test` 19/19 通过。
+**验证**：`npx tsc --noEmit` 通过；`npm test` 19/19 通过。（此为首次文档修正轮的记录；测试规模随后续补齐已增至 10 个文件 155 例。）
+
+### 6.4 后续补充（同日）
+
+首轮修正后又做了一轮数字校准与收尾：
+
+| 项 | 处理 |
+| --- | --- |
+| 文档数字/命令复核 | 修正 `README.md` 的测试文件数（9 → 10）；第八节与 AGENTS.md 的 clippy 命令补 `--all-targets`；开发命令与验证顺序补 `i18n:check` 与 `mojibake:check` |
+| `P2-22` | `ErrorBoundary` 两处兜底文案接入 `t()` 并补 `en` 条目 |
+| **新发现：`src/styles/` 注释乱码** | 中文注释曾被按 GBK 重写，出现「閫氱敤瑙嗗浘」式乱码，并夹带 BOM 与合并掉的换行。已用「乱码字符按 GBK 编码 → 结果按 UTF-8 解码」的可逆关系还原文 9 个文件共 31 行；分区标题与拆分前的 `App.css` 逐一比对确认，另清掉 `glass.css` 的 BOM |
+| **防复发** | 新增 `scripts/check-mojibake.mjs`（零依赖，用 `TextDecoder('gbk')` 反建编码表），接入 `npm run mojibake:check` 与 CI，同时拦截私用区字符 |
+
+`PROJECT-REVIEW.md` 这类「审计快照 + 执行记录」双层文档的维护约定：**第二、三节的取证数据保留原貌**（改动会破坏可复现性），**操作指引与执行记录必须与现状一致**；数字类断言一律先用命令实测再落笔。
 
 ---
 
@@ -514,7 +529,7 @@ if (key === 'w') {
 - [x] **P1-10 / P1-11** 公共 `<Modal>` 组件 + 巨型组件拆分
 - [x] **P2-14** 前端分包 + 按视图懒加载（首屏 JS 从 915 KB / gzip 256 KB 降到约 296 KB / gzip 96 KB）
 - [ ] 新增：会话恢复、快捷键速查面板、命令面板、会话掉线 Toast
-- [x] **P1-12** 补齐 SFTP / 转发 / 指纹变更测试（前端纯函数层 141 例；新增 SFTP 全链路 3 例、端口转发 2 例、指纹变更拒绝 1 例。远程转发、SOCKS5 端到端与并发场景仍待补）
+- [x] **P1-12** 补齐 SFTP / 转发 / 指纹变更测试（前端纯函数层 141 例，收尾补齐错误码映射后共 155 例；新增 SFTP 全链路 3 例、端口转发 2 例、指纹变更拒绝 1 例。远程转发、SOCKS5 端到端与并发场景仍待补）
 
 ### 阶段三 · 能力扩展（v0.4+）
 > 目标：从"好用的 SSH 客户端"走向"运维工作台"
@@ -532,14 +547,17 @@ if (key === 'w') {
 ## 八、复现与验证方式
 
 ```powershell
-# 前端：类型检查 + 构建 + 测试 + lint
-npm run build
-npm run test
+# 前端：类型检查 + lint + i18n 校验 + 乱码校验 + 测试 + 构建
+npx tsc --noEmit
 npm run lint
+npm run i18n:check
+npm run mojibake:check
+npm run test
+npm run build
 
 # 后端（在 src-tauri 目录）
 cargo fmt --check
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 cargo check
 cargo test
 

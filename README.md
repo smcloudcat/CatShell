@@ -46,7 +46,7 @@ CatShell 是一款面向 Windows 的桌面 SSH 运维工具，基于 **Tauri 2 +
 │  ├─ types/                  # 共享类型与常量
 │  ├─ utils/                  # 纯函数工具（格式化、通知、保险箱加解密、主机导入与列表）
 │  ├─ views/                  # 页面与页面级组件；子目录 hosts/ sessions/ settings/ 存放各自的对话框与面板
-│  └─ __tests__/              # vitest 单元测试（连接请求、主机导入、SFTP 工具、会话视图等 9 个文件）
+│  └─ __tests__/              # vitest 单元测试（连接请求、主机导入、SFTP 工具、会话视图、错误码等 10 个文件）
 ├─ src-tauri/                 # Rust 后端
 │  ├─ src/ssh_manager/        # SSH 核心目录模块
 │  │  ├─ mod.rs               # 会话生命周期、认证、重连、指纹确认、ProxyJump
@@ -62,7 +62,7 @@ CatShell 是一款面向 Windows 的桌面 SSH 运维工具，基于 **Tauri 2 +
 │  ├─ .cargo/audit.toml       # cargo audit 的已知接受项与理由
 │  └─ tests/                  # Rust 集成测试（common/ 基建 + ssh / sftp / forward 三个 e2e）
 ├─ docs/                      # 项目审查报告与优先级路线图
-├─ scripts/                   # 仓库脚本（i18n 覆盖率校验与审计）
+├─ scripts/                   # 仓库脚本（i18n 覆盖率校验与审计、源码乱码校验）
 ├─ .github/workflows/         # CI（lint / test / i18n / build / clippy / audit）与 tag 发布工作流
 ├─ open-dev.cmd               # Windows 一键启动开发服务器
 ├─ open-dev.ps1               # PowerShell 启动入口
@@ -151,10 +151,11 @@ npm run tauri build
 ## 测试
 
 ```powershell
-# 前端：类型检查、Lint、i18n 校验、单元测试与构建
+# 前端：类型检查、Lint、i18n 校验、乱码校验、单元测试与构建
 npx tsc --noEmit
 npm run lint
 npm run i18n:check
+npm run mojibake:check
 npm test
 npm run build
 
@@ -164,9 +165,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-前端的 `npm test` 覆盖纯函数层：连接请求构建、主机导入的信任边界、SFTP 目录与传输工具、会话视图与主机列表等。
+前端的 `npm test` 覆盖纯函数层：连接请求构建、主机导入的信任边界、SFTP 目录与传输工具、会话视图与主机列表、错误码文案映射等。
 
-`npm run i18n:check` 校验代码中的文案键是否都有 `en` 条目（CI 同步骤），`npm run i18n:audit` 用于复查常量表等间接引用的缺口。
+`npm run i18n:check` 校验代码中的文案键是否都有 `en` 条目（CI 同步骤），`npm run i18n:audit` 用于复查常量表等间接引用的缺口。`npm run mojibake:check` 检测源码与样式注释是否被按 GBK 误读成乱码（同样在 CI 中执行）。
 
 Rust 集成测试基于 `src-tauri/tests/common/` 的内存 SSH 服务器，覆盖连接与认证、PTY 事件、known_hosts 指纹校验与**指纹变更拒绝**、SFTP 全链路（增删改查与跨会话状态保持）以及 direct-tcpip 本地转发。
 
