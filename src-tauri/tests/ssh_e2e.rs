@@ -1,212 +1,36 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+//! SSH 连接生命周期、认证失败、主机密钥校验的端到端测试。
+//!
+//! 测试服务器与辅助函数见 `tests/common/mod.rs`。
+
+mod common;
+
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
-use catshell_lib::ssh_manager::{ConnectRequest, EventSink, RawOutput, SshManager};
-use russh::keys::*;
-use russh::server::{self, Msg as ServerMsg, Server as _};
-use russh::{Channel, ChannelId};
-use serde_json::Value;
-use tokio::net::TcpListener;
+use catshell_lib::ssh_manager::{RawOutput, SshManager};
+use common::{
+    accept_pending_host_key, connect_and_trust, connect_req, start_test_server,
+    test_known_hosts_path, CollectOutput, TestSink,
+};
+use russh::keys::{Algorithm, PrivateKey};
 
-/// 收集原始输出通道字节的测试桩，验证 IPC Channel 输出路径。
-struct CollectOutput(StdMutex<Vec<u8>>);
-
-impl RawOutput for CollectOutput {
-    fn send_bytes(&self, data: Vec<u8>) -> Result<(), String> {
-        self.0.lock().unwrap().extend_from_slice(&data);
-        Ok(())
-    }
-}
-
-struct TestSink {
-    events: std::sync::Mutex<Vec<(String, Value)>>,
-    connected: Arc<AtomicBool>,
-    closed: Arc<AtomicBool>,
-    output: std::sync::Mutex<Vec<u8>>,
-}
-
-impl TestSink {
-    fn new() -> Self {
-        TestSink {
-            events: std::sync::Mutex::new(Vec::new()),
-            connected: Arc::new(AtomicBool::new(false)),
-            closed: Arc::new(AtomicBool::new(false)),
-            output: std::sync::Mutex::new(Vec::new()),
+/// 轮询等待某个条件成立，超时后返回 false。
+async fn wait_until<F: Fn() -> bool>(timeout: Duration, check: F) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if check() {
+            return true;
         }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-
-impl EventSink for TestSink {
-    fn emit(&self, name: &str, payload: Value) {
-        if name == "session-status" {
-            let status = payload["status"].as_str().unwrap_or("");
-            if status == "connected" {
-                self.connected.store(true, Ordering::SeqCst);
-            }
-            if status == "closed" {
-                self.closed.store(true, Ordering::SeqCst);
-            }
-        }
-        if name == "session-output" {
-            if let Some(data) = payload["data"].as_str() {
-                if let Ok(bytes) = BASE64_STANDARD.decode(data) {
-                    self.output.lock().unwrap().extend_from_slice(&bytes);
-                }
-            }
-        }
-        self.events
-            .lock()
-            .unwrap()
-            .push((name.to_string(), payload));
-    }
-}
-
-#[derive(Clone)]
-struct EchoServer;
-
-impl server::Server for EchoServer {
-    type Handler = Self;
-
-    fn new_client(&mut self, _addr: Option<std::net::SocketAddr>) -> Self {
-        EchoServer
-    }
-
-    fn handle_session_error(&mut self, _error: <Self::Handler as server::Handler>::Error) {}
-}
-
-impl server::Handler for EchoServer {
-    type Error = russh::Error;
-
-    async fn channel_open_session(
-        &mut self,
-        _channel: Channel<ServerMsg>,
-        reply: server::ChannelOpenHandle,
-        _session: &mut server::Session,
-    ) -> Result<(), Self::Error> {
-        reply.accept().await;
-        Ok(())
-    }
-
-    async fn auth_password(
-        &mut self,
-        user: &str,
-        password: &str,
-    ) -> Result<server::Auth, Self::Error> {
-        if user == "test" && password == "secret" {
-            Ok(server::Auth::Accept)
-        } else {
-            Ok(server::Auth::Reject {
-                proceed_with_methods: None,
-                partial_success: false,
-            })
-        }
-    }
-
-    async fn auth_publickey(
-        &mut self,
-        _user: &str,
-        _key: &ssh_key::PublicKey,
-    ) -> Result<server::Auth, Self::Error> {
-        Ok(server::Auth::Accept)
-    }
-
-    async fn pty_request(
-        &mut self,
-        channel: ChannelId,
-        _term: &str,
-        _col_width: u32,
-        _row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
-        _modes: &[(russh::Pty, u32)],
-        session: &mut server::Session,
-    ) -> Result<(), Self::Error> {
-        let _ = session.channel_success(channel);
-        Ok(())
-    }
-
-    async fn shell_request(
-        &mut self,
-        channel: ChannelId,
-        session: &mut server::Session,
-    ) -> Result<(), Self::Error> {
-        let _ = session.channel_success(channel);
-        session.data(channel, b"welcome to echo shell\r\n".to_vec())?;
-        Ok(())
-    }
-
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        session: &mut server::Session,
-    ) -> Result<(), Self::Error> {
-        let echoed = format!("echo: {}\r\n", String::from_utf8_lossy(data));
-        session.data(channel, echoed.into_bytes())?;
-        Ok(())
-    }
-}
-
-async fn start_echo_server(port_ready: tokio::sync::oneshot::Sender<u16>) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let _ = port_ready.send(port);
-    let config = Arc::new(server::Config {
-        inactivity_timeout: Some(Duration::from_secs(30)),
-        auth_rejection_time: Duration::from_millis(100),
-        auth_rejection_time_initial: Some(Duration::from_millis(0)),
-        keys: vec![PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()],
-        ..Default::default()
-    });
-    let mut server = EchoServer;
-    server.run_on_socket(config, &listener).await.unwrap();
-}
-
-fn connect_req(port: u16, auto_reconnect: bool) -> ConnectRequest {
-    ConnectRequest {
-        name: "echo-test".to_string(),
-        host: "127.0.0.1".to_string(),
-        port,
-        username: "test".to_string(),
-        auth_method: "password".to_string(),
-        password: Some("secret".to_string()),
-        key_path: None,
-        passphrase: None,
-        otp_secret: None,
-        keepalive: 5,
-        auto_reconnect,
-        proxy: None,
-    }
-}
-
-async fn accept_pending_host_key(manager: &SshManager, sink: &TestSink) {
-    let token = sink
-        .events
-        .lock()
-        .unwrap()
-        .iter()
-        .rev()
-        .find(|(name, _)| name == "host-key-prompt")
-        .and_then(|(_, payload)| payload["token"].as_str().map(str::to_owned));
-    if let Some(token) = token {
-        let _ = manager.confirm_host_key(token, true).await;
-    }
-}
-
-fn test_known_hosts_path(label: &str, port: u16) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "catshell-{label}-{}-{port}-known-hosts",
-        std::process::id()
-    ))
+    check()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn full_connection_lifecycle() {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let _server_task = tokio::spawn(async move { start_test_server(tx).await });
     let port = rx.await.unwrap();
 
     let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
@@ -214,42 +38,17 @@ async fn full_connection_lifecycle() {
         port,
     )));
     let sink = Arc::new(TestSink::new());
-    let id = manager
-        .create(manager.clone(), sink.clone(), None, connect_req(port, true))
-        .await
-        .expect("create should succeed");
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while !sink.connected.load(Ordering::SeqCst) && tokio::time::Instant::now() < deadline {
-        accept_pending_host_key(&manager, &sink).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        sink.connected.load(Ordering::SeqCst),
-        "should connect within 15s, events: {:?}",
-        sink.events
-            .lock()
-            .unwrap()
-            .iter()
-            .take(6)
-            .collect::<Vec<_>>()
-    );
+    let id = connect_and_trust(&manager, &sink, None, connect_req(port, true)).await;
 
     manager
         .write(id, b"hello!".to_vec())
         .await
         .expect("write should work");
 
-    let output_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut got_echo = false;
-    while tokio::time::Instant::now() < output_deadline {
-        let out = sink.output.lock().unwrap().clone();
-        if String::from_utf8_lossy(&out).contains("echo: hello!") {
-            got_echo = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let got_echo = wait_until(Duration::from_secs(10), || {
+        String::from_utf8_lossy(&sink.output.lock().unwrap()).contains("echo: hello!")
+    })
+    .await;
     assert!(got_echo, "should receive echoed output from server");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -262,12 +61,11 @@ async fn full_connection_lifecycle() {
     );
 
     manager.disconnect(sink.clone(), id).await;
-    let close_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !sink.closed.load(Ordering::SeqCst) && tokio::time::Instant::now() < close_deadline {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
     assert!(
-        sink.closed.load(Ordering::SeqCst),
+        wait_until(Duration::from_secs(10), || sink
+            .closed
+            .load(Ordering::SeqCst))
+        .await,
         "session should close after manual disconnect"
     );
     let sessions = manager.list().await;
@@ -280,7 +78,7 @@ async fn full_connection_lifecycle() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn raw_output_channel_receives_shell_data() {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let _server_task = tokio::spawn(async move { start_test_server(tx).await });
     let port = rx.await.unwrap();
 
     let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
@@ -288,42 +86,21 @@ async fn raw_output_channel_receives_shell_data() {
         port,
     )));
     let sink = Arc::new(TestSink::new());
+    // 同一份缓冲区既要作为 RawOutput 传给会话，又要在测试里读取，故保留强类型句柄。
     let collector = Arc::new(CollectOutput(StdMutex::new(Vec::new())));
-    let id = manager
-        .create(
-            manager.clone(),
-            sink.clone(),
-            Some(collector.clone()),
-            connect_req(port, false),
-        )
-        .await
-        .expect("create should succeed");
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while !sink.connected.load(Ordering::SeqCst) && tokio::time::Instant::now() < deadline {
-        accept_pending_host_key(&manager, &sink).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        sink.connected.load(Ordering::SeqCst),
-        "should connect within 15s"
-    );
+    let output_sink: Arc<dyn RawOutput> = collector.clone();
+    let id = connect_and_trust(&manager, &sink, Some(output_sink), connect_req(port, false)).await;
 
     manager
         .write(id, b"channel-test".to_vec())
         .await
         .expect("write should work");
 
-    let output_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut got_raw = false;
-    while tokio::time::Instant::now() < output_deadline {
-        let out = collector.0.lock().unwrap().clone();
-        if String::from_utf8_lossy(&out).contains("echo: channel-test") {
-            got_raw = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let raw = collector.clone();
+    let got_raw = wait_until(Duration::from_secs(10), || {
+        String::from_utf8_lossy(&raw.0.lock().unwrap()).contains("echo: channel-test")
+    })
+    .await;
     assert!(got_raw, "raw output channel should receive echoed bytes");
 
     manager.disconnect(sink.clone(), id).await;
@@ -332,7 +109,7 @@ async fn raw_output_channel_receives_shell_data() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let server_task = tokio::spawn(async move { start_test_server(tx).await });
     let port = rx.await.unwrap();
 
     let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
@@ -356,19 +133,14 @@ async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let events = sink.events.lock().unwrap();
-    let statuses: Vec<&str> = events
-        .iter()
-        .filter(|(n, _)| n == "session-status")
-        .filter_map(|(_, p)| p["status"].as_str())
-        .collect();
+    let statuses = sink.statuses();
     let _ = id;
     assert!(
-        statuses.contains(&"closed"),
+        statuses.contains(&"closed".to_string()),
         "session should close after auth failure, got: {statuses:?}"
     );
     assert!(
-        !statuses.contains(&"connected"),
+        !statuses.contains(&"connected".to_string()),
         "must never connect with wrong password, got: {statuses:?}"
     );
     server_task.abort();
@@ -377,7 +149,7 @@ async fn bad_credentials_rejected_and_no_retry_without_autoreconnect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_failure_does_not_retry_with_auto_reconnect() {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let server_task = tokio::spawn(async move { start_echo_server(tx).await });
+    let server_task = tokio::spawn(async move { start_test_server(tx).await });
     let port = rx.await.unwrap();
 
     let manager = Arc::new(SshManager::with_known_hosts_path(test_known_hosts_path(
@@ -401,24 +173,94 @@ async fn auth_failure_does_not_retry_with_auto_reconnect() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let events = sink.events.lock().unwrap();
-    let statuses: Vec<&str> = events
-        .iter()
-        .filter(|(n, _)| n == "session-status")
-        .filter_map(|(_, p)| p["status"].as_str())
-        .collect();
+    let statuses = sink.statuses();
     let _ = id;
     assert!(
-        statuses.contains(&"closed"),
+        statuses.contains(&"closed".to_string()),
         "session should close after auth failure, got: {statuses:?}"
     );
     assert!(
-        !statuses.contains(&"reconnecting"),
+        !statuses.contains(&"reconnecting".to_string()),
         "auth failure with auto_reconnect must not emit reconnecting status, got: {statuses:?}"
     );
     assert!(
-        !statuses.contains(&"connected"),
+        !statuses.contains(&"connected".to_string()),
         "must never connect with wrong password, got: {statuses:?}"
     );
     server_task.abort();
+}
+
+/// 主机密钥与 known_hosts 记录不一致时必须直接拒绝。
+///
+/// 这是 MITM 的典型特征：绝不能退化成「弹个框让用户再确认一次」，
+/// 因为用户此时看到的指纹正是攻击者的，点「信任」就把中间人放进来了。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changed_host_key_is_rejected_without_prompt() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _server_task = tokio::spawn(async move { start_test_server(tx).await });
+    let port = rx.await.unwrap();
+
+    let known_hosts = test_known_hosts_path("changed-key", port);
+    let _ = std::fs::remove_file(&known_hosts);
+    let manager = Arc::new(SshManager::with_known_hosts_path(known_hosts.clone()));
+
+    // 第一次连接：指纹未知，走确认流程并被学进 known_hosts。
+    let first = Arc::new(TestSink::new());
+    let id = connect_and_trust(&manager, &first, None, connect_req(port, false)).await;
+    assert!(
+        known_hosts.exists(),
+        "接受指纹后应写入 known_hosts: {known_hosts:?}"
+    );
+    let recorded = std::fs::read_to_string(&known_hosts).unwrap();
+    assert!(
+        recorded.contains("ssh-ed25519"),
+        "known_hosts 应包含服务端公钥: {recorded:?}"
+    );
+    manager.disconnect(first.clone(), id).await;
+    let _ = wait_until(Duration::from_secs(10), || {
+        first.closed.load(Ordering::SeqCst)
+    })
+    .await;
+
+    // 把记录替换成另一把密钥，模拟服务端主机密钥被换掉。
+    let impostor = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let forged = format!(
+        "[127.0.0.1]:{port} {}\n",
+        impostor.public_key().to_openssh().unwrap()
+    );
+    std::fs::write(&known_hosts, forged).unwrap();
+
+    // 第二次连接：必须阻断，且不得重新征求用户同意。
+    let second = Arc::new(TestSink::new());
+    let _ = manager
+        .create(
+            manager.clone(),
+            second.clone(),
+            None,
+            connect_req(port, false),
+        )
+        .await;
+
+    let _ = wait_until(Duration::from_secs(10), || {
+        second.closed.load(Ordering::SeqCst)
+    })
+    .await;
+
+    assert!(
+        second.saw_event("host-key-warning"),
+        "指纹变更必须发出 host-key-warning 事件"
+    );
+    assert!(
+        !second.saw_event("host-key-prompt"),
+        "指纹变更绝不能弹确认框让用户放行，那正是 MITM 想要的结果"
+    );
+    let statuses = second.statuses();
+    assert!(
+        !statuses.contains(&"connected".to_string()),
+        "指纹变更后绝不能建立连接，got: {statuses:?}"
+    );
+    assert!(
+        statuses.contains(&"closed".to_string()),
+        "指纹变更后会话应关闭，got: {statuses:?}"
+    );
 }

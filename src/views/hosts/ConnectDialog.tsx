@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { open } from '@tauri-apps/plugin-dialog'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { useSessions } from '../../store/sessions'
@@ -84,6 +83,9 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
 
   const pickKey = async (target: 'keyPath' | 'proxyKeyPath' = 'keyPath') => {
     try {
+      // 按需加载：文件选择器只在点「浏览」时用得到，静态引入会把整个插件
+      // 拖进首屏包，也会让设置页的同类动态引入失效。
+      const { open } = await import('@tauri-apps/plugin-dialog')
       const file = await open({
         multiple: false,
         title: t('选择 SSH 私钥'),

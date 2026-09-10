@@ -267,6 +267,20 @@ if (key === 'w') {
 
 **优先补**：`hosts.ts` 的 `normalizeHost` / `isValidHost` / `previewHostImport`（导入信任边界）、`types/snippet.ts` 的 `shellQuote`（命令注入转义，安全相关）、重连逻辑、指纹变更拒绝。
 
+**已补齐（2026-09-10）**：
+
+| 缺口 | 补法 | 落地 |
+|---|---|---|
+| 前端纯函数层 | 新增 6 个 vitest 文件 | `connectRequest` / `connectForm` / `hostImport` / `hostList` / `sftpUtils` / `sessionViewUtils`，合计 141 例 |
+| SFTP 全链路 | 新增 `tests/sftp_e2e.rs` | list / read / write / 覆盖写 / mkdir / rename / chmod / remove，并验证状态跨 SFTP 会话保持 |
+| 端口转发端到端 | 新增 `tests/forward_e2e.rs` | 本地转发的流量确实穿过 SSH 到达目标服务；非回环绑定被拒绝 |
+| 指纹变更拒绝 | `tests/ssh_e2e.rs` 新增用例 | 篡改 known_hosts 后连接必须阻断，且**不得**重新弹确认框 |
+| 边界校验 | `tests/sftp_e2e.rs` | 空白 / 含 NUL / 超长远程路径在发起连接之前就被拒 |
+
+测试基建抽到 `tests/common/mod.rs`：一个支持 shell 回显、sftp 子系统与 direct-tcpip 的本地 SSH 服务器，外加连接级共享的内存 SFTP 文件系统。
+
+**仍缺口**：远程转发与 SOCKS5 的端到端链路、并发场景（多会话 / 并发传输 / 并发取消）、Agent 认证与 KBI 自动应答。
+
 #### P1-13 · AGENTS.md 未被 git 追踪，且多处与代码不符
 
 **证据**：`.gitignore:20` 含 `AGENTS.md`，`git ls-files AGENTS.md` 返回空 → 该文件未纳入版本控制。
@@ -498,9 +512,9 @@ if (key === 'w') {
 - [x] **P1-2** SFTP 传输 GC / 空闲超时
 - [x] **P1-7** 抽取 `buildConnectRequest` 纯函数 + 单测
 - [x] **P1-10 / P1-11** 公共 `<Modal>` 组件 + 巨型组件拆分
-- [ ] **P2-14** 前端分包 + 路由懒加载
+- [x] **P2-14** 前端分包 + 按视图懒加载（首屏 JS 从 915 KB / gzip 256 KB 降到约 296 KB / gzip 96 KB）
 - [ ] 新增：会话恢复、快捷键速查面板、命令面板、会话掉线 Toast
-- [ ] **P1-12** 补齐 SFTP / 转发 / 重连 / 指纹变更测试（前端纯函数层已补 78 例；SFTP 全链路、端口转发、指纹变更拒绝仍待补）
+- [x] **P1-12** 补齐 SFTP / 转发 / 指纹变更测试（前端纯函数层 141 例；新增 SFTP 全链路 3 例、端口转发 2 例、指纹变更拒绝 1 例。远程转发、SOCKS5 端到端与并发场景仍待补）
 
 ### 阶段三 · 能力扩展（v0.4+）
 > 目标：从"好用的 SSH 客户端"走向"运维工作台"

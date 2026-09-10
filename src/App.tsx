@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
 import { Modal } from './components/Modal'
@@ -12,14 +12,22 @@ import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
 import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
 import { useT } from './i18n'
-import { HomeView } from './views/HomeView'
-import { HostsView } from './views/HostsView'
-import { SessionsView } from './views/sessions/SessionsView'
-import { SettingsView } from './views/SettingsView'
-import { ForwardView } from './views/ForwardView'
 import { accentContrastOf, resolveMode, withModeBackgrounds } from './types/theme'
 import './styles/glass.css'
 import './App.css'
+
+// 视图按需加载：每个视图单独成 chunk，首屏只下载当前视图用到的代码。
+// 会话页带着 xterm（约 480 KB）、设置页带着更新与进程插件，
+// 懒加载后这些都要等真正打开对应页面时才取。
+const HomeView = lazy(() => import('./views/HomeView').then((m) => ({ default: m.HomeView })))
+const SessionsView = lazy(() =>
+  import('./views/sessions/SessionsView').then((m) => ({ default: m.SessionsView }))
+)
+const HostsView = lazy(() => import('./views/HostsView').then((m) => ({ default: m.HostsView })))
+const ForwardView = lazy(() => import('./views/ForwardView').then((m) => ({ default: m.ForwardView })))
+const SettingsView = lazy(() =>
+  import('./views/SettingsView').then((m) => ({ default: m.SettingsView }))
+)
 
 type ViewId = 'home' | 'sessions' | 'hosts' | 'forward' | 'settings'
 
@@ -320,13 +328,17 @@ function App() {
         </button>
       </aside>
       <main className="main-area">
-        {view === 'home' && (
-          <HomeView onOpenHosts={() => setView('hosts')} onOpenSessions={() => setView('sessions')} />
-        )}
-        {view === 'sessions' && <SessionsView />}
-        {view === 'hosts' && <HostsView onOpenSessions={() => setView('sessions')} />}
-        {view === 'forward' && <ForwardView />}
-        {view === 'settings' && <SettingsView />}
+        {/* fallback 只在首次进入某视图、chunk 尚未就绪时短暂出现；
+            放在 main 内部，切换时侧边栏与背景不会跟着闪。 */}
+        <Suspense fallback={<div className="view-loading">{t('加载界面中…')}</div>}>
+          {view === 'home' && (
+            <HomeView onOpenHosts={() => setView('hosts')} onOpenSessions={() => setView('sessions')} />
+          )}
+          {view === 'sessions' && <SessionsView />}
+          {view === 'hosts' && <HostsView onOpenSessions={() => setView('sessions')} />}
+          {view === 'forward' && <ForwardView />}
+          {view === 'settings' && <SettingsView />}
+        </Suspense>
       </main>
       {hostKeyPrompt && (
         <Modal
