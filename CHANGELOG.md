@@ -18,6 +18,7 @@
 - **业务错误提示未本地化**：store 与 `src/utils/` 直接抛中文 `Error`，英文界面下错误提示仍是中文。现改为抛携带错误码的 `AppError`（`src/types/errors.ts`），由 UI 层统一经 `errorText()` 按当前语言映射文案；`check-i18n.mjs` 已把错误码文案表纳入覆盖校验。终端字体选项与跳板机校验两处漏翻文案一并补齐。
 - **样式表注释乱码**：`src/styles/*.css` 的中文注释曾被按 GBK 重写，出现「閫氱敤瑙嗗浘」式乱码，并夹带 BOM 与丢失的换行。已依历史版本逐行还原（9 个文件 / 31 行），并新增乱码校验防止复发。
 - **错误边界文案未本地化**：`ErrorBoundary` 的兜底文案未走 `t()`，英文界面下仍显示中文，现改为 `t('界面发生错误')` / `t('重新加载')`。
+- **会话时长不再刷新**：会话页的时长定时器依赖 `order` 与 `sessions` 两个每次刷新都换引用的对象，导致 30 秒定时器被反复重建、永远等不到触发，界面上的在线时长会一直停在初始值。现改为依赖稳定的布尔量，定时器只在「有无已连接会话」发生翻转时才重建。
 
 ### 安全
 
@@ -38,12 +39,16 @@
 ### 工程
 
 - 巨型视图组件拆分：`SessionSftpPanel`（795→557）、`ConnectDialog`（758→406）、`SessionsView`（548→383）、`HostsView`（604→352），统一为编排层 + 纯函数层 + 展示层。
-- 前端测试由 63 例增至 155 例，新增连接请求构建、主机导入、SFTP 工具、会话视图、主机列表、连接表单、错误码映射等纯函数覆盖。
+- 前端测试由 63 例增至 158 例，新增连接请求构建、主机导入、SFTP 工具、会话视图、主机列表、连接表单、错误码映射、日志出口等纯函数覆盖。
 - Rust 测试由 30 例增至 36 例：共享测试基建把内存 SSH 服务器扩展到 SFTP 子系统与 direct-tcpip 转发，新增 SFTP 全链路、本地转发、主机指纹变更拒绝等用例。
 - 新增 `rustfmt.toml`、`clippy.toml`、`.editorconfig`，统一格式与行尾约束。
+- 前端日志统一走 `src/utils/logger.ts`（`[CatShell]` 前缀，`debug` 仅开发构建输出），6 处散落的 `console.*` 全部收编；日志属诊断信息，不做国际化。
+- 类型与 Lint 收紧：`tsconfig` 开启 `noUncheckedIndexedAccess` / `noImplicitOverride` / `exactOptionalPropertyTypes`（40 处类型修正），ESLint 启用 `recommendedTypeChecked` + `projectService`（17 处修正）；`npm run build` 改为 `tsc -b && vite build`，此前游离在类型检查外的 `vite.config.ts` 一并纳入。
+- Cargo 依赖版本策略显式分层：Tauri 生态（`tauri` / `tauri-build` / `tauri-plugin-*`）统一声明主版本 `"2"`，底层行为依赖（`tokio` / `bytes` / `russh` / `russh-sftp`）精确到小版本，实际锁定仍由 `Cargo.lock` 兜底。
 - 新增 i18n 覆盖率校验（`npm run i18n:check`）并接入 CI，新增文案漏补 `en` 条目时直接失败；另提供 `npm run i18n:audit`，用于审计常量表等间接引用的缺口。
 - 新增乱码校验（`npm run mojibake:check`）并接入 CI：利用「UTF-8 字节被按 GBK 解读」这一过程的可逆性自动识别源码注释乱码，无需额外依赖。
 - CI 的 clippy 改用 `--all-targets`，让 `tests/` 下的集成测试代码也纳入 Lint。
+- 新增 `src-tauri/.cargo/config.toml` 关闭增量编译（`incremental = false`）：rustc 1.98.1 在本 crate 的 `staticlib + cdylib + rlib` 组合上会稳定触发 `rmeta` 编码 ICE（`no entry found for key`），表现为 `cargo run` / `cargo test` 随机崩溃。改用全量重编译换取构建稳定。
 
 详细评估与优先级见 [`docs/PROJECT-REVIEW.md`](./docs/PROJECT-REVIEW.md)。
 

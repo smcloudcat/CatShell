@@ -20,7 +20,7 @@ export function HostImportPreviewModal({ preview, onClose, onConfirm }: Props) {
   const fresh = preview.items.filter((item) => !item.duplicateOf).length
   const overwritten = preview.items.length - fresh
 
-  const confirm = async () => {
+  const confirm = () => {
     setBusy(true)
     try {
       onConfirm()

@@ -95,7 +95,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           { name: t('所有文件'), extensions: ['*'] }
         ]
       })
-      if (typeof file === 'string') set({ [target]: file } as Partial<ConnectFormState>)
+      if (typeof file === 'string') set({ [target]: file })
     } catch {
       setError(t('无法打开文件选择器'))
     }

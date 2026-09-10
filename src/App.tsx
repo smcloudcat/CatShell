@@ -81,7 +81,7 @@ function App() {
   }, [kbiPrompt])
 
   useEffect(() => {
-    init()
+    void init()
     void sessionsInit()
     void hostsInit()
     void vaultInit()
@@ -177,6 +177,7 @@ function App() {
         const next = event.shiftKey
           ? state.order[(index - 1 + total) % total]
           : state.order[(index + 1) % total]
+        if (next === undefined) return
         state.setActive(next)
         if (view !== 'sessions') setView('sessions')
         return

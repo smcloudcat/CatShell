@@ -8,10 +8,13 @@ export default tseslint.config(
   { ignores: ['dist', 'src-tauri', 'src-tauri/**', 'node_modules'] },
   {
     files: ['**/*.{ts,tsx}'],
-    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    // 启用 type-checked 规则集：`recommendedTypeChecked` 借助 TS 的类型信息，能捕获
+    // no-floating-promises、no-misused-promises 这类纯语法规则看不见的问题。
+    extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       ecmaVersion: 2023,
-      globals: globals.browser
+      globals: globals.browser,
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname }
     },
     plugins: {
       'react-hooks': reactHooks,

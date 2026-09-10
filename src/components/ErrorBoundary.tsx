@@ -1,5 +1,6 @@
 import { Component, ReactNode } from 'react'
 import { t } from '../i18n'
+import { logger } from '../utils/logger'
 
 interface Props {
   children: ReactNode
@@ -10,17 +11,17 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  override state: State = { error: null }
 
   static getDerivedStateFromError(error: Error): State {
     return { error }
   }
 
-  componentDidCatch(error: Error) {
-    console.error('界面渲染发生未捕获错误', error)
+  override componentDidCatch(error: Error) {
+    logger.error('界面渲染发生未捕获错误', error)
   }
 
-  render() {
+  override render() {
     if (!this.state.error) return this.props.children
     return (
       <div

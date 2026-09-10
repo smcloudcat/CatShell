@@ -10,7 +10,7 @@ interface AuditState {
   ready: boolean
   entries: AuditEntry[]
   init: () => Promise<void>
-  record: (action: AuditAction, target: string, result: AuditEntry['result'], detail: string) => Promise<void>
+  record: (action: AuditAction, target: string, result: AuditEntry['result'], detail: string) => void
   clear: () => Promise<void>
 }
 
@@ -79,7 +79,7 @@ export const useAudit = create<AuditState>((set, get) => ({
       initPromise = null
     }
   },
-  record: async (action, target, result, detail) => {
+  record: (action, target, result, detail) => {
     const entry: AuditEntry = {
       id: crypto.randomUUID(),
       timestamp: Date.now(),

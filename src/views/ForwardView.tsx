@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { sshForwardList, sshForwardStart, sshForwardStartDynamic, sshForwardStartRemote, sshForwardStop } from '../api/ssh'
 import { useSessions } from '../store/sessions'
-import { PortForwardInfo } from '../types/session'
+import { PortForwardInfo, SessionInfo } from '../types/session'
 import { recordAudit } from '../store/audit'
 import { confirmDialog } from '../store/ui'
 import { useT } from '../i18n'
@@ -33,13 +33,17 @@ export function ForwardView() {
   const [error, setError] = useState<string | null>(null)
 
   const connectedSessions = useMemo(
-    () => order.map((id) => sessions[id]).filter((session) => session?.status === 'connected'),
+    () =>
+      order
+        .map((id) => sessions[id])
+        .filter((session): session is SessionInfo => session?.status === 'connected'),
     [order, sessions]
   )
 
   useEffect(() => {
-    if (!form.sessionId && connectedSessions[0]) {
-      setForm((current) => ({ ...current, sessionId: String(connectedSessions[0].id) }))
+    const first = connectedSessions[0]
+    if (!form.sessionId && first) {
+      setForm((current) => ({ ...current, sessionId: String(first.id) }))
     }
   }, [connectedSessions, form.sessionId])
 

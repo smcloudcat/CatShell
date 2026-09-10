@@ -251,11 +251,12 @@ export async function sftpDiskTransferList(sessionId: number): Promise<SftpDiskT
 /** 磁盘级传输进度事件（Rust 侧 300ms 节流推送）。 */
 export async function subscribeSftpDiskProgress(
   handler: (progress: SftpDiskProgress) => void
-): Promise<() => Promise<void>> {
+): Promise<() => void> {
   const unlisten = await listen<SftpDiskProgress>('sftp-disk-progress', (e) => handler(e.payload))
-  return async () => {
+  // UnlistenFn 是同步签名，取消订阅无需 await
+  return () => {
     try {
-      await unlisten()
+      unlisten()
     } catch {
       /* already removed */
     }
@@ -290,7 +291,7 @@ export interface SshEventHandlers {
   onKbiPrompt?: (event: KbiPromptEvent) => void
 }
 
-export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => Promise<void>> {
+export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => void> {
   const unlisteners: UnlistenFn[] = []
   unlisteners.push(await listen<SessionStatusEvent>('session-status', (e) => handlers.onStatus(e.payload)))
   unlisteners.push(
@@ -307,10 +308,10 @@ export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<()
   if (handlers.onKbiPrompt) {
     unlisteners.push(await listen<KbiPromptEvent>('kbi-prompt', (e) => handlers.onKbiPrompt?.(e.payload)))
   }
-  return async () => {
+  return () => {
     for (const unlisten of unlisteners) {
       try {
-        await unlisten()
+        unlisten()
       } catch {
         /* already removed */
       }

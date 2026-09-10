@@ -88,7 +88,7 @@ export function ThemeParams({ theme, setTheme }: Props) {
       {theme.backgroundType === 'image' && (
         <div className="section-tip">
           {t('自定义图片：')}
-          <button className="seg-btn" onClick={() => pickImage(setTheme)}>
+          <button className="seg-btn" onClick={() => void pickImage(setTheme)}>
             {t('选择图片…')}
           </button>
           {theme.backgroundImage && (

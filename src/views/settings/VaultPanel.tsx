@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { useVault, VaultCredential } from '../../store/vault'
+import { useVault } from '../../store/vault'
 import { useSettings, VAULT_AUTO_LOCK_OPTIONS } from '../../store/settings'
 import { useHosts } from '../../store/hosts'
 import { confirmDialog } from '../../store/ui'
@@ -149,7 +149,9 @@ export function VaultPanel() {
             ) : (
               <div className="vault-cred-list">
                 {credentialIds.map((id) => {
-                  const credential: VaultCredential = entries[id]
+                  const credential = entries[id]
+                  // entries 缺失时跳过该行（凭据可能在别处被清除）
+                  if (!credential) return null
                   return (
                     <div className="vault-cred-row" key={id}>
                       <span className="vault-cred-name" title={id}>{hostName(id)}</span>

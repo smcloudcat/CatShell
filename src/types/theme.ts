@@ -67,7 +67,9 @@ export function luminanceOf(hex: string): number {
     const v = parseInt(h.slice(i, i + 2), 16) / 255
     return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
   })
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+  // map 固定产出 3 个通道，?? 0 只为满足 noUncheckedIndexedAccess
+  const [r, g, b] = channels
+  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0)
 }
 
 /** 根据强调色亮度推导其上的文字颜色 */

@@ -68,11 +68,14 @@ export function SessionsView() {
   }, [init, snippetsInit])
 
   // 在线时长按分钟粒度展示，30 秒重渲染一次足够，不必每个标签各起一个定时器。
+  // 依赖必须收敛成布尔值：直接依赖 order / sessions 会因每次状态刷新都换引用而反复重建
+  // 定时器，导致 30 秒的间隔永远等不到触发。
+  const hasConnectedSession = order.some((id) => sessions[id]?.status === 'connected')
   useEffect(() => {
-    if (!order.some((id) => sessions[id]?.status === 'connected')) return
+    if (!hasConnectedSession) return
     const timer = window.setInterval(() => setDurationTick((value) => value + 1), 30_000)
     return () => window.clearInterval(timer)
-  }, [order, sessions])
+  }, [hasConnectedSession])
 
   const connectedSessions = order.filter((id) => sessions[id]?.status === 'connected')
   const broadcastActiveCount = broadcastTargets.filter((id) => sessions[id]?.status === 'connected').length
@@ -103,9 +106,13 @@ export function SessionsView() {
   }
 
   const handleRename = (id: number, name: string) => {
-    renameSession(id, name)
-      .then(() => recordAudit('session.rename', name, 'success', '重命名会话标签'))
-      .catch((err: unknown) => showToast(errorText(err, t, '重命名失败'), 'error'))
+    // renameSession 是纯内存更新，同步抛错即可，无需 Promise 链
+    try {
+      renameSession(id, name)
+      recordAudit('session.rename', name, 'success', '重命名会话标签')
+    } catch (err: unknown) {
+      showToast(errorText(err, t, '重命名失败'), 'error')
+    }
   }
 
   const toggleSplit = () => {

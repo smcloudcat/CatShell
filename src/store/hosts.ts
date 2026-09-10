@@ -9,6 +9,7 @@ import {
   MAX_IMPORT_PROFILES,
   normalizeHost
 } from '../utils/hostImport'
+import { logger } from '../utils/logger'
 import { recordAudit } from './audit'
 import { useVault } from './vault'
 
@@ -34,7 +35,7 @@ async function persist(hosts: HostProfile[]) {
     await store.set(HOSTS_KEY, hosts)
     await store.save()
   } catch (err) {
-    console.warn('保存主机配置失败，使用本地回退存储', err)
+    logger.warn('保存主机配置失败，使用本地回退存储', err)
     localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts))
   }
 }
@@ -60,7 +61,7 @@ export const useHosts = create<HostsState>((set, get) => ({
         const store = await load(STORE_FILE)
         saved = await store.get<unknown>(HOSTS_KEY)
       } catch (err) {
-        console.warn('读取主机配置失败，使用本地回退存储', err)
+        logger.warn('读取主机配置失败，使用本地回退存储', err)
         const raw = localStorage.getItem(HOSTS_KEY)
         if (raw) {
           try {

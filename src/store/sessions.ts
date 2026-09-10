@@ -14,6 +14,7 @@ import {
 } from '../api/ssh'
 import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KbiPromptEvent, SessionInfo, SessionStatusEvent } from '../types/session'
 import { AppError, ERROR_CODES } from '../types/errors'
+import { logger } from '../utils/logger'
 import { recordAudit } from './audit'
 
 export interface TerminalRef {
@@ -46,7 +47,7 @@ interface SessionsState {
   resize: (id: number, cols: number, rows: number) => void
   disconnect: (id: number) => Promise<void>
   closeTab: (id: number) => Promise<void>
-  renameSession: (id: number, name: string) => Promise<void>
+  renameSession: (id: number, name: string) => void
   setActive: (id: number | null) => void
   setSplit: (id: number | null) => void
   answerKbi: (answers: string[]) => Promise<void>
@@ -78,6 +79,8 @@ function appendSessionLog(id: number, data: Uint8Array) {
   while (buffer.size > MAX_SESSION_LOG_BYTES && buffer.chunks.length) {
     const overflow = buffer.size - MAX_SESSION_LOG_BYTES
     const first = buffer.chunks[0]
+    // 循环条件已保证队列非空，这里只是满足 noUncheckedIndexedAccess 的兜底
+    if (first === undefined) break
     if (first.byteLength <= overflow) {
       buffer.chunks.shift()
       buffer.size -= first.byteLength
@@ -105,7 +108,7 @@ export function clearSessionLog(id: number) {
   sessionLogs.delete(id)
 }
 
-function bytesFromChannel(data: ArrayBuffer | number[] | unknown): Uint8Array {
+function bytesFromChannel(data: unknown): Uint8Array {
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
   if (Array.isArray(data)) return new Uint8Array(data as number[])
   return new Uint8Array()
@@ -175,7 +178,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
         })
       } catch (err) {
         // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级
-        console.warn('SSH 事件订阅不可用，当前仅浏览器预览模式', err)
+        logger.warn('SSH 事件订阅不可用，当前仅浏览器预览模式', err)
       }
     })()
 
@@ -195,7 +198,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
             port: 22,
             username: '',
             status: event.status,
-            reason: event.reason,
+            reason: event.reason ?? null,
             attempt: event.attempt
           }
         },
@@ -206,7 +209,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       }))
       return
     }
-    const updated: SessionInfo = { ...info, status: event.status, reason: event.reason, attempt: event.attempt }
+    const updated: SessionInfo = { ...info, status: event.status, reason: event.reason ?? null, attempt: event.attempt }
     const connectedAt = { ...get().connectedAt }
     if (event.status === 'connected') connectedAt[event.id] = Date.now()
     if (event.status === 'disconnected' || event.status === 'closed') delete connectedAt[event.id]
@@ -260,7 +263,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
             port: existing?.port ?? request.port,
             username: existing?.username || request.username,
             status: existing?.status ?? 'connecting',
-            reason: existing?.reason ?? undefined
+            reason: existing?.reason ?? null
           }
         }
       }
@@ -333,7 +336,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return { sessions, requests, order, terminals, connectedAt, activeId: nextActive, splitId }
     })
   },
-  renameSession: async (id, name) => {
+  renameSession: (id, name) => {
     const info = get().sessions[id]
     if (!info) throw new AppError(ERROR_CODES.SESSION_NOT_FOUND)
     const trimmed = name.trim().slice(0, 80)

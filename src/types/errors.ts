@@ -56,7 +56,8 @@ export type ErrorParams = Record<string, string | number>
  */
 export class AppError extends Error {
   readonly code: ErrorCode
-  readonly params?: ErrorParams
+  // exactOptionalPropertyTypes 下可选属性不接受显式 undefined，显式写进类型
+  readonly params?: ErrorParams | undefined
 
   constructor(code: ErrorCode, params?: ErrorParams) {
     super(code)

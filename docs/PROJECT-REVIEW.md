@@ -316,15 +316,15 @@ if (key === 'w') {
 | P2-9 | 并发同名上传共用 `{target}.catshell-part`，互相覆盖，rename 可能把半成品当成品 | `sftp.rs:865-878` | P2 |
 | P2-10 | CSP 含 `script-src 'unsafe-inline'`，对处理凭证的桌面应用放宽了 XSS 防护 | `tauri.conf.json:24` | P2 |
 | P2-11 | 错误类型未统一，全项目用 `Result<_, String>`，无 `thiserror`，难以分类与国际化 | 全局 | P2 |
-| P2-12 | 前端无统一 Logger，6 处散落 `console.*` | `settings.ts:2`、`sessions.ts:1`、`hosts.ts:2`、`ErrorBoundary.tsx:1` | P2 |
+| P2-12 | 前端无统一 Logger，6 处散落 `console.*`。**已修复**：新增 `src/utils/logger.ts` 统一出口（`[CatShell]` 前缀，`debug` 仅开发构建输出），6 处全部收编并补 3 例守护测试 | `src/utils/logger.ts` | P2 |
 | P2-13 | 事件 payload 无版本号 / 无 schema 校验，前端字段改名即静默失效 | `mod.rs:159,170,278,407` | P2 |
 | P2-14 | `vite.config.ts` 无任何 `build` 配置：无分包、无 sourcemap、无显式 target | `vite.config.ts:1-32` | P2 |
-| P2-15 | `tsconfig.json` 缺 `noUncheckedIndexedAccess`、`noImplicitOverride`、`exactOptionalPropertyTypes` | `tsconfig.json:18-21` | P2 |
-| P2-16 | `build` 脚本为 `tsc && vite build`（非 `tsc -b`），`tsconfig.node.json` 游离于类型检查外 | `package.json:8`、`tsconfig.json:23` | P2 |
-| P2-17 | ESLint 仅用 `recommended`，未启用 `recommendedTypeChecked` / `strict` | `eslint.config.js:7-34` | P2 |
-| P2-18 | Cargo 插件版本策略混用：部分 `"2"`、部分精确小版本，与前端版本可能漂移 | `Cargo.toml:21-37` | P2 |
+| P2-15 | `tsconfig.json` 缺 `noUncheckedIndexedAccess`、`noImplicitOverride`、`exactOptionalPropertyTypes`。**已修复**：三项全部开启，共修正 40 处——数组索引与 `Record` 取值加显式守卫、class 组件补 `override`、可选属性在类型上显式并入 `| undefined` | `tsconfig.json:18-21` | P2 |
+| P2-16 | `build` 脚本为 `tsc && vite build`（非 `tsc -b`），`tsconfig.node.json` 游离于类型检查外。**已修复**：改为 `tsc -b && vite build`，`vite.config.ts` 首次纳入检查（顺带发现一条过期的 `@ts-expect-error`），`tsconfig.node.json` 的构建产物落在 `node_modules/.tmp` | `package.json:8`、`tsconfig.json:23` | P2 |
+| P2-17 | ESLint 仅用 `recommended`，未启用 `recommendedTypeChecked` / `strict`。**已修复**：启用 `recommendedTypeChecked` + `parserOptions.projectService`，17 处全部修正 | `eslint.config.js:7-34` | P2 |
+| P2-18 | Cargo 插件版本策略混用：部分 `"2"`、部分精确小版本，与前端版本可能漂移。**已修复**：Tauri 生态统一声明 `"2"`，底层行为依赖（`tokio` / `bytes` / `russh`）保持精确小版本并注释说明理由 | `Cargo.toml:21-47` | P2 |
 | P2-19 | 长列表未虚拟化：主机列表、SFTP 大目录全量渲染，行组件未 `memo` | `HostsView.tsx:345,351`、`SessionSftpPanel.tsx:679-699` | P2 |
-| P2-20 | 定时器依赖不稳定值被反复重建 | `SessionsView.tsx:104-108` | P2 |
+| P2-20 | 定时器依赖不稳定值被反复重建。**已修复**：改为依赖稳定的布尔量，仅在「有无已连接会话」翻转时重建；此前依赖每次刷新都换引用的 `order` / `sessions`，30 秒定时器被反复重建、实际从不触发 | `SessionsView.tsx:104-108` | P2 |
 | P2-21 | 错误展示入口不统一：`.form-error` 内联与 Toast 混用。**部分缓解**：错误文案的取值入口已统一为 `AppError` 错误码 + `errorText()`，内联/Toast 的展示形式仍按场景选择 | 多个 view | P2 |
 | P2-22 | `ErrorBoundary` 的兜底文案 "界面发生错误" / "重新加载" 未走 `t()`。**已修复**：改用非 hook 的 `t()` 并补 `en` 条目。原条目并提的 `ConnectDialog` "SSH Agent" 字面量已随组件拆分消失 | `ErrorBoundary.tsx:38,42` | P2 |
 | P2-23 | i18n 以中文为 key，漏翻静默回退无感知。**已缓解**：`npm run i18n:check`（含错误码文案表）接入 CI，`npm run i18n:audit` 复查常量表等间接引用 | `i18n/index.ts:668-671` | P2 |
@@ -501,6 +501,25 @@ if (key === 'w') {
 | **防复发** | 新增 `scripts/check-mojibake.mjs`（零依赖，用 `TextDecoder('gbk')` 反建编码表），接入 `npm run mojibake:check` 与 CI，同时拦截私用区字符 |
 
 `PROJECT-REVIEW.md` 这类「审计快照 + 执行记录」双层文档的维护约定：**第二、三节的取证数据保留原貌**（改动会破坏可复现性），**操作指引与执行记录必须与现状一致**；数字类断言一律先用命令实测再落笔。
+
+### 6.5 技术债推进（同日，P2 前两批）
+
+文档校准完成后转入第二、三节的 P2 技术债清理，已完成 6 项：
+
+| 项 | 处理 |
+| --- | --- |
+| `P2-12` | 新增 `src/utils/logger.ts` 统一日志出口，6 处散落 `console.*` 收编；`debug` 仅开发构建输出，日志按约定不做国际化 |
+| `P2-16` | `build` 改 `tsc -b && vite build`；`vite.config.ts` 首次进入类型检查，立刻暴露一条过期的 `@ts-expect-error`（`@types/node` 早已安装）；`tsconfig.node.json` 作为被引用的 composite 项目不能 `noEmit`（TS6310），产物改落 `node_modules/.tmp` |
+| `P2-18` | Cargo 版本策略显式分层并注释理由，Tauri 生态 `"2"`、底层行为依赖精确小版本 |
+| `P2-20` | 修掉时长定时器因依赖不稳定对象而永不触发的问题（详见「修复」条目） |
+| `P2-15` | 开启 `noUncheckedIndexedAccess` / `noImplicitOverride` / `exactOptionalPropertyTypes`，40 处类型修正 |
+| `P2-17` | ESLint 启用 `recommendedTypeChecked` + `projectService`，17 处修正（`UnlistenFn` 实为同步签名，顺带去掉了多余的 `await` 并收窄订阅函数的返回类型） |
+
+**验证**：`tsc` ✓ · `eslint .`（含 type-checked）✓ · `i18n:check` ✓ · `mojibake:check` ✓ · 前端 **158 例**（11 文件）· `build` ✓。
+
+**同期修复的构建故障**：`npm run tauri dev` 编译 `catshell_lib` 时 rustc 1.98.1 ICE（`rustc_metadata/rmeta/encoder.rs:2474 -- no entry found for key`）。根因是「多 crate-type（`staticlib` + `cdylib` + `rlib`）叠加 `-C incremental`」，同源的另一种表现是 `cargo test` 报 `os error 5` 拒绝访问；与业务代码无关。处置：清掉 12G 陈旧增量缓存（内含改名前的 `ssh_ops_lib-*` 化石条目），并新增 `src-tauri/.cargo/config.toml` 设 `[build] incremental = false` 根治。
+
+**仍待处理**：P2-1~P2-9 / P2-11 / P2-13（Rust 正确性与生命周期，11 项）、P2-19（长列表虚拟化）、P2-10（CSP 收紧）。后两项需在真机窗口内验证滚动行为与是否白屏，不宜在无 GUI 环境下盲改。
 
 ---
 

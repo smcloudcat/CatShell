@@ -139,7 +139,7 @@ export function BackupPanel() {
       <div className="section-tip">{t('导出主机、命令片段、主题和监控告警设置。密码与私钥口令永远不会写入备份文件。')}</div>
       <div className="backup-actions">
         <button className="glass-btn" onClick={exportBackup} disabled={!hosts.length && !snippets.length}><Icon name="save" size={14} />{t('导出备份')}</button>
-        <label className="glass-btn"><Icon name="folder" size={14} />{t('还原备份')}<input className="sr-only" type="file" accept="application/json,.json" onChange={importBackup} /></label>
+        <label className="glass-btn"><Icon name="folder" size={14} />{t('还原备份')}<input className="sr-only" type="file" accept="application/json,.json" onChange={(event) => void importBackup(event)} /></label>
       </div>
     </section>
   )

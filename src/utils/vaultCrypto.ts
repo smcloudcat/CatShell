@@ -4,8 +4,10 @@ import { AppError, ERROR_CODES } from '../types/errors'
 export const MIN_MASTER_PASSWORD_LENGTH = 8
 
 export interface VaultCredential {
-  password?: string
-  passphrase?: string
+  // exactOptionalPropertyTypes 下可选属性不接受显式 undefined，而凭据组装处会主动写
+  // undefined（表示「该项留空」），故显式并入类型。
+  password?: string | undefined
+  passphrase?: string | undefined
 }
 
 export interface VaultRecord {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { ThemeConfig, DEFAULT_THEME, withModeBackgrounds } from '../types/theme'
+import { logger } from '../utils/logger'
 
 const STORE_FILE = 'app-settings.json'
 const THEME_KEY = 'theme'
@@ -152,7 +153,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       await store.set(THEME_KEY, theme)
       await store.save()
     } catch (err) {
-      console.warn('保存主题设置失败（非 Tauri 环境）', err)
+      logger.warn('保存主题设置失败（非 Tauri 环境）', err)
       localStorage.setItem(THEME_KEY, JSON.stringify(theme))
     }
   },
@@ -355,7 +356,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         set({ language: savedLanguage })
       }
     } catch (err) {
-      console.warn('读取主题设置失败，使用默认值', err)
+      logger.warn('读取主题设置失败，使用默认值', err)
       const saved = localStorage.getItem(THEME_KEY)
       const savedThresholds = localStorage.getItem(MONITOR_THRESHOLDS_KEY)
       const savedSidebar = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
@@ -378,7 +379,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (savedThresholds) {
         try {
-          set({ monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS, ...JSON.parse(savedThresholds) } })
+          // JSON.parse 返回 any，断言成 Partial 后展开；备份恢复路径另有 isMonitorThresholds 校验
+          const parsed = JSON.parse(savedThresholds) as Partial<MonitorThresholds>
+          set({ monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS, ...parsed } })
         } catch {
           /* ignore corrupt stored thresholds */
         }
@@ -415,7 +418,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         try {
           const parsed: unknown = JSON.parse(savedTerminalRaw)
           if (parsed && typeof parsed === 'object') {
-            set({ terminal: normalizeTerminalSettings(parsed as Partial<TerminalSettings>) })
+            set({ terminal: normalizeTerminalSettings(parsed) })
           }
         } catch {
           /* ignore corrupt stored terminal settings */
@@ -437,7 +440,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         try {
           const parsed: unknown = JSON.parse(savedPanelsRaw)
           if (parsed && typeof parsed === 'object') {
-            set({ sessionPanels: normalizeSessionPanels(parsed as Partial<SessionPanelState>) })
+            set({ sessionPanels: normalizeSessionPanels(parsed) })
           }
         } catch {
           /* ignore corrupt stored session panel state */

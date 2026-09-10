@@ -103,7 +103,7 @@ describe('buildImportPreview', () => {
       []
     )
     expect(preview.items).toHaveLength(1)
-    expect(preview.items[0].profile.name).toBe('好主机')
+    expect(preview.items[0]!.profile.name).toBe('好主机')
     expect(preview.invalidCount).toBe(2)
   })
 
@@ -112,8 +112,8 @@ describe('buildImportPreview', () => {
       [{ name: 'x', host: 'h', username: 'u', password: 'leak', passphrase: 'leak' }],
       []
     )
-    expect(preview.items[0].profile.password).toBeNull()
-    expect(preview.items[0].profile.passphrase).toBeNull()
+    expect(preview.items[0]!.profile.password).toBeNull()
+    expect(preview.items[0]!.profile.passphrase).toBeNull()
   })
 
   it('flags rows that collide with an existing host on host+port+username', () => {
@@ -126,9 +126,9 @@ describe('buildImportPreview', () => {
       ],
       existing
     )
-    expect(preview.items[0].duplicateOf).not.toBeNull()
-    expect(preview.items[1].duplicateOf).toBeNull()
-    expect(preview.items[2].duplicateOf).toBeNull()
+    expect(preview.items[0]!.duplicateOf).not.toBeNull()
+    expect(preview.items[1]!.duplicateOf).toBeNull()
+    expect(preview.items[2]!.duplicateOf).toBeNull()
   })
 
   it('stops after maxCount valid rows', () => {

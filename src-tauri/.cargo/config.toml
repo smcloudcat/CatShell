@@ -1,0 +1,13 @@
+# 本机 rustc 1.98.1 在开启增量编译时对本 crate 稳定触发 ICE：
+#
+#   thread 'rustc' panicked at compiler\rustc_metadata\src\rmeta\encoder.rs:2474:51:
+#   no entry found for key
+#
+# 触发条件是 [lib] 同时声明 staticlib + cdylib + rlib 且带 `-C incremental`；
+# 同一环境下 `cargo test` 还曾以另一种面貌出现（复制 object 文件到 incremental
+# 目录时报「拒绝访问 (os error 5)」，set CARGO_INCREMENTAL=0 后即可通过）。
+#
+# 关掉增量编译规避该 ICE。代价是改动后整包重编译（依赖不变，仅本 crate 重编），
+# 换来的是不再随机崩在编译器内部。等 rustc 修复后可移除本节。
+[build]
+incremental = false

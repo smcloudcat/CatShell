@@ -165,9 +165,13 @@ export function HostsView({ onOpenSessions }: Props) {
     }
     try {
       const parsed: unknown = JSON.parse(await file.text())
-      const profiles = parsed && typeof parsed === 'object' && 'hosts' in parsed && Array.isArray(parsed.hosts)
-        ? parsed.hosts
-        : Array.isArray(parsed) ? parsed : []
+      // JSON.parse 的产物不可信，这里的断言只给下游一个形状；真正的校验由
+      // buildImportPreview 内部的 normalizeHost / isValidHost 完成。
+      const profiles = (
+        parsed && typeof parsed === 'object' && 'hosts' in parsed && Array.isArray(parsed.hosts)
+          ? parsed.hosts
+          : Array.isArray(parsed) ? parsed : []
+      ) as Partial<HostProfile>[]
       if (!profiles.length) {
         recordAudit('host.import', 'hosts-file', 'failure', t('文件中没有主机配置'))
         showToast(t('导入失败，文件中没有主机配置。'), 'error')
@@ -240,7 +244,12 @@ export function HostsView({ onOpenSessions }: Props) {
             <label className="glass-btn" title={t('导入主机配置')}>
               <Icon name="folder" size={15} />
               {t('导入')}
-              <input className="sr-only" type="file" accept="application/json,.json" onChange={importHosts} />
+              <input
+                className="sr-only"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => void importHosts(event)}
+              />
             </label>
             <button className="glass-btn" onClick={exportHosts} disabled={!hosts.length} title={t('导出主机配置')}>
               <Icon name="save" size={15} />

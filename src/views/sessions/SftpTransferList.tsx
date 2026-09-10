@@ -47,7 +47,7 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
     let disposed = false
-    let unlisten: (() => Promise<void>) | null = null
+    let unlisten: (() => void) | null = null
     void subscribeSftpDiskProgress((progress) => {
       if (progress.sessionId !== sessionId) return
       if (progress.done) {

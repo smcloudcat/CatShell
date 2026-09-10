@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# TypeScript 增量构建信息（`tsc -b` 产出）
+*.tsbuildinfo
+
 # Rust / Tauri build artifacts
 src-tauri/target
 src-tauri/gen

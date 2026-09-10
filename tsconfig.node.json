@@ -1,6 +1,10 @@
 {
   "compilerOptions": {
+    // 由 `tsc -b` 构建。被引用的项目不能关掉 emit（否则报 TS6310），所以把产物与增量信息
+    // 一并丢进 node_modules/.tmp：既满足 composite 的要求，又不往源码树里落文件。
     "composite": true,
+    "outDir": "./node_modules/.tmp/tsconfig-node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",

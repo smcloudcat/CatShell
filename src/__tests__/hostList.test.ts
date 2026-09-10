@@ -87,8 +87,8 @@ describe('groupHosts', () => {
     ], '未分组')
 
     expect(buckets.map((b) => b.key)).toEqual(['测试环境', '生产环境', UNGROUPED_KEY])
-    expect(buckets[2].label).toBe('未分组')
-    expect(buckets[2].hosts.map((h) => h.id)).toEqual(['2', '4'])
+    expect(buckets[2]!.label).toBe('未分组')
+    expect(buckets[2]!.hosts.map((h) => h.id)).toEqual(['2', '4'])
   })
 
   it('keeps the original order inside a group', () => {
@@ -98,7 +98,7 @@ describe('groupHosts', () => {
       host({ id: 'c', group: 'g' })
     ], '未分组')
     expect(buckets).toHaveLength(1)
-    expect(buckets[0].hosts.map((h) => h.id)).toEqual(['a', 'b', 'c'])
+    expect(buckets[0]!.hosts.map((h) => h.id)).toEqual(['a', 'b', 'c'])
   })
 
   it('returns no buckets for an empty list', () => {

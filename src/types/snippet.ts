@@ -12,7 +12,9 @@ export function getSnippetParameters(command: string): string[] {
   const names: string[] = []
   const seen = new Set<string>()
   for (const match of command.matchAll(PARAMETER_PATTERN)) {
+    // 正则带捕获组，match[1] 实际必然存在；显式兜底以满足 noUncheckedIndexedAccess
     const name = match[1]
+    if (name === undefined) continue
     if (!seen.has(name)) {
       names.push(name)
       seen.add(name)

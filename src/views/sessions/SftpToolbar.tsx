@@ -25,7 +25,7 @@ export interface SftpToolbarActions {
   toggleSortDirection: () => void
   toggleHidden: () => void
   changeFilter: (value: string) => void
-  collapse?: () => void
+  collapse?: (() => void) | undefined
 }
 
 interface Props {

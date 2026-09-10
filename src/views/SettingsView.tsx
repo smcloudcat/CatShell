@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { check, Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { useSettings, Language, LANGUAGE_OPTIONS } from '../store/settings'
+import { useSettings, LANGUAGE_OPTIONS } from '../store/settings'
 import { ThemeParams } from './settings/ThemeParams'
 import { Appearance } from './settings/Appearance'
 import { Icon, IconName } from '../components/Icon'
@@ -160,7 +160,7 @@ export function SettingsView() {
                   <Icon name="refresh" size={15} />
                   {t('恢复默认')}
                 </button>
-                <button className="glass-btn primary" onClick={() => saveTheme()}>
+                <button className="glass-btn primary" onClick={() => void saveTheme()}>
                   <Icon name="save" size={15} />
                   {t('保存主题')}
                 </button>
@@ -193,7 +193,7 @@ export function SettingsView() {
                         key={option}
                         className={`seg-btn ${language === option ? 'active' : ''}`}
                         onClick={() => {
-                          setLanguage(option as Language)
+                          setLanguage(option)
                           void saveLanguage()
                         }}
                       >

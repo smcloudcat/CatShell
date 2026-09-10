@@ -41,8 +41,8 @@ function focusableWithin(container: HTMLElement): HTMLElement[] {
 export interface ModalProps {
   onClose: () => void
   children: React.ReactNode
-  /** 追加到 `.modal` 的类名，用于宽度等差异化样式 */
-  className?: string
+  /** 追加到 `.modal` 的类名，用于宽度等差异化样式（调用方可能显式传 undefined） */
+  className?: string | undefined
   /** 弹窗用途，确认类弹窗可传 `alertdialog` */
   role?: 'dialog' | 'alertdialog'
   /** 是否允许 Escape 关闭，默认允许 */
@@ -109,6 +109,8 @@ export function Modal({
       }
       const first = focusables[0]
       const last = focusables[focusables.length - 1]
+      // 容器内没有可聚焦元素时，无需处理 Tab 循环
+      if (first === undefined || last === undefined) return
       const active = document.activeElement
       const inside = active instanceof Node && container.contains(active)
       if (event.shiftKey) {
