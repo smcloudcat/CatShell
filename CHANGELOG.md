@@ -88,7 +88,7 @@
 - CI 的 clippy 改用 `--all-targets`，让 `tests/` 下的集成测试代码也纳入 Lint。
 - 新增 `src-tauri/.cargo/config.toml` 关闭增量编译（`incremental = false`）：rustc 1.98.1 在本 crate 的 `staticlib + cdylib + rlib` 组合上会稳定触发 `rmeta` 编码 ICE（`no entry found for key`），表现为 `cargo run` / `cargo test` 随机崩溃。改用全量重编译换取构建稳定。
 
-详细评估与优先级见 [`docs/PROJECT-REVIEW.md`](./docs/PROJECT-REVIEW.md)。
+详细评估与优先级见当时版本的 `docs/PROJECT-REVIEW.md`（该文档已于 2026-09-11 清理，内容可从 git 历史找回）。
 
 ## [0.1.0]
 

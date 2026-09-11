@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * ts-rs 绑定守卫（类型自动生成，见 PROJECT-REVIEW 6.15）。
+ * ts-rs 绑定守卫（类型自动生成）。
  *
  * `src/types/bindings/` 由 Rust 侧 `cargo test export_bindings` 生成，是
  * Rust DTO 与前端手写类型的对照源。这里从消费端再守一道：
