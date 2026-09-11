@@ -40,6 +40,8 @@ bytes = "1.12.1"
 # 不依赖独立的 russh-keys crate，之前写在 russh-keys 上的同名 feature 实际不生效。
 russh = { version = "0.63.2", default-features = false, features = ["flate2", "rsa", "ring", "legacy-ed25519-pkcs8-parser"] }
 russh-sftp = "2.4.0"
+# 密钥生成的随机源（russh::keys::ssh_key =0.7.0-rc.11 的 CryptoRng 需要 rand_core 0.10 系）
+rand = "0.10"
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-notification = "2"

@@ -764,6 +764,55 @@ async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     Ok(ssh_manager::parse_ssh_config(&content))
 }
 
+/// 生成 Ed25519 密钥对（可选口令加密），写入私钥与 `.pub` 公钥文件。
+#[tauri::command]
+async fn keypair_generate(
+    private_path: String,
+    passphrase: Option<String>,
+    comment: String,
+    overwrite: bool,
+) -> Result<ssh_manager::GeneratedKeypair, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ssh_manager::generate_keypair(&private_path, passphrase.as_deref(), &comment, overwrite)
+    })
+    .await
+    .map_err(|error| format!("生成任务异常: {error}"))?
+}
+
+/// 浏览 `~/.ssh` 目录：密钥成组展示（私钥 + `.pub`，含类型与 SHA256 指纹），其余文件列出。
+#[tauri::command]
+async fn keypair_list() -> Result<Vec<ssh_manager::SshKeyEntry>, String> {
+    tauri::async_runtime::spawn_blocking(ssh_manager::list_keys)
+        .await
+        .map_err(|error| format!("扫描任务异常: {error}"))?
+}
+
+/// 删除密钥对（私钥 + `.pub`）。仅允许 `~/.ssh` 内可识别的私钥文件。
+#[tauri::command]
+async fn keypair_delete(private_path: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || ssh_manager::delete_keypair(&private_path))
+        .await
+        .map_err(|error| format!("删除任务异常: {error}"))?
+}
+
+/// 读取公钥单行内容（传入私钥路径时自动找同名 `.pub`），用于复制到剪贴板。
+#[tauri::command]
+async fn keypair_public_key(private_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ssh_manager::read_public_key(&private_path))
+        .await
+        .map_err(|error| format!("读取任务异常: {error}"))?
+}
+
+/// 把主机档案写回 `~/.ssh/config`（同名 Host 块替换、其余保留、先备份再原子替换）。
+#[tauri::command]
+async fn ssh_config_write(
+    drafts: Vec<ssh_manager::HostConfigDraft>,
+) -> Result<(usize, usize), String> {
+    tauri::async_runtime::spawn_blocking(move || ssh_manager::write_ssh_config(&drafts))
+        .await
+        .map_err(|error| format!("写回任务异常: {error}"))?
+}
+
 #[cfg(desktop)]
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -823,6 +872,11 @@ pub fn run() {
             recording_read,
             recording_delete,
             ssh_config_parse,
+            keypair_generate,
+            keypair_list,
+            keypair_delete,
+            keypair_public_key,
+            ssh_config_write,
             ssh_monitor,
             ssh_processes,
             ssh_kill_process,

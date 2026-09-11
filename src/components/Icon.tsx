@@ -7,6 +7,7 @@ export type IconName =
   | 'folder'
   | 'plus'
   | 'save'
+  | 'copy'
   | 'image'
   | 'refresh'
   | 'trash'
@@ -142,6 +143,12 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
       <path d="M17 21v-8H7v8M7 3v5h8" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </>
   ),
   image: (

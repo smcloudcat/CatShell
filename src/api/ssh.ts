@@ -27,6 +27,7 @@ import {
   SftpSyncStartInfo,
   SshConfigEntry
 } from '../types/session'
+import { GeneratedKeypair, HostConfigDraft, SshKeyEntry } from '../types/host'
 import { EVENT_SCHEMA_VERSION, shouldDropEvent } from '../utils/eventSchema'
 import { logger } from '../utils/logger'
 
@@ -345,6 +346,43 @@ export async function sftpDiskUploadStartPath(
     remotePath,
     speedLimitKBs
   })
+}
+
+/** 生成 Ed25519 密钥对（可选口令加密），写入私钥与 `.pub` 公钥文件。 */
+export async function keypairGenerate(
+  privateKeyPath: string,
+  passphrase: string | null,
+  comment: string,
+  overwrite: boolean
+): Promise<GeneratedKeypair> {
+  return invoke<GeneratedKeypair>('keypair_generate', {
+    privateKeyPath,
+    passphrase,
+    comment,
+    overwrite
+  })
+}
+
+/** 浏览 `~/.ssh` 目录：密钥成组展示（私钥 + `.pub`，含类型与 SHA256 指纹）。 */
+export async function keypairList(): Promise<SshKeyEntry[]> {
+  return invoke<SshKeyEntry[]>('keypair_list')
+}
+
+/** 删除密钥对（私钥 + `.pub`）。仅允许 `~/.ssh` 内可识别的私钥文件。 */
+export async function keypairDelete(privatePath: string): Promise<number> {
+  return invoke<number>('keypair_delete', { privatePath })
+}
+
+/** 读取公钥单行内容（传私钥路径自动找同名 `.pub`），用于复制到剪贴板。 */
+export async function keypairPublicKey(privatePath: string): Promise<string> {
+  return invoke<string>('keypair_public_key', { privatePath })
+}
+
+/** 把主机档案写回 `~/.ssh/config`，返回 (替换块数, 写入块数)。 */
+export async function sshConfigWrite(
+  drafts: HostConfigDraft[]
+): Promise<[number, number]> {
+  return invoke<[number, number]>('ssh_config_write', { drafts })
 }
 
 /** 打开目录选择对话框（目录同步的本地侧入口），取消返回 null。 */

@@ -1,6 +1,7 @@
 mod batch;
 mod config;
 mod forward;
+mod keys;
 mod monitor;
 mod sftp;
 mod sync;
@@ -27,7 +28,11 @@ use tokio::task::JoinHandle;
 pub use batch::{BatchExecItem, BATCH_MAX_TIMEOUT_SECS, BATCH_MIN_TIMEOUT_SECS};
 pub use config::{
     default_known_hosts_path, load_known_hosts_snapshot, parse_known_hosts, parse_ssh_config,
-    remove_known_hosts_entries, remove_known_hosts_entry, ssh_config_path,
+    remove_known_hosts_entries, remove_known_hosts_entry, ssh_config_path, write_ssh_config,
+    HostConfigDraft,
+};
+pub use keys::{
+    delete_keypair, generate_keypair, list_keys, read_public_key, GeneratedKeypair, SshKeyEntry,
 };
 pub use sftp::{
     validate_sftp_path, SftpChunk, SftpDiskTransferInfo, SftpDiskTransferStart, SftpDiskUploadPick,

@@ -42,6 +42,10 @@ export type AuditAction =
   | 'vault.change-password'
   | 'knownhosts.delete'
   | 'knownhosts.mode'
+  | 'keys.generate'
+  | 'keys.copy-public'
+  | 'keys.delete'
+  | 'ssh.config-write'
 
 export interface AuditEntry {
   id: string

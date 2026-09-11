@@ -57,6 +57,42 @@ export function normalizeHostIcon(icon: string): HostIconName {
   return (HOST_ICON_OPTIONS as readonly string[]).includes(icon) ? (icon as HostIconName) : 'server'
 }
 
+/** `~/.ssh` 目录里的一条密钥（私钥与 `.pub` 成组展示；kind=other 为目录内其它文件）。 */
+export interface SshKeyEntry {
+  fileName: string
+  kind: 'key' | 'other'
+  hasPrivate: boolean
+  hasPublic: boolean
+  keyType: string | null
+  fingerprint: string | null
+  comment: string | null
+  /** 私钥是否带口令（OpenSSH 格式可判断；其它格式为 false）。 */
+  encrypted: boolean
+  size: number
+  modifiedMs: number
+  privatePath: string | null
+  publicPath: string | null
+}
+
+/** 生成密钥对的返回信息。 */
+export interface GeneratedKeypair {
+  privateKeyPath: string
+  publicKeyPath: string
+  /** OpenSSH 单行公钥（含类型、base64 与备注），可直接贴到服务端 authorized_keys。 */
+  publicKey: string
+  keyType: string
+  fingerprint: string
+}
+
+/** 主机档案写回 `~/.ssh/config` 的草稿（不含任何凭据，私钥只写路径）。 */
+export interface HostConfigDraft {
+  name: string
+  hostname: string
+  port: number
+  user: string
+  identityFile: string | null
+}
+
 export const createHostProfile = (partial: Partial<HostProfile>): HostProfile => ({
   id: crypto.randomUUID(),
   name: '',
