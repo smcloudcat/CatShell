@@ -87,25 +87,43 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
 
   const connected = sessions[sessionId]?.status === 'connected'
   const hostId = useSessions((state) => state.hostIds[sessionId]) ?? ''
-  const shown = visibleEntries(entries, { nameFilter, showHidden, sortKey, sortAsc })
+  const shown = useMemo(
+    () => visibleEntries(entries, { nameFilter, showHidden, sortKey, sortAsc }),
+    [entries, nameFilter, showHidden, sortKey, sortAsc]
+  )
 
   /** 把 command 抛出的错误转成可展示文案；AppError 走错误码映射，其余原样。 */
   const asMessage = (err: unknown, fallback: string): string => errorText(err, t, fallback)
 
+  const loadSeqRef = useRef(0)
+  const disposedRef = useRef(false)
+  useEffect(() => {
+    // 组件以 key={activeId} 重挂载，卸载后丢弃 in-flight 响应。
+    return () => {
+      disposedRef.current = true
+    }
+  }, [])
+
   const loadDirectory = async (nextPath?: string) => {
     const target = nextPath ?? path
+    // 目录列表竞态保护（审计 B-1）：快速连续切换目录时只采纳最新请求的响应，
+    // 防止先发出、后返回的旧响应把 entries 和 path 一起覆盖回旧目录。
+    const seq = ++loadSeqRef.current
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      setEntries(await sftpList(sessionId, target))
+      const list = await sftpList(sessionId, target)
+      if (disposedRef.current || seq !== loadSeqRef.current) return
+      setEntries(list)
       recordAudit('sftp.list', target, 'success', t('读取远程目录'))
       setPath(target)
     } catch (err) {
+      if (disposedRef.current || seq !== loadSeqRef.current) return
       recordAudit('sftp.list', target, 'failure', t('读取远程目录失败'))
       setError(asMessage(err, t('无法读取远程目录')))
     } finally {
-      setBusy(false)
+      if (!disposedRef.current && seq === loadSeqRef.current) setBusy(false)
     }
   }
 
@@ -113,6 +131,12 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (connected) void loadDirectory()
     // 仅在会话或连接状态变化时重新拉取目录；路径切换由显式调用 loadDirectory 驱动。
   }, [sessionId, connected])
+
+  // 同步完成回调走 ref 转发并保持引用稳定（审计 P-7b）：
+  // 内联箭头函数会让 SftpSyncDialog 在父组件每次渲染时退订/重订 sftp-sync-progress 事件。
+  const syncFinishedRef = useRef<() => void>(() => {})
+  syncFinishedRef.current = () => void loadDirectory()
+  const handleSyncFinished = useMemo(() => () => syncFinishedRef.current(), [])
 
   const openInTerminal = async () => {
     setError(null)
@@ -140,12 +164,15 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     let skipped = 0
     const failed: string[] = []
     try {
-      // 目录列表可能已经过期，重新拉一份用来判断同名覆盖，失败则退化为「不提示」。
-      let existingNames = new Set<string>()
+      // 目录列表可能已经过期，重新拉一份用来判断同名覆盖。拉取失败必须中止：
+      // 退化为「当作空目录」会让同名文件跳过覆盖确认直接覆盖远端文件（审计 B-5）。
+      let existingNames: Set<string>
       try {
         existingNames = new Set((await sftpList(sessionId, path)).map((entry) => entry.name))
-      } catch {
-        existingNames = new Set()
+      } catch (err) {
+        recordAudit('sftp.batch-upload', path, 'failure', t('同名检查目录列表拉取失败，已中止上传'))
+        setError(asMessage(err, t('无法确认远端同名文件（目录列表拉取失败），已中止上传以防误覆盖')))
+        return
       }
       for (const file of files) {
         if (existingNames.has(file.name)) {
@@ -341,8 +368,17 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     if (entry.kind !== 'file') return
     setBusy(true)
     setError(null)
+    let data: Uint8Array
     try {
-      const data = await sftpReadFile(sessionId, entry.path)
+      // 读取与解码分开捕获（审计 R-6）：网络/权限失败不应误报成「非 UTF-8 文件」。
+      data = await sftpReadFile(sessionId, entry.path)
+    } catch (err) {
+      recordAudit('sftp.read', entry.path, 'failure', t('读取远程文件'))
+      setError(asMessage(err, t('读取远程文件失败')))
+      setBusy(false)
+      return
+    }
+    try {
       setEditor({ entry, text: new TextDecoder('utf-8', { fatal: true }).decode(data) })
     } catch {
       setError(t('无法作为 UTF-8 文本打开该文件，请使用下载操作处理二进制文件。'))
@@ -600,7 +636,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           sessionId={sessionId}
           remoteDir={path}
           onClose={() => setSyncOpen(false)}
-          onFinished={() => void loadDirectory()}
+          onFinished={handleSyncFinished}
         />
       )}
     </SftpDropZone>

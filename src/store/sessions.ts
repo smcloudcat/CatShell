@@ -128,18 +128,36 @@ function bytesFromChannel(data: unknown): Uint8Array {
 // so SSH events are subscribed exactly once.
 let initializationPromise: Promise<void> | null = null
 
-/** 为单个会话建立终端输出 IPC Channel（原始字节）。id 在 invoke 返回后回填。 */
-function createOutputChannel(idBox: { id: number }): SshOutputChannel {
+/** 为单个会话建立终端输出 IPC Channel（原始字节）。
+ *  sshConnect 的 Promise resolve 之前 Rust 侧就可能开始推流（banner/MOTD），
+ *  此时真实 id 未知：字节先缓冲在闭包队列，id 回填后 flush（审计 P-5），
+ *  避免这些输出被记到 id=0 丢失。 */
+function createOutputChannel(idBox: { id: number }): { channel: SshOutputChannel; flush: () => void } {
   const channel = new Channel<ArrayBuffer | number[]>()
-  channel.onmessage = (data) => {
-    const bytes = bytesFromChannel(data)
-    if (!bytes.length) return
+  const pending: Uint8Array[] = []
+  const deliver = (bytes: Uint8Array) => {
     appendSessionLog(idBox.id, bytes)
     recordOutput(idBox.id, bytes)
     const term = useSessions.getState().terminals[idBox.id]
     if (term) term.write(bytes)
   }
-  return channel
+  channel.onmessage = (data) => {
+    const bytes = bytesFromChannel(data)
+    if (!bytes.length) return
+    if (!idBox.id) {
+      // id 未回填：缓冲等待 flush；上限防异常洪泛。
+      if (pending.length < 64) pending.push(bytes)
+      return
+    }
+    deliver(bytes)
+  }
+  return {
+    channel,
+    flush: () => {
+      const queue = pending.splice(0, pending.length)
+      for (const bytes of queue) deliver(bytes)
+    }
+  }
 }
 
 export const useSessions = create<SessionsState>((set, get) => ({
@@ -262,14 +280,16 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
   open: async (request: ConnectRequest, hostId?: string) => {
     const idBox: { id: number } = { id: 0 }
+    const output = createOutputChannel(idBox)
     let id: number
     try {
-      id = await sshConnect(request, createOutputChannel(idBox))
+      id = await sshConnect(request, output.channel)
     } catch (error) {
       recordAudit('session.connect', `${request.host}:${request.port}`, 'failure', '连接请求失败')
       throw error
     }
     idBox.id = id
+    output.flush()
     recordAudit('session.connect', `${request.name} (${request.host}:${request.port})`, 'info', '已提交连接请求')
     set((s) => {
       const existing = s.sessions[id]
@@ -300,8 +320,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const info = get().sessions[id]
     if (!request || !info) throw new AppError(ERROR_CODES.SESSION_MISSING_CONNECTION_PARAMS)
     const idBox: { id: number } = { id: 0 }
-    const newId = await sshConnect(request, createOutputChannel(idBox))
+    const output = createOutputChannel(idBox)
+    const newId = await sshConnect(request, output.channel)
     idBox.id = newId
+    output.flush()
     recordAudit('session.connect', `${info.name} (${info.host}:${info.port})`, 'info', '从已断开标签重新连接')
     set((s) => {
       const sessions = { ...s.sessions }
@@ -315,6 +337,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       delete terminals[id]
       delete hostIds[id]
       delete connectedAt[id]
+      // 旧会话的输出日志缓冲一并释放，频繁重连不再累积（审计 P-4）。
+      clearSessionLog(id)
       sessions[newId] = {
         id: newId,
         name: info.name,

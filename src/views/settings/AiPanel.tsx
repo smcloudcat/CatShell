@@ -28,7 +28,7 @@ export function AiPanel() {
         <Icon name="sparkles" size={15} /> {t('AI 助手')}
       </h3>
       <p className="settings-hint">
-        {t('配置任意 OpenAI 兼容接口（终端页「AI」按钮的命令生成与日志诊断走此配置）。密钥只保存在本机配置文件，随请求直连你填写的接口；CatShell 不内置任何模型服务。')}
+        {t('配置任意 OpenAI 兼容接口（终端页「AI」按钮的命令生成与日志诊断走此配置）。密钥保存在系统凭据管理器，随请求直连你填写的接口；CatShell 不内置任何模型服务。')}
       </p>
       <label className="settings-row">
         <span>{t('接口地址')}</span>

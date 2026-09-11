@@ -171,9 +171,11 @@ fn validate_relative_path(raw: &str) -> Result<String, String> {
     if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
         return Err(format!("同步相对路径含非法分隔符: {path}"));
     }
+    // 括号修正运算符优先级（审计 R-4）：原写法解析为 `.. || (empty && has("//"))`，
+    // 尾随空段（如 "a/"）会被放行；现在空段一律拒绝。
     if path
         .split('/')
-        .any(|segment| segment == ".." || segment.is_empty() && path.contains("//"))
+        .any(|segment| segment == ".." || segment.is_empty())
     {
         return Err(format!("同步相对路径含上跳或空段: {path}"));
     }
@@ -346,6 +348,41 @@ fn direction_of(direction: &str) -> Result<&'static str, String> {
     }
 }
 
+/// 本地目录树扫描（含存在性校验）统一走阻塞线程池：
+/// `std::fs` 递归遍历在网络盘/慢盘上可阻塞 tokio worker 数秒到数分钟，
+/// 期间同 worker 的其他 command（终端输出 flush、心跳）全部停摆（审计 B-8）。
+async fn scan_local_dir_blocking(
+    local_path: PathBuf,
+) -> Result<BTreeMap<String, TreeNode>, String> {
+    tokio::task::spawn_blocking(move || {
+        let meta =
+            std::fs::metadata(&local_path).map_err(|error| format!("读取本地目录失败: {error}"))?;
+        if !meta.is_dir() {
+            return Err("本地路径不是一个目录".to_string());
+        }
+        let mut map = BTreeMap::new();
+        let mut budget = SYNC_MAX_ENTRIES;
+        scan_local_dir(&local_path, &mut map, &mut budget)?;
+        Ok(map)
+    })
+    .await
+    .map_err(|error| format!("本地目录扫描任务失败: {error}"))?
+}
+
+/// 汇总待传输字节数。entry.size 来自 IPC 反序列化，无上限保证，
+/// 普通 `.sum()` 遇异常输入会溢出（debug panic / release 回绕）（审计 B-9）。
+fn sum_transfer_bytes(entries: &[SyncPlanEntry]) -> Result<u64, String> {
+    let mut total: u64 = 0;
+    for entry in entries {
+        if entry.action == "add" || entry.action == "update" {
+            total = total
+                .checked_add(entry.size)
+                .ok_or_else(|| "同步计划总字节数溢出，条目 size 异常".to_string())?;
+        }
+    }
+    Ok(total)
+}
+
 impl SshManager {
     /// 生成同步计划：扫描源/目标两侧目录树并产出差异动作清单。
     pub async fn sftp_sync_plan(
@@ -362,17 +399,10 @@ impl SshManager {
             return Err("本地目录路径为空".to_string());
         }
         let local_path = PathBuf::from(&local_dir);
-        let meta =
-            std::fs::metadata(&local_path).map_err(|error| format!("读取本地目录失败: {error}"))?;
-        if !meta.is_dir() {
-            return Err("本地路径不是一个目录".to_string());
-        }
 
         let (source, target) = match direction {
             SYNC_UPLOAD => {
-                let mut local_map = BTreeMap::new();
-                let mut budget = SYNC_MAX_ENTRIES;
-                scan_local_dir(&local_path, &mut local_map, &mut budget)?;
+                let local_map = scan_local_dir_blocking(local_path).await?;
                 let sftp = self.open_sftp_channel(id).await?;
                 let mut remote_map = BTreeMap::new();
                 let mut budget = SYNC_MAX_ENTRIES;
@@ -388,9 +418,7 @@ impl SshManager {
                 let scan = scan_remote_dir(&sftp, &remote_dir, &mut remote_map, &mut budget).await;
                 let _ = sftp.close().await;
                 scan?;
-                let mut local_map = BTreeMap::new();
-                let mut budget = SYNC_MAX_ENTRIES;
-                scan_local_dir(&local_path, &mut local_map, &mut budget)?;
+                let local_map = scan_local_dir_blocking(local_path).await?;
                 (remote_map, local_map)
             }
         };
@@ -404,11 +432,7 @@ impl SshManager {
             .iter()
             .filter(|entry| entry.action == "skip")
             .count();
-        let total_bytes = entries
-            .iter()
-            .filter(|entry| entry.action == "add" || entry.action == "update")
-            .map(|entry| entry.size)
-            .sum();
+        let total_bytes = sum_transfer_bytes(&entries)?;
         Ok(SyncPlan {
             session_id: id,
             direction: direction.to_string(),
@@ -459,23 +483,28 @@ impl SshManager {
             .iter()
             .filter(|entry| entry.action == "add" || entry.action == "update")
             .count();
-        let total_bytes = validated
-            .iter()
-            .filter(|entry| entry.action == "add" || entry.action == "update")
-            .map(|entry| entry.size)
-            .sum();
+        let total_bytes = sum_transfer_bytes(&validated)?;
 
-        {
-            let jobs = self.sync_jobs.lock().await;
+        let job = {
+            let mut jobs = self.sync_jobs.lock().await;
             if jobs.contains_key(&id) {
                 return Err("该会话已有同步任务在进行".to_string());
             }
-        }
-        let job = SyncJob::new(id);
-        self.sync_jobs.lock().await.insert(id, job.clone());
+            let job = SyncJob::new(id);
+            jobs.insert(id, job.clone());
+            job
+        };
 
         // 会话在校验阶段先确认可用，避免任务起跑即失败。
-        let sftp = self.open_sftp_channel(id).await?;
+        // 开通道失败必须回滚占坑条目，否则该会话的同步功能会被
+        // 「已有同步任务在进行」永久拒绝直到重启（审计 B-2）。
+        let sftp = match self.open_sftp_channel(id).await {
+            Ok(sftp) => sftp,
+            Err(error) => {
+                self.sync_jobs.lock().await.remove(&id);
+                return Err(error);
+            }
+        };
         let session_id = id;
         tauri::async_runtime::spawn(async move {
             run_sync_job(

@@ -9,6 +9,18 @@ export interface AiChatMessage {
 }
 
 /**
+ * AI apiKey 存取系统凭据管理器（审计 S-2）。
+ * Rust 侧走 keyring（Windows Credential Manager），app-settings.json 不落明文。
+ */
+export function aiKeySave(key: string): Promise<void> {
+  return invoke<void>('ai_key_save', { key })
+}
+
+export function aiKeyLoad(): Promise<string | null> {
+  return invoke<string | null>('ai_key_load')
+}
+
+/**
  * 调用用户配置的 OpenAI 兼容接口。Rust 侧 `ai_complete` 无状态透传：
  * 端点/密钥/模型每次随请求传入，不落盘、不进审计、不进日志。
  */

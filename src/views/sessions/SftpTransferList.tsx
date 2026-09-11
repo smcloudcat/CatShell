@@ -27,7 +27,11 @@ function TransferRow({ transfer, sessionId }: { transfer: TransferProgress; sess
   const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
   const requestCancel = () => {
     if (transfer.disk) {
-      void sftpDiskTransferCancel(transfer.id).catch(() => undefined)
+      // 取消失败必须提示（审计 R-7）：否则传输行一直挂着，用户误以为已取消。
+      void sftpDiskTransferCancel(transfer.id).catch((err: unknown) => {
+        showToast(typeof err === 'string' && err ? err : t('取消传输失败'), 'error')
+        recordAudit('sftp.transfer-cancel', transfer.name, 'failure', t('取消磁盘级传输失败'))
+      })
       return
     }
     cancelFlags.add(transfer.id)
@@ -35,7 +39,10 @@ function TransferRow({ transfer, sessionId }: { transfer: TransferProgress; sess
   const changeLimit = (kbs: number) => {
     updateTransfer(sessionId, transfer.id, transfer.transferred, { speedLimitKBs: kbs })
     if (transfer.disk) {
-      void sftpDiskTransferSetLimit(transfer.id, kbs).catch(() => undefined)
+      void sftpDiskTransferSetLimit(transfer.id, kbs).catch((err: unknown) => {
+        showToast(typeof err === 'string' && err ? err : t('设置限速失败'), 'error')
+        recordAudit('sftp.transfer-limit', transfer.name, 'failure', t('设置传输限速失败'))
+      })
     }
   }
   return (

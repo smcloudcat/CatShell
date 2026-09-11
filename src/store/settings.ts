@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { ThemeConfig, DEFAULT_THEME, withModeBackgrounds } from '../types/theme'
 import { logger } from '../utils/logger'
+import { aiKeyLoad, aiKeySave } from '../api/ai'
 
 const STORE_FILE = 'app-settings.json'
 const THEME_KEY = 'theme'
@@ -55,7 +56,7 @@ export const DEFAULT_MONITOR_INTERVAL_SECONDS = 10
 export interface AiSettings {
   /** OpenAI 兼容接口基础地址（不含 /chat/completions） */
   endpoint: string
-  /** 接口密钥；明文存本机 app-settings.json，绝不发送到 CatShell 之外的遥测 */
+  /** 接口密钥；仅存内存，持久化经系统凭据管理器（审计 S-2），app-settings.json 永远写空串 */
   apiKey: string
   model: string
   /** 终端高危命令确认开关（本地规则，与 AI 接口无关） */
@@ -176,12 +177,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setAi: (patch) => set((state) => ({ ai: { ...state.ai, ...patch } })),
   saveAi: async () => {
     const ai = get().ai
+    // apiKey 只进系统凭据管理器（审计 S-2），app-settings.json / localStorage 一律写空。
+    const persistable = { ...ai, apiKey: '' }
     try {
       const store = await load(STORE_FILE)
-      await store.set(AI_KEY, ai)
+      await store.set(AI_KEY, persistable)
       await store.save()
     } catch {
-      localStorage.setItem(AI_KEY, JSON.stringify(ai))
+      localStorage.setItem(AI_KEY, JSON.stringify(persistable))
+    }
+    try {
+      await aiKeySave(ai.apiKey)
+    } catch (err) {
+      logger.warn('保存 AI 密钥到系统凭据管理器失败', err)
     }
   },
   setTheme: (patch) => set((state) => ({ theme: { ...state.theme, ...patch } })),
@@ -388,6 +396,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (savedAi && typeof savedAi === 'object') {
         set({ ai: normalizeAiSettings(savedAi) })
+        // 旧版本曾把 apiKey 明文写进 app-settings.json（审计 S-2）：
+        // 迁移到系统凭据管理器后立刻重写持久化，把磁盘上的明文抹掉。
+        const legacyKey = get().ai.apiKey
+        if (legacyKey) void get().saveAi()
       }
       if (savedPanels && typeof savedPanels === 'object') {
         set({ sessionPanels: normalizeSessionPanels(savedPanels) })
@@ -509,7 +521,28 @@ export const useSettings = create<SettingsState>((set, get) => ({
       if (savedLanguageRaw === 'zh-CN' || savedLanguageRaw === 'en-US') {
         set({ language: savedLanguageRaw })
       }
+      // AI 设置兜底读回（审计 R-5）：saveAi 在非 Tauri 环境只写 localStorage，
+      // 此前 init 没读它，导致浏览器预览模式下 AI 配置每次启动丢失。
+      const savedAiRaw = localStorage.getItem(AI_KEY)
+      if (savedAiRaw) {
+        try {
+          const parsed: unknown = JSON.parse(savedAiRaw)
+          if (parsed && typeof parsed === 'object') {
+            set({ ai: normalizeAiSettings(parsed) })
+          }
+        } catch {
+          /* ignore corrupt stored AI settings */
+        }
+      }
     } finally {
+      // apiKey 从系统凭据管理器回填内存（审计 S-2）：
+      // 持久化里永远是空串，真实密钥只在启动时读进内存。非 Tauri 环境忽略失败。
+      try {
+        const key = await aiKeyLoad()
+        if (key && !get().ai.apiKey) set({ ai: { ...get().ai, apiKey: key } })
+      } catch {
+        /* 非 Tauri 环境或读取失败：内存 apiKey 保持空 */
+      }
       set({ ready: true })
     }
     })()

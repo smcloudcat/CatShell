@@ -687,6 +687,37 @@ struct AiChatMessage {
     content: String,
 }
 
+/// AI apiKey 存取走系统凭据管理器（审计 S-2）：
+/// Windows Credential Manager（keyring），app-settings.json 不再明文落盘。
+/// 同步 command：Tauri 在专用线程执行，不占 async runtime worker。
+fn ai_keyring_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("CatShell", "ai-api-key")
+        .map_err(|error| format!("初始化系统凭据管理器失败: {error}"))
+}
+
+#[tauri::command]
+fn ai_key_save(key: String) -> Result<(), String> {
+    let entry = ai_keyring_entry()?;
+    if key.is_empty() {
+        // 删除失败（本就不存在）不算错。
+        let _ = entry.delete_credential();
+        return Ok(());
+    }
+    entry
+        .set_password(&key)
+        .map_err(|error| format!("保存 AI 密钥失败: {error}"))
+}
+
+#[tauri::command]
+fn ai_key_load() -> Result<Option<String>, String> {
+    let entry = ai_keyring_entry()?;
+    match entry.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("读取 AI 密钥失败: {error}")),
+    }
+}
+
 /// 调用用户配置的 OpenAI 兼容 `/chat/completions` 接口（AI 辅助，6.17）。
 /// 无状态透传：CatShell 不内置任何模型服务，网络与凭据行为完全由用户配置决定。
 #[tauri::command]
@@ -694,6 +725,10 @@ async fn ai_complete(request: AiCompleteRequest) -> Result<String, String> {
     let endpoint = request.endpoint.trim().trim_end_matches('/').to_string();
     if endpoint.is_empty() {
         return Err("AI 接口地址未配置".to_string());
+    }
+    // Bearer 密钥随请求头外发，明文 HTTP 等于裸奔（审计 S-3）。
+    if !endpoint.starts_with("https://") {
+        return Err("AI 接口地址必须使用 https://".to_string());
     }
     if request.model.trim().is_empty() {
         return Err("AI 模型名未配置".to_string());
@@ -1106,6 +1141,8 @@ pub fn run() {
             sftp_disk_transfer_list,
             tray_set_active_count,
             ai_complete,
+            ai_key_save,
+            ai_key_load,
             cli_launch_request,
             tray_set_quick_connects
         ])

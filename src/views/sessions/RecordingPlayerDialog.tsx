@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
@@ -33,12 +33,18 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
   const timerRef = useRef<number | null>(null)
   const cursorRef = useRef(0)
   const elapsedRef = useRef(0)
+  // 倍速用 ref 供播放循环读取：state 只驱动按钮高亮，闭包拿不到最新值（审计 B-6）。
+  const speedRef = useRef<(typeof SPEEDS)[number]>(1)
+  // 分帧重写的代次守卫：seek/重新播放后旧批次立即作废（审计 P-2）。
+  const replaySeqRef = useRef(0)
+  const seekTimerRef = useRef<number | null>(null)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1)
   const [elapsedSec, setElapsedSec] = useState(0)
   const [finished, setFinished] = useState(false)
 
-  const timeline = playbackTimeline(doc.events)
+  // 事件数万条时 filter+sort 不便宜；doc 不变则时间轴不变（审计 P-1）。
+  const timeline = useMemo(() => playbackTimeline(doc.events), [doc])
   const totalSec = asciicastDuration(timeline)
   const header = doc.header
   const rows = header?.height ?? 24
@@ -62,6 +68,8 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
       timerRef.current = null
+      if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current)
+      seekTimerRef.current = null
       term.dispose()
       termRef.current = null
     }
@@ -71,19 +79,34 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
   const clearAndReplay = (upToIndex: number, withDelay: boolean) => {
     const term = termRef.current
     if (!term) return
+    // 长录制从中间 seek 会同步写数万条事件阻塞主线程（审计 P-2）：
+    // 分批写入，批间让出事件循环；代次守卫保证旧批次在新的 seek/播放后立即作废。
+    const seq = ++replaySeqRef.current
     term.reset()
     cursorRef.current = 0
     elapsedRef.current = 0
     setElapsedSec(0)
     setFinished(false)
     if (!withDelay) {
-      for (let i = 0; i < upToIndex; i += 1) {
-        const event = timeline[i]
-        if (event) term.write(event.data)
+      const BATCH = 2000
+      let written = 0
+      const writeBatch = () => {
+        if (seq !== replaySeqRef.current) return
+        const end = Math.min(written + BATCH, upToIndex)
+        for (let i = written; i < end; i += 1) {
+          const event = timeline[i]
+          if (event) term.write(event.data)
+        }
+        written = end
+        if (written < upToIndex) {
+          timerRef.current = window.setTimeout(writeBatch, 0)
+          return
+        }
+        cursorRef.current = upToIndex
+        elapsedRef.current = timeline[upToIndex - 1]?.time ?? 0
+        setElapsedSec(elapsedRef.current)
       }
-      cursorRef.current = upToIndex
-      elapsedRef.current = timeline[upToIndex - 1]?.time ?? 0
-      setElapsedSec(elapsedRef.current)
+      writeBatch()
     }
   }
 
@@ -103,7 +126,8 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
       setFinished(true)
       return
     }
-    const waitMs = Math.max(0, (event.time - elapsedRef.current) * 1000) / speed
+    const waitMs =
+      Math.max(0, (event.time - elapsedRef.current) * 1000) / speedRef.current
     timerRef.current = window.setTimeout(() => {
       term.write(event.data)
       elapsedRef.current = event.time
@@ -129,6 +153,7 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
 
   const changeSpeed = (next: (typeof SPEEDS)[number]) => {
     setSpeed(next)
+    speedRef.current = next
     if (playing) {
       stopTimer()
       scheduleNext()
@@ -136,12 +161,17 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
   }
 
   const seekTo = (seconds: number) => {
-    stopTimer()
-    setPlaying(false)
-    // 找到第一个时间 >= 目标的事件下标
-    let index = 0
-    while (index < timeline.length && timeline[index]!.time < seconds) index += 1
-    clearAndReplay(index, false)
+    // range 拖动会高频触发 onChange，合并 60ms 内的连续 seek，末值生效。
+    if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current)
+    seekTimerRef.current = window.setTimeout(() => {
+      seekTimerRef.current = null
+      stopTimer()
+      setPlaying(false)
+      // 找到第一个时间 >= 目标的事件下标
+      let index = 0
+      while (index < timeline.length && timeline[index]!.time < seconds) index += 1
+      clearAndReplay(index, false)
+    }, 60)
   }
 
   const formatClock = (seconds: number) => {

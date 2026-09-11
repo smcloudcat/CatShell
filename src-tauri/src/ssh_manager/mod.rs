@@ -71,6 +71,8 @@ pub struct ActiveSession {
     pub write: Mutex<Option<ChannelWriteHalf<russh::client::Msg>>>,
     pub output: Option<Arc<dyn RawOutput>>,
     pub manual_closed: AtomicBool,
+    /// 终端输出 IPC 通道发送失败计数（诊断用，见 dispatch_output）。
+    pub dropped_outputs: AtomicU64,
 }
 
 /// P2-7：`ActiveSession` 的生命周期依赖 Arc 归零，一旦外部仍持有 `Arc`（前端回调、
@@ -229,7 +231,21 @@ fn emit_output(sink: &dyn EventSink, id: u64, data: Vec<u8>) {
 fn dispatch_output(sink: &dyn EventSink, session: &ActiveSession, data: Vec<u8>) {
     match &session.output {
         Some(raw) => {
-            let _ = raw.send_bytes(data);
+            // IPC Channel 关闭/拥塞时输出会整块丢弃，用户表现为「命令执行了但没输出」。
+            // 至少计数并在丢满一批时 warn，让日志可追查（审计 R-3）。
+            if raw.send_bytes(data).is_err() {
+                let dropped = session
+                    .dropped_outputs
+                    .fetch_add(1, Ordering::Relaxed)
+                    .wrapping_add(1);
+                if dropped == 1 || dropped.is_multiple_of(100) {
+                    tracing::warn!(
+                        session_id = session.session_id,
+                        dropped,
+                        "终端输出 IPC 通道发送失败，输出被丢弃"
+                    );
+                }
+            }
         }
         None => emit_output(sink, session.session_id, data),
     }
@@ -826,8 +842,12 @@ async fn open_shell(
                 tunnel = Some(channel);
                 established.push(hop_session);
             }
+            // 不用 expect（审计 R-1）：依赖 collect_chain 语义的隐式不变式一旦变化，
+            // panic=abort 会崩掉整个应用且 sessions 条目来不及清理。
             let final_stream = tunnel
-                .expect("跳板链非空时必然留有最后一跳开出的隧道通道")
+                .ok_or_else(|| {
+                    ConnectError::transient("跳板链为空但代码走到了隧道分支".to_string())
+                })?
                 .into_stream();
             let tunneled = tokio::time::timeout(
                 CONNECT_TIMEOUT,
@@ -1070,6 +1090,8 @@ async fn run_session(
     );
     emit_status(sink.as_ref(), id, "closed", final_reason, 0);
     manager.stop_forwards_for_session(id).await;
+    // 自然收尾路径此前漏了传输/同步取消，磁盘级传输要等 10 分钟 idle 回收（审计 B-4）。
+    manager.cancel_transfers_for_session(id).await;
     {
         let mut sessions = manager.sessions.lock().await;
         sessions.remove(&id);
@@ -1154,6 +1176,11 @@ impl SshManager {
         for transfer in disk {
             transfer.cancelled.store(true, Ordering::SeqCst);
         }
+
+        // 会话关闭时同样取消目录同步任务（审计 B-4）：否则 sync job 会拿着
+        // 已死的 SftpSession 把剩余条目（至多 20 000 个）逐个跑失败，
+        // 并持续向前端已离开的会话 emit sftp-sync-progress。
+        self.sftp_sync_cancel(session_id).await;
     }
 
     pub async fn confirm_host_key(&self, token: String, accepted: bool) -> Result<(), String> {
@@ -1224,6 +1251,7 @@ impl SshManager {
             write: Mutex::new(None),
             output,
             manual_closed: AtomicBool::new(false),
+            dropped_outputs: AtomicU64::new(0),
         });
         // 只记录连接目标与认证方式，绝不记录凭据（redacted_summary 已剔除口令字段）。
         tracing::info!(session_id = id, target = %session.creds.redacted_summary(), "建立会话");

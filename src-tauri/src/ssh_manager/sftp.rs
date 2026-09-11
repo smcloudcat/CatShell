@@ -491,10 +491,11 @@ pub fn validate_sftp_path(path: String) -> Result<String, String> {
 
 impl SshManager {
     pub async fn sftp_list(&self, id: u64, path: String) -> Result<Vec<SftpEntry>, String> {
+        // 空 path 兜底为当前目录；其余与其他 SFTP 方法统一走路径校验（审计 S-5）。
         let path = if path.trim().is_empty() {
             ".".to_string()
         } else {
-            path
+            validate_sftp_path(path)?
         };
         let sftp = self.open_sftp_channel(id).await?;
         let entries = sftp
@@ -540,6 +541,18 @@ impl SshManager {
     pub async fn sftp_read_file(&self, id: u64, path: String) -> Result<Vec<u8>, String> {
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
+        // 必须先查元数据再读：`sftp.read` 会把远端文件完整读进内存，
+        // 事后校验上限挡不住 10 GB 文件把内存吃满（审计 S-1）。
+        let size = sftp
+            .metadata(&path)
+            .await
+            .map_err(|error| format!("读取远程文件信息失败: {error}"))?
+            .size
+            .unwrap_or(0);
+        if size > MAX_SFTP_FILE_SIZE as u64 {
+            let _ = sftp.close().await;
+            return Err("文件超过 64 MB 下载限制".to_string());
+        }
         let data = sftp
             .read(path)
             .await
@@ -1224,16 +1237,46 @@ impl SshManager {
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
                         }
-                        // 半成品还原为目标名；SSH_FXP_RENAME 不允许覆盖时先移除旧目标文件。
+                        // 半成品还原为目标名。SSH_FXP_RENAME 不允许覆盖时才删旧目标重试
+                        // （先确认目标存在再删，防止误删；重试失败时半成品文件仍在，
+                        //  尽力把它还原回目标名，避免「旧文件已删、新文件卡在 .part」（审计 B-3）。
                         if sftp
                             .rename(&part_path, &transfer.remote_path)
                             .await
                             .is_err()
                         {
-                            let _ = sftp.remove_file(&transfer.remote_path).await;
+                            let target_exists = sftp.metadata(&transfer.remote_path).await.is_ok();
+                            if !target_exists {
+                                transfer.finish_with_error(format!(
+                                    "保存远程文件失败：无法将半成品 {} 还原为 {}（目标不存在且 rename 被拒绝）",
+                                    part_path, transfer.remote_path
+                                ));
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
+                            if let Err(error) = sftp.remove_file(&transfer.remote_path).await {
+                                transfer.finish_with_error(format!(
+                                    "保存远程文件失败：目标已存在且无法删除旧文件: {error}"
+                                ));
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
                             if let Err(error) = sftp.rename(&part_path, &transfer.remote_path).await
                             {
-                                transfer.finish_with_error(format!("保存远程文件失败: {error}"));
+                                // 旧目标已删、新文件还是半成品名：再试一次把它归位。
+                                let restored =
+                                    sftp.rename(&part_path, &transfer.remote_path).await.is_ok();
+                                transfer.finish_with_error(format!(
+                                    "保存远程文件失败: {error}{}",
+                                    if restored {
+                                        String::new()
+                                    } else {
+                                        format!(
+                                            "（旧目标文件已被删除，本次上传内容保留在 {}）",
+                                            part_path
+                                        )
+                                    }
+                                ));
                                 emit_disk_progress(sink.as_ref(), &transfer, true);
                                 break;
                             }

@@ -118,3 +118,8 @@ export function withModeBackgrounds(theme: ThemeConfig, mode: AppearanceMode): T
     backgroundImage: stock.backgroundImage
   }
 }
+
+/** CSS url() 值只允许本地路径中出现的安全字符，拒绝引号、逗号、分号等可逃逸字符。 */
+export function isSafeBackgroundImage(value: string): boolean {
+  return value.length > 0 && value.length <= 500 && !/["`,;()\n\r\\]/.test(value)
+}

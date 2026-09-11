@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { useVirtualWindow } from '../../components/useVirtualWindow'
 import { sshKillProcess, sshMonitor, sshNetworkDiagnostic, sshPing, sshProcesses } from '../../api/ssh'
 import { useSessions } from '../../store/sessions'
 import { useSettings, MONITOR_INTERVAL_OPTIONS } from '../../store/settings'
@@ -59,6 +60,13 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
+  // 繁忙服务器进程数百条，每行含按钮/图标：>50 行启用窗口化渲染（审计 P-3），
+  // 行高恒定 36px+border，与 monitor.css 的 .process-row 保持一致。
+  const { containerRef: processListRef, window: vwin } = useVirtualWindow({
+    itemCount: processes.length,
+    itemHeight: 37,
+    enabled: processes.length > 50
+  })
   const [processBusy, setProcessBusy] = useState(false)
   const [processError, setProcessError] = useState<string | null>(null)
   const [diagnosticKind, setDiagnosticKind] = useState<'ping' | 'trace'>('ping')
@@ -183,7 +191,9 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
   const diskUsedPercent = metrics ? percent(metrics.diskUsedKb, metrics.diskTotalKb) : 0
   const memoryUsedPercent = metrics ? percent(memoryUsed, metrics.memoryTotalKb) : 0
 
-  const rate = (() => {
+  // 速率计算读 ref、写入挪到 effect（审计 P-7c）：render 期间写 ref 会在
+  // StrictMode 双渲染下用同一 metrics 覆盖上一份采样，速率显示丢一次变「—」。
+  const rate = useMemo(() => {
     if (!metrics) return null
     const previous = lastRate.current
     if (!previous || metrics.networkRxBytes < previous.rx || metrics.networkTxBytes < previous.tx) {
@@ -195,10 +205,12 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
       rx: (metrics.networkRxBytes - previous.rx) / seconds,
       tx: (metrics.networkTxBytes - previous.tx) / seconds
     }
-  })()
-  if (metrics) {
-    lastRate.current = { at: metrics.collectedAt, rx: metrics.networkRxBytes, tx: metrics.networkTxBytes }
-  }
+  }, [metrics])
+  useEffect(() => {
+    if (metrics) {
+      lastRate.current = { at: metrics.collectedAt, rx: metrics.networkRxBytes, tx: metrics.networkTxBytes }
+    }
+  }, [metrics])
 
   const memorySparkline = sparkline(history.map((item) => percent(item.memoryTotalKb - item.memoryAvailableKb, item.memoryTotalKb)))
   const cpuSparkline = sparkline(
@@ -338,8 +350,11 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
                 </div>
               </div>
               <div className="process-list-head"><span>{t('进程')}</span><span>CPU</span><span>{t('内存')}</span><span /></div>
-              <div className="process-list">
-                {processes.map((process) => (
+              <div className="process-list" ref={processListRef}>
+                {vwin.virtualized && vwin.paddingTop > 0 && (
+                  <div style={{ height: vwin.paddingTop }} aria-hidden="true" />
+                )}
+                {processes.slice(vwin.start, vwin.end).map((process) => (
                   <div className="process-row" key={process.pid}>
                     <span title={process.name}>{process.pid} · {process.name}</span>
                     <span>{process.cpuPercent.toFixed(1)}%</span>
@@ -347,6 +362,9 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
                     <button className="host-icon-btn danger" disabled={processBusy} onClick={() => void killProcess(process)} title={t('终止进程')}><Icon name="trash" size={13} /></button>
                   </div>
                 ))}
+                {vwin.virtualized && vwin.paddingBottom > 0 && (
+                  <div style={{ height: vwin.paddingBottom }} aria-hidden="true" />
+                )}
                 {!processes.length && !processError && <span className="monitor-panel-meta">{t('暂无进程数据')}</span>}
               </div>
               {processError && <div className="form-error">{processError}</div>}

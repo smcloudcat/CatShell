@@ -1,0 +1,25 @@
+fix: 批量修复审计问题（25/27 项，P1×4/P2×9/P3×12）
+
+数据安全:
+- S-1 sftp_read_file 先 metadata 后读，64MB 上限真正生效
+- S-2 apiKey 迁移系统凭据管理器（keyring 3），配置文件/localStorage 永远不落盘，旧明文自动迁移
+- S-3 ai_complete 强制 https 端点；S-4 背景图校验复用 isSafeBackgroundImage；S-5 sftp_list 校验
+- B-3 上传收尾 rename 失败仅确认目标存在才删旧重试；B-5 查重失败中止上传
+
+功能正确性:
+- B-1 SFTP 目录加载 requestId 竞态守卫
+- B-2 sync 开通道失败回滚 sync_jobs 占坑条目
+- B-4 会话关闭/删除三条路径取消同步任务
+- B-6 回放倍速 speedRef 播放中即时生效
+- B-7 closeTab 失败冒泡提示；B-9 total_bytes checked_add
+
+性能:
+- P-1 回放 timeline useMemo；P-2 seek 分帧写入（2000/批+代次守卫）
+- P-3 进程列表接入 useVirtualWindow；P-4 重连清理 sessionLog
+- P-5 输出 Channel id 回填前缓冲，banner/MOTD 不丢失
+- P-7a/b/c 零散渲染优化
+
+卫生项: R-1/R-3/R-4/R-5/R-6/R-7 已修；R-2/P-6 评估后暂缓（文档标注理由）
+
+测试基线: 前端 274 / Rust 101 全绿（sftp_e2e 断言随 S-1 文案放宽）；命令数 63
+文档: 新增 docs/CODE-AUDIT-2026-09-11.md 深度审计报告（含修复进度表）

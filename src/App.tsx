@@ -11,18 +11,18 @@ import { useSessionRestore } from './store/sessionRestore'
 import { useLaunchIntent } from './store/launchIntent'
 import { subscribeTrayQuickConnect, traySetQuickConnects } from './api/ssh'
 import { findProfileByName } from './utils/launchIntent'
+import { errorText } from './i18n/errors'
 import { useTransferQueue } from './store/transferQueue'
 import { connectHostQuick } from './store/hostConnect'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { CommandPalette } from './components/CommandPalette'
 import { PaletteCommand } from './utils/commandPalette'
-import { HostProfile } from './types/host'
 import { useVault } from './store/vault'
 import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
 import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
 import { useT } from './i18n'
-import { accentContrastOf, resolveMode, withModeBackgrounds } from './types/theme'
+import { accentContrastOf, isSafeBackgroundImage, resolveMode, withModeBackgrounds } from './types/theme'
 import './styles/glass.css'
 import './App.css'
 
@@ -119,14 +119,16 @@ function App() {
         showToast(`${t('未找到主机档案')}「${intent.name}」`, 'warning')
         return
       }
-      void connectHostQuick(host).then((result) => {
-        if (result === 'connected') {
-          setView('sessions')
-          return
-        }
-        setView('hosts')
-        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
-      })
+      void connectHostQuick(host)
+        .then((result) => {
+          if (result === 'connected') {
+            setView('sessions')
+            return
+          }
+          setView('hosts')
+          showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+        })
+        .catch((err: unknown) => showToast(errorText(err, t, '连接主机失败'), 'error'))
       return
     }
     setView('hosts')
@@ -141,14 +143,16 @@ function App() {
     void subscribeTrayQuickConnect((hostId) => {
       const host = useHosts.getState().hosts.find((item) => item.id === hostId)
       if (!host) return
-      void connectHostQuick(host).then((result) => {
-        if (result === 'connected') {
-          setView('sessions')
-          return
-        }
-        setView('hosts')
-        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
-      })
+      void connectHostQuick(host)
+        .then((result) => {
+          if (result === 'connected') {
+            setView('sessions')
+            return
+          }
+          setView('hosts')
+          showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+        })
+        .catch((err: unknown) => showToast(errorText(err, t, '连接主机失败'), 'error'))
     }).then((fn) => {
       if (disposed) fn()
       else unlisten = fn
@@ -306,9 +310,14 @@ function App() {
             if (!accepted) return
           }
           if (live) {
-            void state.disconnect(id)
+            // 失败需要提示（审计 B-7/R-7）：静默丢弃会让后端会话残留。
+            void state.disconnect(id).catch((err: unknown) =>
+              showToast(errorText(err, t, '断开连接失败'), 'error')
+            )
           }
-          void state.closeTab(id)
+          void state.closeTab(id).catch((err: unknown) =>
+            showToast(errorText(err, t, '关闭会话标签失败'), 'error')
+          )
         })()
         return
       }
@@ -322,7 +331,8 @@ function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [view])
+    // t 在依赖里：语言切换后确认弹窗文案才是当前语言（审计 R-7）。
+  }, [view, t])
 
   const sessionOrder = useSessions((s) => s.order)
   const sessionInfos = useSessions((s) => s.sessions)
@@ -375,18 +385,20 @@ function App() {
     }
     if (command.id.startsWith('host:')) {
       const hostId = command.id.slice(5)
-      const host: HostProfile | undefined = useHosts
+      const host = useHosts
         .getState()
         .hosts.find((item) => item.id === hostId)
       if (!host) return
-      void connectHostQuick(host).then((result) => {
-        if (result === 'connected') {
-          setView('sessions')
-          return
-        }
-        setView('hosts')
-        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
-      })
+      void connectHostQuick(host)
+        .then((result) => {
+          if (result === 'connected') {
+            setView('sessions')
+            return
+          }
+          setView('hosts')
+          showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+        })
+        .catch((err: unknown) => showToast(errorText(err, t, '连接主机失败'), 'error'))
       return
     }
     if (command.id.startsWith('session:')) {
@@ -438,7 +450,8 @@ function App() {
       } else {
         bg.classList.add('has-image')
         bg.style.background = 'none'
-        if (bgTheme.backgroundImage) {
+        // 校验逃逸字符（审计 S-4）：备份还原路径有该校验，主加载路径此前漏了。
+        if (bgTheme.backgroundImage && isSafeBackgroundImage(bgTheme.backgroundImage)) {
           bg.style.setProperty('--app-bg-image', `url("${bgTheme.backgroundImage}")`)
         }
       }

@@ -153,8 +153,9 @@ async fn sftp_missing_file_reports_error() {
         .sftp_read_file(id, "/nope.txt".to_string())
         .await
         .expect_err("读不存在的文件应失败");
+    // S-1 修复后先查 metadata 再读：文件不存在在 metadata 阶段即报错。
     assert!(
-        error.contains("读取远程文件失败"),
+        error.contains("读取远程文件信息失败") || error.contains("读取远程文件失败"),
         "错误信息应可诊断，got: {error}"
     );
 

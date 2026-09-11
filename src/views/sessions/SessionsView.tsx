@@ -112,9 +112,14 @@ export function SessionsView() {
   const handleCloseTab = (id: number) => {
     const status = sessions[id]?.status
     if (status === 'connected' || status === 'connecting' || status === 'reconnecting') {
-      void disconnect(id)
+      // 断开/关闭失败不能再静默（审计 B-7）：否则标签看似关闭、后端会话仍存活。
+      void disconnect(id).catch((err: unknown) =>
+        showToast(errorText(err, t, '断开连接失败'), 'error')
+      )
     }
-    void closeTab(id)
+    void closeTab(id).catch((err: unknown) =>
+      showToast(errorText(err, t, '关闭会话标签失败'), 'error')
+    )
   }
 
   const handleRename = (id: number, name: string) => {
@@ -226,16 +231,19 @@ export function SessionsView() {
     setBulkBusy(true)
     setBulkResult(null)
     let success = 0
+    const failedNames: string[] = []
     for (const id of targets) {
       try {
         await write(id, new TextEncoder().encode(`${command}\n`))
         success += 1
       } catch {
-        // 单台失败不影响其余目标，继续下发。
+        // 单台失败不影响其余目标，继续下发；但要留明细（审计 R-7）。
+        failedNames.push(sessions[id]?.name ?? `#${id}`)
       }
     }
     recordAudit('command.bulk-send', `${success}/${targets.length}`, success === targets.length ? 'success' : 'failure', t('批量发送命令'))
-    setBulkResult(t('已发送 ') + success + '/' + targets.length + t(' 个会话'))
+    const summary = t('已发送 ') + success + '/' + targets.length + t(' 个会话')
+    setBulkResult(failedNames.length ? `${summary}，${t('失败：')}${failedNames.join('、')}` : summary)
     setBulkBusy(false)
   }
 

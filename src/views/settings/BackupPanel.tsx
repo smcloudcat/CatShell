@@ -2,7 +2,7 @@ import { ChangeEvent } from 'react'
 import { Icon } from '../../components/Icon'
 import { HostProfile } from '../../types/host'
 import { CommandSnippet } from '../../types/snippet'
-import { ThemeConfig } from '../../types/theme'
+import { isSafeBackgroundImage, ThemeConfig } from '../../types/theme'
 import { AppError, ERROR_CODES } from '../../types/errors'
 import { useHosts } from '../../store/hosts'
 import { useSnippets } from '../../store/snippets'
@@ -22,11 +22,6 @@ interface BackupFile {
 }
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
-
-/** CSS url() 值只允许本地路径中出现的安全字符，拒绝引号、逗号、分号等可逃逸字符 */
-function isSafeBackgroundImage(value: string): boolean {
-  return value.length > 0 && value.length <= 500 && !/["`,;()\n\r\\]/.test(value)
-}
 
 /** 校验并归一化主题：兼容旧版（modeAuto + 字面量 mode）与新版（auto/light/dark）结构。
  *  旧版 modeAuto 的语义是按背景亮度推导出的字面量 mode，保留该字面量即可还原当时的实际外观。 */
