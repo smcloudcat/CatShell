@@ -1,4 +1,4 @@
-import { AuthMethod, ProxyConfigInput, normalizePort } from '../../types/session'
+import { AuthMethod, MAX_PROXY_HOPS, ProxyConfigInput, normalizePort } from '../../types/session'
 import { HostIconName, HostProfile, HostProxyProfile, normalizeHostIcon } from '../../types/host'
 
 /**
@@ -9,6 +9,21 @@ import { HostIconName, HostProfile, HostProxyProfile, normalizeHostIcon } from '
  * 2. 密码 / 私钥口令等敏感字段的取舍规则集中在一处，避免在保存与连接两条
  *    分支里各写一份而逐渐漂移。
  */
+
+/** 第 2 跳及以后的编辑形态：第 1 跳沿用平铺的 proxy* 字段，兼容旧数据与旧 UI。 */
+export interface ProxyFormHop {
+  host: string
+  port: string
+  username: string
+  authMethod: 'password' | 'key'
+  password: string
+  keyPath: string
+  passphrase: string
+}
+
+export function emptyProxyHop(): ProxyFormHop {
+  return { host: '', port: '22', username: '', authMethod: 'password', password: '', keyPath: '', passphrase: '' }
+}
 
 export interface ConnectFormState {
   name: string
@@ -33,6 +48,8 @@ export interface ConnectFormState {
   proxyPassword: string
   proxyKeyPath: string
   proxyPassphrase: string
+  /** 第 2 跳及以后（ProxyJump 链）。第 1 跳字段平铺在外层。 */
+  proxyNextHops: ProxyFormHop[]
 }
 
 export const CONNECT_FORM_EMPTY: ConnectFormState = {
@@ -57,7 +74,8 @@ export const CONNECT_FORM_EMPTY: ConnectFormState = {
   proxyAuthMethod: 'password',
   proxyPassword: '',
   proxyKeyPath: '',
-  proxyPassphrase: ''
+  proxyPassphrase: '',
+  proxyNextHops: []
 }
 
 /** 返回一份全新的空表单。共享常量只读，避免任何调用方原地改写污染其他人。 */
@@ -71,6 +89,21 @@ export function emptyConnectForm(): ConnectFormState {
  */
 export function connectFormFromProfile(profile?: HostProfile | null): ConnectFormState {
   if (!profile) return emptyConnectForm()
+  // 第 2 跳及以后从持久化链重建为编辑数组；密码 / 口令不回填（只在保险箱里）。
+  const nextHops: ProxyFormHop[] = []
+  let cursor = profile.proxy.next ?? null
+  while (cursor && nextHops.length < MAX_PROXY_HOPS - 1) {
+    nextHops.push({
+      host: cursor.host,
+      port: String(cursor.port),
+      username: cursor.username,
+      authMethod: cursor.authMethod,
+      password: '',
+      keyPath: cursor.keyPath ?? '',
+      passphrase: ''
+    })
+    cursor = cursor.next ?? null
+  }
   return {
     name: profile.name,
     icon: normalizeHostIcon(profile.icon),
@@ -93,7 +126,8 @@ export function connectFormFromProfile(profile?: HostProfile | null): ConnectFor
     proxyAuthMethod: profile.proxy.authMethod,
     proxyPassword: '',
     proxyKeyPath: profile.proxy.keyPath ?? '',
-    proxyPassphrase: ''
+    proxyPassphrase: '',
+    proxyNextHops: nextHops
   }
 }
 
@@ -158,46 +192,85 @@ export function validateForSave(form: ConnectFormState, keyPath: string): Connec
   return { ok: true }
 }
 
-/** 跳板机表单校验：只判断必填与范围，字段取舍交给 `buildConnectRequest`。 */
+/** 单跳（编辑形态）校验：只判断必填与范围。`hopKeyPath` 错误统一归到 proxyKeyPath。 */
+function validateHop(hop: ProxyFormHop): ConnectValidation {
+  if (!hop.host.trim()) return { ok: false, reason: 'proxyHost' }
+  if (!hop.username.trim()) return { ok: false, reason: 'proxyUsername' }
+  const port = Number(hop.port)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, reason: 'proxyPort' }
+  if (hop.authMethod === 'key' && !hop.keyPath.trim()) return { ok: false, reason: 'proxyKeyPath' }
+  return { ok: true }
+}
+
+/**
+ * 跳板链校验与组装：第 1 跳（平铺字段，凭据可能来自保险箱回填）+
+ * `form.proxyNextHops`（第 2 跳起，凭据随表单），逐跳校验后串成链。
+ * 组装出的链挂到 `buildConnectRequest` 做最终归一化。
+ */
 export function validateProxyInput(
   form: ConnectFormState,
   password: string,
   passphrase: string
 ): { ok: true; proxy: ProxyConfigInput | null } | { ok: false; reason: ConnectFormError } {
   if (!form.proxyEnabled) return { ok: true, proxy: null }
-  const port = Number(form.proxyPort)
-  if (!form.proxyHost.trim()) return { ok: false, reason: 'proxyHost' }
-  if (!form.proxyUsername.trim()) return { ok: false, reason: 'proxyUsername' }
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, reason: 'proxyPort' }
-  if (form.proxyAuthMethod === 'key' && !form.proxyKeyPath.trim()) return { ok: false, reason: 'proxyKeyPath' }
-  return {
-    ok: true,
-    proxy: {
-      host: form.proxyHost,
-      port,
-      username: form.proxyUsername,
-      authMethod: form.proxyAuthMethod,
-      password,
-      keyPath: form.proxyKeyPath,
-      passphrase
-    }
+  const first: ProxyFormHop = {
+    host: form.proxyHost,
+    port: form.proxyPort,
+    username: form.proxyUsername,
+    authMethod: form.proxyAuthMethod,
+    password,
+    keyPath: form.proxyKeyPath,
+    passphrase
   }
+  const firstResult = validateHop(first)
+  if (!firstResult.ok) return firstResult
+  for (const hop of form.proxyNextHops) {
+    const result = validateHop(hop)
+    if (!result.ok) return result
+  }
+  const chain: ProxyConfigInput = {
+    host: first.host,
+    port: Number(first.port),
+    username: first.username,
+    authMethod: first.authMethod,
+    password: first.password,
+    keyPath: first.keyPath,
+    passphrase: first.passphrase
+  }
+  // 串链：逐跳挂 next，超出 MAX_PROXY_HOPS 的尾部在此截断。
+  let tail: ProxyConfigInput = chain
+  for (const hop of form.proxyNextHops.slice(0, MAX_PROXY_HOPS - 1)) {
+    const node: ProxyConfigInput = {
+      host: hop.host,
+      port: Number(hop.port),
+      username: hop.username,
+      authMethod: hop.authMethod,
+      password: hop.password,
+      keyPath: hop.keyPath,
+      passphrase: hop.passphrase
+    }
+    tail.next = node
+    tail = node
+  }
+  return { ok: true, proxy: chain }
 }
 
-/** 跳板机的持久化形态：只保留非敏感字段。 */
+/** 跳板链的持久化形态：逐级只保留非敏感字段。 */
 export function buildPersistedProxy(
   proxy: ProxyConfigInput | null | undefined,
   fallback: HostProxyProfile
 ): HostProxyProfile {
   if (!proxy) return fallback
-  return {
+  const persist = (hop: ProxyConfigInput): HostProxyProfile => ({
     enabled: true,
-    host: proxy.host,
-    port: normalizePort(proxy.port),
-    username: proxy.username,
-    authMethod: proxy.authMethod,
-    keyPath: proxy.keyPath ?? null
-  }
+    host: hop.host,
+    port: normalizePort(hop.port),
+    username: hop.username,
+    authMethod: hop.authMethod,
+    keyPath: hop.keyPath ?? null,
+    next: hop.next ? persist(hop.next) : null
+  })
+  return persist(proxy)
 }
 
 /** 未启用跳板机时写入主机配置的占位值。 */

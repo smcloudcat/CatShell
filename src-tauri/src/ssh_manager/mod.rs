@@ -58,8 +58,9 @@ pub struct ActiveSession {
     pub info: SessionInfo,
     pub creds: ConnectRequest,
     pub conn: Mutex<Option<client::Handle<SshHandler>>>,
-    /// ProxyJump 跳板机连接。目标会话存活期间必须保持该 Handle，否则隧道关闭。
-    pub proxy_conn: Mutex<Option<client::Handle<SshHandler>>>,
+    /// ProxyJump 跳板链各级连接（按连接顺序：链头在前）。目标会话存活期间必须
+    /// 保持这些 Handle，任何一级被 drop 都会关闭其开出的隧道、掐断整条链路。
+    pub proxy_conn: Mutex<Vec<client::Handle<SshHandler>>>,
     pub write: Mutex<Option<ChannelWriteHalf<russh::client::Msg>>>,
     pub output: Option<Arc<dyn RawOutput>>,
     pub manual_closed: AtomicBool,
@@ -701,7 +702,7 @@ async fn open_shell(
 ) -> Result<
     (
         client::Handle<SshHandler>,
-        Option<client::Handle<SshHandler>>,
+        Vec<client::Handle<SshHandler>>,
         ChannelReadHalf,
         ChannelWriteHalf<russh::client::Msg>,
     ),
@@ -723,68 +724,114 @@ async fn open_shell(
     };
     let (mut session, proxy_conn) = match &creds.proxy {
         Some(proxy) => {
-            let proxy_handler = SshHandler {
-                host: proxy.host.clone(),
-                port: proxy.port,
-                sink: sink.clone(),
-                pending: pending.clone(),
-                known_hosts_path: handler.known_hosts_path.clone(),
-                session_id,
-                remote_routes: remote_routes.clone(),
-            };
-            let mut proxy_session = tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                client::connect(
-                    config.clone(),
-                    (proxy.host.as_str(), proxy.port),
-                    proxy_handler,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                ConnectError::transient(format!(
-                    "跳板机连接超时：{} 秒内未能与 {}:{} 建立连接",
-                    CONNECT_TIMEOUT.as_secs(),
-                    proxy.host,
-                    proxy.port
-                ))
-            })?
-            .map_err(|e| ConnectError::from_connect(format!("跳板机连接失败: {e}")))?;
-            authenticate_connection(
-                &mut proxy_session,
-                &proxy.username,
-                &proxy.auth_method,
-                proxy.password.as_deref(),
-                proxy.key_path.as_deref(),
-                proxy.passphrase.as_deref(),
-                None,
-                &sink,
-                &kbi_pending,
-                session_id,
-            )
-            .await?;
-            let channel = proxy_session
-                .channel_open_direct_tcpip(
-                    creds.host.clone(),
-                    u32::from(creds.port),
-                    "127.0.0.1",
-                    0,
+            // 多跳 ProxyJump：逐级「连上跳板 → 认证 → 在其上开直达下一目标的隧道」，
+            // 最后一跳的隧道终点才是真正的目标服务器。每一跳都独立做主机指纹确认
+            //（handler 的 host 字段取各自地址），凭据也各自独立。
+            let hops = proxy.collect_chain();
+            let mut established: Vec<client::Handle<SshHandler>> = Vec::with_capacity(hops.len());
+            // 上一跳开出的 direct-tcpip 通道；首跳直接走 TCP。
+            let mut tunnel: Option<russh::Channel<client::Msg>> = None;
+            // 本跳的 TCP 目标：首跳是跳板自身，后续经由前一级隧道到达。
+            for (index, hop) in hops.iter().enumerate() {
+                let hop_handler = SshHandler {
+                    host: hop.host.clone(),
+                    port: hop.port,
+                    sink: sink.clone(),
+                    pending: pending.clone(),
+                    known_hosts_path: handler.known_hosts_path.clone(),
+                    session_id,
+                    remote_routes: remote_routes.clone(),
+                };
+                let connect_result = match tunnel.take() {
+                    Some(channel) => {
+                        tokio::time::timeout(
+                            CONNECT_TIMEOUT,
+                            client::connect_stream(
+                                config.clone(),
+                                channel.into_stream(),
+                                hop_handler,
+                            ),
+                        )
+                        .await
+                    }
+                    None => {
+                        tokio::time::timeout(
+                            CONNECT_TIMEOUT,
+                            client::connect(
+                                config.clone(),
+                                (hop.host.as_str(), hop.port),
+                                hop_handler,
+                            ),
+                        )
+                        .await
+                    }
+                };
+                let mut hop_session = connect_result
+                    .map_err(|_| {
+                        ConnectError::transient(format!(
+                            "第 {} 跳连接超时：{} 秒内未能与 {}:{} 建立连接",
+                            index + 1,
+                            CONNECT_TIMEOUT.as_secs(),
+                            hop.host,
+                            hop.port
+                        ))
+                    })?
+                    .map_err(|e| {
+                        ConnectError::from_connect(format!(
+                            "第 {} 跳（{}:{}）连接失败: {e}",
+                            index + 1,
+                            hop.host,
+                            hop.port
+                        ))
+                    })?;
+                authenticate_connection(
+                    &mut hop_session,
+                    &hop.username,
+                    &hop.auth_method,
+                    hop.password.as_deref(),
+                    hop.key_path.as_deref(),
+                    hop.passphrase.as_deref(),
+                    None,
+                    &sink,
+                    &kbi_pending,
+                    session_id,
                 )
-                .await
-                .map_err(|e| ConnectError::transient(format!("跳板机建立隧道失败: {e}")))?;
+                .await?;
+                // 本跳要直达的下一目标：还有下一跳就是下一跳，否则是目标服务器。
+                let (next_host, next_port) = hops
+                    .get(index + 1)
+                    .map(|next| (next.host.clone(), u32::from(next.port)))
+                    .unwrap_or_else(|| (creds.host.clone(), u32::from(creds.port)));
+                let channel = hop_session
+                    .channel_open_direct_tcpip(next_host.clone(), next_port, "127.0.0.1", 0)
+                    .await
+                    .map_err(|e| {
+                        ConnectError::transient(format!(
+                            "第 {} 跳（{}:{}）建立到 {next_host}:{next_port} 的隧道失败: {e}",
+                            index + 1,
+                            hop.host,
+                            hop.port
+                        ))
+                    })?;
+                tunnel = Some(channel);
+                established.push(hop_session);
+            }
+            let final_stream = tunnel
+                .expect("跳板链非空时必然留有最后一跳开出的隧道通道")
+                .into_stream();
             let tunneled = tokio::time::timeout(
                 CONNECT_TIMEOUT,
-                client::connect_stream(config.clone(), channel.into_stream(), handler),
+                client::connect_stream(config.clone(), final_stream, handler),
             )
             .await
             .map_err(|_| {
                 ConnectError::transient(format!(
-                    "连接超时：{} 秒内未能经由跳板机连接服务器",
+                    "连接超时：{} 秒内未能经由跳板链连接服务器",
                     CONNECT_TIMEOUT.as_secs()
                 ))
             })?
             .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
-            (tunneled, Some(proxy_session))
+            (tunneled, established)
         }
         None => {
             let session = tokio::time::timeout(
@@ -799,7 +846,7 @@ async fn open_shell(
                 ))
             })?
             .map_err(|e| ConnectError::from_connect(format!("连接失败: {e}")))?;
-            (session, None)
+            (session, Vec::new())
         }
     };
 
@@ -985,7 +1032,7 @@ async fn run_session(
                 }
                 {
                     let mut lock = session.proxy_conn.lock().await;
-                    *lock = None;
+                    *lock = Vec::new();
                 }
                 {
                     let mut lock = session.write.lock().await;
@@ -1163,7 +1210,7 @@ impl SshManager {
             info,
             creds: req,
             conn: Mutex::new(None),
-            proxy_conn: Mutex::new(None),
+            proxy_conn: Mutex::new(Vec::new()),
             write: Mutex::new(None),
             output,
             manual_closed: AtomicBool::new(false),

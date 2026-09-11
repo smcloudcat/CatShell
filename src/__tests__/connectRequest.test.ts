@@ -75,7 +75,8 @@ describe('buildProxyConfig', () => {
       authMethod: 'password',
       password: 'pw',
       keyPath: null,
-      passphrase: null
+      passphrase: null,
+      next: null
     })
   })
 
@@ -254,7 +255,8 @@ describe('buildConnectRequest', () => {
       authMethod: 'password',
       password: 'proxy-pw',
       keyPath: null,
-      passphrase: null
+      passphrase: null,
+      next: null
     })
   })
 

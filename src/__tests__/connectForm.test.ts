@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HostProfile } from '../types/host'
+import { MAX_PROXY_HOPS, countProxyHops } from '../types/session'
 import {
   CONNECT_FORM_EMPTY,
   ConnectFormState,
@@ -83,6 +84,31 @@ describe('connectFormFromProfile', () => {
     expect(state.proxyAuthMethod).toBe('key')
     expect(state.proxyPassword).toBe('')
     expect(state.proxyPassphrase).toBe('')
+  })
+
+  it('rebuilds extra hops from the persisted chain without credentials', () => {
+    const state = connectFormFromProfile(profile({
+      proxy: {
+        enabled: true,
+        host: 'bastion',
+        port: 2200,
+        username: 'jump',
+        authMethod: 'password',
+        keyPath: null,
+        next: {
+          enabled: true,
+          host: 'relay',
+          port: 2221,
+          username: 'inner',
+          authMethod: 'key',
+          keyPath: 'C:/keys/relay',
+          next: null
+        }
+      }
+    }))
+    expect(state.proxyNextHops).toEqual([
+      { host: 'relay', port: '2221', username: 'inner', authMethod: 'key', password: '', keyPath: 'C:/keys/relay', passphrase: '' }
+    ])
   })
 })
 
@@ -181,6 +207,38 @@ describe('validateProxyInput', () => {
     const ok = validateProxyInput(form({ ...enabled, proxyAuthMethod: 'key', proxyKeyPath: 'C:/keys/jump' }), '', '')
     expect(ok.ok).toBe(true)
   })
+
+  it('validates every hop of the chain and assembles next links', () => {
+    const hop = (host: string) => ({ host, port: '2222', username: 'u', authMethod: 'password' as const, password: 'pw', keyPath: '', passphrase: '' })
+    const chained = form({
+      ...enabled,
+      proxyNextHops: [hop('relay'), hop('edge')]
+    })
+    const result = validateProxyInput(chained, 'pw-1', '')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.proxy).toMatchObject({ host: 'bastion', password: 'pw-1' })
+    expect(result.proxy?.next).toMatchObject({ host: 'relay', password: 'pw' })
+    expect(result.proxy?.next?.next).toMatchObject({ host: 'edge' })
+    expect(result.proxy?.next?.next?.next).toBeUndefined()
+  })
+
+  it('reports the first invalid hop in the chain', () => {
+    const badHop = { host: '', port: '22', username: 'u', authMethod: 'password' as const, password: '', keyPath: '', passphrase: '' }
+    expect(validateProxyInput(form({ ...enabled, proxyNextHops: [badHop] }), '', '')).toEqual({ ok: false, reason: 'proxyHost' })
+    const badPort = { host: 'relay', port: '0', username: 'u', authMethod: 'password' as const, password: '', keyPath: '', passphrase: '' }
+    expect(validateProxyInput(form({ ...enabled, proxyNextHops: [badPort] }), '', '')).toEqual({ ok: false, reason: 'proxyPort' })
+  })
+
+  it('truncates the chain beyond the hop limit', () => {
+    const hop = () => ({ host: 'relay', port: '22', username: 'u', authMethod: 'password' as const, password: '', keyPath: '', passphrase: '' })
+    const many = Array.from({ length: MAX_PROXY_HOPS + 2 }, hop)
+    const result = validateProxyInput(form({ ...enabled, proxyNextHops: many }), '', '')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // 链上有效级数 = 第 1 跳 + 保留的额外跳，不得超过 MAX_PROXY_HOPS。
+    expect(countProxyHops(result.proxy)).toBe(MAX_PROXY_HOPS)
+  })
 })
 
 describe('buildPersistedProxy', () => {
@@ -200,9 +258,41 @@ describe('buildPersistedProxy', () => {
       port: 2200,
       username: 'jump',
       authMethod: 'password',
-      keyPath: null
+      keyPath: null,
+      next: null
     })
     expect(JSON.stringify(persisted)).not.toContain('super-secret')
+  })
+
+  it('persists the whole chain without credentials', () => {
+    const persisted = buildPersistedProxy({
+      host: 'bastion',
+      port: 2200,
+      username: 'jump',
+      authMethod: 'password',
+      password: 'secret-1',
+      next: {
+        host: 'relay',
+        port: '2221',
+        username: 'inner',
+        authMethod: 'key',
+        keyPath: 'C:/keys/relay',
+        passphrase: 'secret-2'
+      }
+    }, EMPTY_PROXY_PROFILE)
+
+    expect(persisted.next).toEqual({
+      enabled: true,
+      host: 'relay',
+      port: 2221,
+      username: 'inner',
+      authMethod: 'key',
+      keyPath: 'C:/keys/relay',
+      next: null
+    })
+    const serialized = JSON.stringify(persisted)
+    expect(serialized).not.toContain('secret-1')
+    expect(serialized).not.toContain('secret-2')
   })
 
   it('falls back when no proxy is configured', () => {

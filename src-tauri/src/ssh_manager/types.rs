@@ -17,6 +17,10 @@ pub(super) const OUTPUT_FLUSH_THRESHOLD: usize = 64 * 1024;
 ///
 /// 刻意**不**实现 `Debug` / `Serialize`：一次不慎的 `{:?}` 日志或序列化就会把口令写出去。
 /// 需要记录日志时走 `ConnectRequest::redacted_summary`。
+///
+/// 多跳：`next` 指向下一级跳板，链式嵌套（ProxyJump 链）。连接顺序为
+/// 链头 → 链尾 → 目标，即每一跳都经由前面所有跳板到达。`next` 缺省为
+/// `None`（单级跳板），旧数据无需迁移。
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyConfig {
@@ -30,6 +34,21 @@ pub struct ProxyConfig {
     pub key_path: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
+    #[serde(default)]
+    pub next: Option<Box<ProxyConfig>>,
+}
+
+impl ProxyConfig {
+    /// 收集整条跳板链（含自身），按连接顺序返回：链头在前，链尾在后。
+    pub fn collect_chain(&self) -> Vec<&ProxyConfig> {
+        let mut hops = Vec::new();
+        let mut cursor: Option<&ProxyConfig> = Some(self);
+        while let Some(hop) = cursor {
+            hops.push(hop);
+            cursor = hop.next.as_deref();
+        }
+        hops
+    }
 }
 
 impl Drop for ProxyConfig {
@@ -351,6 +370,7 @@ mod tests {
                 password: Some("ZZ_SECRET_PROXY_PW_ZZ".to_string()),
                 key_path: None,
                 passphrase: Some("ZZ_SECRET_PROXY_PP_ZZ".to_string()),
+                next: None,
             }),
         }
     }
@@ -380,6 +400,68 @@ mod tests {
         let mut request = sample_request();
         request.proxy = None;
         assert!(request.redacted_summary().contains("proxy=none"));
+    }
+
+    #[test]
+    fn collect_chain_returns_hops_in_connection_order() {
+        let request = sample_request();
+        let proxy = request.proxy.as_ref().expect("sample 含单级跳板");
+        let chain = proxy.collect_chain();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].host, "jump");
+
+        // 二级链：jump -> relay -> 目标。连接顺序必须是链头在前。
+        let mut relay = proxy.clone();
+        relay.next = Some(Box::new(ProxyConfig {
+            host: "relay".to_string(),
+            port: 2200,
+            username: "inner".to_string(),
+            auth_method: "key".to_string(),
+            password: None,
+            key_path: Some("/tmp/id_ed25519".to_string()),
+            passphrase: None,
+            next: None,
+        }));
+        let chain = relay.collect_chain();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].host, "jump");
+        assert_eq!(chain[1].host, "relay");
+        assert_eq!(chain[1].port, 2200);
+    }
+
+    #[test]
+    fn deserializes_chained_proxy_from_camel_case_json() {
+        let json = serde_json::json!({
+            "name": "prod",
+            "host": "10.0.0.1",
+            "port": 22,
+            "username": "root",
+            "authMethod": "password",
+            "password": "pw",
+            "keepalive": 30,
+            "autoReconnect": true,
+            "proxy": {
+                "host": "jump",
+                "port": 2222,
+                "username": "ops",
+                "authMethod": "password",
+                "password": "jump-pw",
+                "next": {
+                    "host": "relay",
+                    "port": 2200,
+                    "username": "inner",
+                    "authMethod": "key",
+                    "keyPath": "/tmp/id_ed25519"
+                }
+            }
+        });
+        let request: ConnectRequest = serde_json::from_value(json).expect("camelCase 反序列化");
+        let proxy = request.proxy.as_ref().expect("跳板链存在");
+        let chain = proxy.collect_chain();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].host, "jump");
+        assert_eq!(chain[1].host, "relay");
+        assert_eq!(chain[1].auth_method, "key");
     }
 
     #[test]

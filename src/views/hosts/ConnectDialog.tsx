@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { useSessions } from '../../store/sessions'
-import { ConnectRequest, buildConnectRequest, buildProxyConfig, normalizeKeepalive } from '../../types/session'
+import { ConnectRequest, buildConnectRequest, buildProxyConfig, collectProxyHops, normalizeKeepalive } from '../../types/session'
 import { HostProfile } from '../../types/host'
 import { useHosts } from '../../store/hosts'
 import { useVault } from '../../store/vault'
@@ -74,6 +74,12 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
         next.proxyPassword = proxyCredential.password ?? ''
         next.proxyPassphrase = proxyCredential.passphrase ?? ''
       }
+      // 第 2 跳及以后的凭据：key 为 `proxy:<hostId>:<hopIndex>`（hopIndex 从 0 起）。
+      next.proxyNextHops = next.proxyNextHops.map((hop, index) => {
+        const saved = getCredential(`proxy:${profile.id}:${index}`)
+        if (!saved) return hop
+        return { ...hop, password: saved.password ?? '', passphrase: saved.passphrase ?? '' }
+      })
     }
     setForm(next)
   }, [getCredential, profile, visible])
@@ -82,7 +88,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
 
   const set = (patch: Partial<ConnectFormState>) => setForm((f) => ({ ...f, ...patch }))
 
-  const pickKey = async (target: 'keyPath' | 'proxyKeyPath' = 'keyPath') => {
+  const pickKey = async (target: string = 'keyPath') => {
     try {
       // 按需加载：文件选择器只在点「浏览」时用得到，静态引入会把整个插件
       // 拖进首屏包，也会让设置页的同类动态引入失效。
@@ -149,7 +155,11 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       passphrase ||= credential?.passphrase ?? ''
       proxyPassword ||= proxyCredential?.password ?? ''
       proxyPassphrase ||= proxyCredential?.passphrase ?? ''
-      setForm((current) => ({ ...current, password, passphrase, proxyPassword, proxyPassphrase }))
+      const hopCredentials = form.proxyNextHops.map((hop, index) => {
+        const saved = getCredential(`proxy:${profile.id}:${index}`)
+        return saved ? { ...hop, password: hop.password || saved.password || '', passphrase: hop.passphrase || saved.passphrase || '' } : hop
+      })
+      setForm((current) => ({ ...current, password, passphrase, proxyPassword, proxyPassphrase, proxyNextHops: hopCredentials }))
     }
 
     const validation = validateForConnect(form, password, form.keyPath)
@@ -178,11 +188,9 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       proxy: proxy.proxy
     })
     // 请求里带了凭据但保险箱还锁着 —— 现在解锁，否则本次连接无法自动保存凭据。
-    if (
-      vaultConfigured &&
-      !useVault.getState().unlocked &&
-      (request.password || request.passphrase || request.proxy?.password || request.proxy?.passphrase)
-    ) {
+    const chainNeedsVault = (node: typeof request.proxy): boolean =>
+      Boolean(node && (node.password || node.passphrase)) || chainNeedsVault(node?.next ?? null)
+    if (vaultConfigured && !useVault.getState().unlocked && (request.password || request.passphrase || chainNeedsVault(request.proxy))) {
       if (!(await requestVaultUnlock())) return
     }
 
@@ -198,11 +206,19 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           passphrase: request.passphrase ?? undefined
         })
       }
-      if (useVault.getState().unlocked && request.proxy && (request.proxy.password || request.proxy.passphrase)) {
-        await saveCredential(`proxy:${hostId}`, {
-          password: request.proxy.password ?? undefined,
-          passphrase: request.proxy.passphrase ?? undefined
-        })
+      if (useVault.getState().unlocked && request.proxy) {
+        // 第 1 跳走固定 key，第 2 跳起按链上位置追加 `:<index>`。
+        const hops = collectProxyHops(request.proxy)
+        for (let index = 0; index < hops.length; index += 1) {
+          const hop = hops[index]
+          if (!hop) continue
+          if (!hop.password && !hop.passphrase) continue
+          const key = index === 0 ? `proxy:${hostId}` : `proxy:${hostId}:${index - 1}`
+          await saveCredential(key, {
+            password: hop.password ?? undefined,
+            passphrase: hop.passphrase ?? undefined
+          })
+        }
       }
       setForm(emptyConnectForm())
       onClose()
@@ -266,11 +282,19 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           passphrase: form.passphrase || undefined
         })
       }
-      if (useVault.getState().unlocked && proxy.proxy && (proxy.proxy.password || proxy.proxy.passphrase)) {
-        await saveCredential(`proxy:${hostId}`, {
-          password: proxy.proxy.password ?? undefined,
-          passphrase: proxy.proxy.passphrase ?? undefined
-        })
+      if (useVault.getState().unlocked && proxy.proxy) {
+        // 与连接路径同规则：第 1 跳固定 key，第 2 跳起 `:<index>`。
+        const hops = collectProxyHops(proxy.proxy)
+        for (let index = 0; index < hops.length; index += 1) {
+          const hop = hops[index]
+          if (!hop) continue
+          if (!hop.password && !hop.passphrase) continue
+          const key = index === 0 ? `proxy:${hostId}` : `proxy:${hostId}:${index - 1}`
+          await saveCredential(key, {
+            password: hop.password ?? undefined,
+            passphrase: hop.passphrase ?? undefined
+          })
+        }
       }
       setForm(emptyConnectForm())
       onClose()

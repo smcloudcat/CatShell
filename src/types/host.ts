@@ -7,6 +7,8 @@ export interface HostProxyProfile {
   username: string
   authMethod: 'password' | 'key'
   keyPath: string | null
+  /** 下一级跳板（ProxyJump 链）；缺省为 null 表示单级跳板。旧数据无此字段。 */
+  next?: HostProxyProfile | null
 }
 
 export interface HostProfile {

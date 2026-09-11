@@ -112,14 +112,32 @@ impl EventSink for TestSink {
 // ============================ 测试服务器 ============================
 
 #[derive(Clone)]
-pub struct TestServer;
+pub struct TestServer {
+    /// 该服务器实例被用作跳板时开出的 direct-tcpip 隧道数。
+    /// 多跳测试以此证明流量真的穿过了跳板链而不是直连目标。
+    pub tunnel_opens: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl TestServer {
+    pub fn new() -> Self {
+        TestServer {
+            tunnel_opens: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl Default for TestServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl server::Server for TestServer {
     type Handler = TestSession;
 
     fn new_client(&mut self, _addr: Option<std::net::SocketAddr>) -> Self::Handler {
         // 每条 SSH 连接一份独立的文件系统，测试之间互不影响。
-        TestSession::new()
+        TestSession::with_tunnel_opens(self.tunnel_opens.clone())
     }
 
     fn handle_session_error(&mut self, _error: <Self::Handler as server::Handler>::Error) {}
@@ -137,14 +155,21 @@ pub struct TestSession {
     /// 这些通道的数据必须跳过 shell 的 `data()` 回显，否则协议流量会被塞进假回显，
     /// 客户端永远等不到合法的协议响应。
     passthrough_channels: HashSet<ChannelId>,
+    /// 所 属服务器实例的隧道计数器（连接级共享）。
+    tunnel_opens: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl TestSession {
     pub fn new() -> Self {
+        Self::with_tunnel_opens(Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+    }
+
+    pub fn with_tunnel_opens(tunnel_opens: Arc<std::sync::atomic::AtomicUsize>) -> Self {
         TestSession {
             clients: Arc::new(Mutex::new(HashMap::new())),
             fs: SharedFs::seeded(),
             passthrough_channels: HashSet::new(),
+            tunnel_opens,
         }
     }
 }
@@ -292,6 +317,7 @@ impl server::Handler for TestSession {
         let host = host_to_connect.to_string();
         let port = port_to_connect as u16;
         self.passthrough_channels.insert(channel.id());
+        self.tunnel_opens.fetch_add(1, Ordering::SeqCst);
         reply.accept().await;
         tokio::spawn(async move {
             let Ok(mut target) = tokio::net::TcpStream::connect((host.as_str(), port)).await else {
@@ -667,6 +693,15 @@ impl russh_sftp::server::Handler for MockSftpFs {
 
 /// 起一个测试 SSH 服务器，返回监听端口。
 pub async fn start_test_server(port_ready: tokio::sync::oneshot::Sender<u16>) {
+    start_test_server_tracked(port_ready, Arc::new(std::sync::atomic::AtomicUsize::new(0))).await
+}
+
+/// 起一个测试 SSH 服务器并把 direct-tcpip 隧道计数写进调用方给的计数器，
+/// 供多跳测试证明「流量真的穿过了跳板」。
+pub async fn start_test_server_tracked(
+    port_ready: tokio::sync::oneshot::Sender<u16>,
+    tunnel_opens: Arc<std::sync::atomic::AtomicUsize>,
+) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let _ = port_ready.send(port);
@@ -677,7 +712,7 @@ pub async fn start_test_server(port_ready: tokio::sync::oneshot::Sender<u16>) {
         keys: vec![PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()],
         ..Default::default()
     });
-    let mut server = TestServer;
+    let mut server = TestServer { tunnel_opens };
     server.run_on_socket(config, &listener).await.unwrap();
 }
 
@@ -696,6 +731,25 @@ pub fn connect_req(port: u16, auto_reconnect: bool) -> ConnectRequest {
         auto_reconnect,
         proxy: None,
     }
+}
+
+/// 构造一条跳板链请求（每跳都是 password 认证的本地测试服务器）。
+pub fn chain_proxy(hops: &[u16]) -> catshell_lib::ssh_manager::ProxyConfig {
+    use catshell_lib::ssh_manager::ProxyConfig;
+    let mut next: Option<Box<ProxyConfig>> = None;
+    for &port in hops.iter().rev() {
+        next = Some(Box::new(ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            username: "test".to_string(),
+            auth_method: "password".to_string(),
+            password: Some("secret".to_string()),
+            key_path: None,
+            passphrase: None,
+            next,
+        }));
+    }
+    *next.expect("至少一跳")
 }
 
 /// 接受最近一次待确认的主机指纹。返回是否真的有一次待确认请求。

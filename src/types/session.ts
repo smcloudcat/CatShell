@@ -194,6 +194,8 @@ export interface ProxyConfig {
   password?: string | null
   keyPath?: string | null
   passphrase?: string | null
+  /** 下一级跳板（ProxyJump 链），缺省为 null 表示单级。 */
+  next?: ProxyConfig | null
 }
 
 export interface KbiPromptQuestion {
@@ -254,7 +256,12 @@ export interface ProxyConfigInput {
   password?: string | null
   keyPath?: string | null
   passphrase?: string | null
+  /** 下一级跳板（ProxyJump 链）。链头在前，逐级经隧道到达目标。 */
+  next?: ProxyConfigInput | null
 }
+
+/** 跳板链最大级数：防止误操作造出无法理解的深链，也圈住每跳的开销。 */
+export const MAX_PROXY_HOPS = 4
 
 /** 归一化端口：非数字、非正整数或越界一律回退到 `fallback`（默认 22）。 */
 export function normalizePort(
@@ -281,20 +288,56 @@ export function normalizeKeepalive(
   return Math.min(MAX_KEEPALIVE_SECONDS, Math.max(MIN_KEEPALIVE_SECONDS, Math.trunc(parsed)))
 }
 
-/** 跳板机配置归一化：凭据字段按 authMethod 择一保留，避免把无关凭据带进请求。 */
+/**
+ * 跳板链归一化：逐级凭据字段按 authMethod 择一保留，避免把无关凭据带进请求；
+ * 超过 MAX_PROXY_HOPS 的尾部直接丢弃。
+ */
 export function buildProxyConfig(
   input: ProxyConfigInput | null | undefined
 ): ProxyConfig | null {
   if (!input) return null
-  return {
-    host: input.host.trim(),
-    port: normalizePort(input.port),
-    username: input.username.trim(),
-    authMethod: input.authMethod,
-    password: input.authMethod === 'password' && input.password ? input.password : null,
-    keyPath: input.authMethod === 'key' ? (input.keyPath ?? '').trim() || null : null,
-    passphrase: input.authMethod === 'key' && input.passphrase ? input.passphrase : null
+  const build = (hop: ProxyConfigInput): ProxyConfig => ({
+    host: hop.host.trim(),
+    port: normalizePort(hop.port),
+    username: hop.username.trim(),
+    authMethod: hop.authMethod,
+    password: hop.authMethod === 'password' && hop.password ? hop.password : null,
+    keyPath: hop.authMethod === 'key' ? (hop.keyPath ?? '').trim() || null : null,
+    passphrase: hop.authMethod === 'key' && hop.passphrase ? hop.passphrase : null,
+    next: null
+  })
+  const head = build(input)
+  let tail: ProxyConfig = head
+  let cursor = input.next ?? null
+  while (cursor) {
+    const node = build(cursor)
+    tail.next = node
+    tail = node
+    cursor = cursor.next ?? null
   }
+  return head
+}
+
+/** 数一数链式跳板配置的总级数。 */
+export function countProxyHops(proxy: ProxyConfigInput | null | undefined): number {
+  let count = 0
+  let cursor = proxy ?? null
+  while (cursor) {
+    count += 1
+    cursor = cursor.next ?? null
+  }
+  return count
+}
+
+/** 把链式跳板收集为数组（链头在前），供凭据存取等调用方直接按下标遍历。 */
+export function collectProxyHops<T extends { next?: T | null }>(head: T | null | undefined): T[] {
+  const hops: T[] = []
+  let cursor: T | null | undefined = head
+  while (cursor) {
+    hops.push(cursor)
+    cursor = cursor.next
+  }
+  return hops
 }
 
 /**

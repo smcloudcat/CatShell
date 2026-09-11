@@ -403,7 +403,7 @@ if (key === 'w') {
 
 | 功能 | 价值 | 依赖/成本 |
 | --- | --- | --- |
-| **多跳 ProxyJump 链** | 当前仅支持单级 `proxy`（`types.rs:47`），企业跳板常需 `ProxyJump a,b,c` 或 `ProxyCommand` | 中 |
+| **多跳 ProxyJump 链** | ~~当前仅支持单级 `proxy`~~ **已修复（6.10）**：`ProxyConfig` 链式 `next`，逐级 direct-tcpip 隧道，上限 4 级；`ProxyCommand` 形式仍不支持 | 中 |
 | **批量/并行命令执行** | 跨多会话同时下发并聚合结果（已有"广播输入"基础，可扩展为"批量执行 + 结果对比"） | 中 |
 | **会话录制与回放** | 落盘 asciinema 格式，`shell_loop` 已有完整字节流，加可选 recorder 即可 | 中，价值高 |
 | **SFTP 路径栏可编辑 / 面包屑跳转** | 当前只能逐级进入（`SessionSftpPanel.tsx:640`），无法直接输入绝对路径 | 低 |
@@ -596,6 +596,26 @@ if (key === 'w') {
 
 **回归项**：连接会话 → 开启录制 → 执行几条命令 → 停止并在录制库回放（倍速、拖动进度、CJK 文件名）；亮暗主题下回放观感；录制中直接断开会话的行为。
 
+### 6.10 多跳 ProxyJump（同日，阶段三第三项）
+
+跳板机从单级升级为链式（`ProxyJump a,b,c` 等价能力）：连接时按顺序逐级「连上跳板 → 认证 → 在其上开直达下一目标的 direct-tcpip 隧道」，最后一跳的隧道终点才是目标服务器；每一跳独立做主机指纹确认、凭据各自独立。
+
+**Rust**（`ssh_manager/types.rs` + `mod.rs`）：
+- `ProxyConfig` 增加 `next: Option<Box<ProxyConfig>>` 链式字段（serde 缺省 `None`，旧主机数据零迁移）；`collect_chain()` 按连接顺序收集整条链。
+- 连接逻辑迭代化：首跳走 TCP 直连，后续跳经由前一级隧道 `connect_stream`，返回 `Vec<Handle>`（`proxy_conn` 改为 `Mutex<Vec<_>>`）持有整条链的会话句柄，任何一级被 drop 都会掐断链路。错误信息带跳板序号与地址，便于定位断在哪一级。
+- `Drop` 对链递归零化每级口令；`redacted_summary` 不变（仍只描述链头）。
+
+**前端**（`types/session.ts` + `views/hosts/*`）：
+- `ProxyConfigInput` / `HostProxyProfile` 增加 `next`；`buildProxyConfig` 递归归一化整条链，`MAX_PROXY_HOPS = 4` 封顶、超限截尾；`collectProxyHops` 泛型收集。
+- 连接表单：第 1 跳沿用平铺字段（兼容旧 UI/数据），第 2 跳起编辑 `proxyNextHops` 数组，「添加下一跳 / 移除末跳」按钮；逐跳校验，错误定位到字段。主机档案持久化整条链（不含凭据）。
+- 凭据保险箱：第 1 跳沿用 `proxy:<hostId>`，第 2 跳起 `proxy:<hostId>:<index>`，连接与保存两条路径同规则。
+
+**测试**：`jump_e2e.rs` 3 例（两级链 / 单级回归 / 三级链），测试服务器增加 direct-tcpip 隧道计数器，用「每跳各开出一条隧道、目标零隧道」证明流量真穿链而非直连；Rust 单测新增 `collect_chain` 顺序与 camelCase 链式反序列化 2 例；前端 `connectForm` 组补链式校验 / 持久化 / 重建用例。
+
+**验证**：`cargo fmt` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **53 例**（38 单测 + 15 集成）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check` ✓ · 前端 **226 例**（19 文件）✓ · `build` ✓。
+
+**回归项**：单级跳板老配置直连主机一键重连；两级 / 三级跳板链连接（每跳指纹逐个确认）；中间某跳密码输错时的报错信息；跳板链主机的「编辑并连接」回填与凭据解锁。
+
 ---
 
 ## 七、建议路线图
@@ -628,7 +648,7 @@ if (key === 'w') {
 ### 阶段三 · 能力扩展（v0.4+）
 > 目标：从"好用的 SSH 客户端"走向"运维工作台"
 
-- [ ] 多跳 ProxyJump（当前已支持经单级跳板/代理隧道连接，链式多跳待排期）
+- [x] 多跳 ProxyJump（详见 6.10：`ProxyConfig` 链式 `next` 字段，逐级 direct-tcpip 隧道，每跳独立指纹确认与凭据；表单支持增删跳，上限 4 级）
 - [x] 批量命令执行聚合（详见 6.8：`ssh_batch_exec` 专用通道执行 + 逐台输出聚合，原有「写入终端」模式保留）
 - [x] 会话录制与回放（详见 6.9：前端采集输出 + Rust 落盘 asciicast v2，录制库支持倍速回放与进度拖动）
 - [ ] SFTP 双向同步、传输队列持久化、带宽限速
