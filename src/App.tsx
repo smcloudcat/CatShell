@@ -8,6 +8,9 @@ import { useSettings } from './store/settings'
 import { useSessions } from './store/sessions'
 import { useHosts } from './store/hosts'
 import { useSessionRestore } from './store/sessionRestore'
+import { useLaunchIntent } from './store/launchIntent'
+import { subscribeTrayQuickConnect, traySetQuickConnects } from './api/ssh'
+import { findProfileByName } from './utils/launchIntent'
 import { useTransferQueue } from './store/transferQueue'
 import { connectHostQuick } from './store/hostConnect'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
@@ -99,7 +102,72 @@ function App() {
     void auditInit()
     void useSessionRestore.getState().init()
     void useTransferQueue.getState().init()
+    void useLaunchIntent.getState().init()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
+
+  // 命令行 / 托盘快捷连接的意图路由（6.16）：档案直连走 connectHostQuick，
+  // 临时目标转交主机页的连接对话框预填。
+  const launchPending = useLaunchIntent((s) => s.pending)
+  useEffect(() => {
+    if (!launchPending) return
+    const intent = useLaunchIntent.getState().take()
+    if (!intent) return
+    if (intent.kind === 'profile') {
+      const host = findProfileByName(useHosts.getState().hosts, intent.name)
+      if (!host) {
+        setView('hosts')
+        showToast(`${t('未找到主机档案')}「${intent.name}」`, 'warning')
+        return
+      }
+      void connectHostQuick(host).then((result) => {
+        if (result === 'connected') {
+          setView('sessions')
+          return
+        }
+        setView('hosts')
+        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+      })
+      return
+    }
+    setView('hosts')
+    useLaunchIntent.getState().setAdhocPrefill(intent)
+  }, [launchPending, t])
+
+  // 托盘快捷连接菜单点击：按档案 id 直连（与命令面板同一链路）。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    void subscribeTrayQuickConnect((hostId) => {
+      const host = useHosts.getState().hosts.find((item) => item.id === hostId)
+      if (!host) return
+      void connectHostQuick(host).then((result) => {
+        if (result === 'connected') {
+          setView('sessions')
+          return
+        }
+        setView('hosts')
+        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+      })
+    }).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [t])
+
+  // 主机档案变化时同步托盘「快捷连接」清单（最多 15 条，最近更新优先）。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    const items = [...hostProfiles]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 15)
+      .map((host) => ({ id: host.id, name: host.name || host.host }))
+    void traySetQuickConnects(items).catch(() => undefined)
+  }, [hostProfiles])
 
   // 设置读取完成后再恢复上次视图；恢复完成前不持久化，避免默认视图覆盖记录
   const restoredRef = useRef(false)

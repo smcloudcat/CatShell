@@ -24,6 +24,7 @@ import {
   SftpSyncPlan,
   SftpSyncPlanEntry,
   SftpSyncProgress,
+  CliConnectPayload,
   SftpSyncStartInfo,
   SshConfigEntry
 } from '../types/session'
@@ -544,4 +545,47 @@ export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<()
       }
     }
   }
+}
+/** 取首启动的命令行连接意图（`catshell user@host` / `catshell 档案名`）；无则 null。 */
+export async function cliLaunchRequest(): Promise<CliConnectPayload | null> {
+  return invoke<CliConnectPayload | null>('cli_launch_request')
+}
+
+/** 订阅第二实例带参启动转发的连接意图事件。返回取消订阅函数。 */
+export async function subscribeCliConnect(
+  handler: (payload: CliConnectPayload) => void
+): Promise<() => void> {
+  const unlisten = await listen<CliConnectPayload>(
+    'cli-connect',
+    versioned<CliConnectPayload & { v?: number }>('cli-connect', handler)
+  )
+  return () => {
+    try {
+      unlisten()
+    } catch {
+      /* 窗口已销毁时忽略 */
+    }
+  }
+}
+
+/** 订阅托盘「快捷连接」菜单点击（payload 为档案 id）。返回取消订阅函数。 */
+export async function subscribeTrayQuickConnect(
+  handler: (hostId: string) => void
+): Promise<() => void> {
+  const unlisten = await listen<{ hostId: string }>(
+    'tray-quick-connect',
+    versioned<{ hostId: string; v?: number }>('tray-quick-connect', (payload) => handler(payload.hostId))
+  )
+  return () => {
+    try {
+      unlisten()
+    } catch {
+      /* 窗口已销毁时忽略 */
+    }
+  }
+}
+
+/** 推送托盘「快捷连接」清单（主机档案变化时调用），Rust 据此重建托盘菜单。 */
+export async function traySetQuickConnects(items: { id: string; name: string }[]): Promise<void> {
+  await invoke('tray_set_quick_connects', { items })
 }

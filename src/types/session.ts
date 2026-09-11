@@ -17,6 +17,15 @@ export interface SessionInfo {
   attempt?: number | null
 }
 
+/** 命令行启动参数解析出的连接意图（Rust `launch::CliConnectPayload`，6.16）。 */
+export interface CliConnectPayload {
+  kind: 'adhoc' | 'profile'
+  user: string | null
+  host: string | null
+  port: number | null
+  name: string | null
+}
+
 /** 事件 payload 的协议版本，由 Rust 侧 `EVENT_SCHEMA_VERSION` 写入（P2-13）。 */
 export interface VersionedEvent {
   v: number

@@ -365,6 +365,7 @@ const en: Record<string, string> = {
   '，替换 ': ', replaced ',
   '写回 ~/.ssh/config 失败': 'Failed to write ~/.ssh/config',
   '~/.ssh 目录为空或不存在。': '~/.ssh is empty or does not exist.',
+  '未找到主机档案': 'Host profile not found',
   '写入 ': 'Wrote ',
   ' 个块，替换 ': ' blocks, replaced ',
   '复制公钥到剪贴板': 'Copied public key to clipboard',

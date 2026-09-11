@@ -694,6 +694,20 @@ Rust DTO 与前端 `src/types/*.ts` 手写类型长期靠人肉同步，漂移�
 
 **测试**：前端 +3（守卫测试），Rust +24（ts-rs 导出用例）；其余验证全绿。
 
+### 6.16 命令行启动参数 + 托盘快捷连接（同日，阶段三第九项切片）
+
+**命令行启动参数**（`ssh_manager` 之外的应用级 `launch.rs`，lib.rs 2 命令 `cli_launch_request`、`tray_set_quick_connects`，命令数 58→60）：
+- `catshell user@host[:port]`：解析为临时目标，前端打开连接对话框预填（凭据用户自填，Rust 不经手）；
+- `catshell <档案名>`（或 `--profile <名>` / `--connect <名>`）：按档案名直连——大小写不敏感匹配，命中即走 `connectHostQuick` 共用链路（保险箱锁定/凭据不足时回退主机页表单），未命中提示后打开主机页；
+- 解析是纯函数（6 单测覆盖 user@host / host:port / 非法端口段 / flag 缺值等），规则：含 `@` 即临时目标、`--profile` 优先、其余 `-` 开关（Tauri 内部 flag）忽略；
+- **送达路径**：首启动存入 `CliState` 由前端 `cli_launch_request` 取用；第二实例经 `single_instance` 回调解析后以 `cli-connect` 事件（带协议版本 `v`）转发主窗口。
+
+**托盘快捷连接**：右键托盘菜单新增「快捷连接」子菜单——前端在主机档案变化时把清单（最多 15 条、按最近更新排序）经 `tray_set_quick_connects` 推给 Rust 重建菜单；点击菜单项 Rust 发 `tray-quick-connect` 事件（payload 含档案 id），前端按 id 直连，与命令面板同一条链路。空清单显示禁用占位项。
+
+**边界**：连接动作完全在前端完成（凭据只在保险箱/内存）；临时目标不落盘、不进审计凭据字段；`--profile` 不存在时明确提示而不是静默失败。
+
+**测试**：Rust +6（launch 解析），前端 +6（意图规范化 / 档案名匹配 / 临时目标合成）；验证全绿（Rust 101 / 前端 255 / fmt / clippy -D warnings / tsc / eslint / i18n / mojibake / build）。
+
 ---
 
 ## 七、建议路线图
@@ -734,7 +748,7 @@ Rust DTO 与前端 `src/types/*.ts` 手写类型长期靠人肉同步，漂移�
 - [x] 传输队列持久化（详见 6.13：磁盘级传输断点进度落盘，重启后按主机续传；分块传输保持会话内体验）
 - [x] 密钥管理 UI、SSH config 写回（详见 6.14：russh 内置 ssh_key 生成、~/.ssh 边界删除防护、Host 块原子写回 + 备份）
 - [x] 类型自动生成（`ts-rs`，详见 6.15：24 个 IPC DTO 生成绑定 + bindings:check / CI / vitest 三层防漂移；事件 payload 结构化与前端直连绑定属后续）
-- [ ] 命令行启动参数、托盘快捷连接
+- [x] 命令行启动参数、托盘快捷连接（详见 6.16：`catshell user@host[:port]` / 档案名直连 + 托盘子菜单 15 条直连）
 - [ ] AI 辅助（命令生成、日志诊断、风险提示）
 
 ---

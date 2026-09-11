@@ -1,3 +1,4 @@
+pub mod launch;
 pub mod logging;
 pub mod recording_store;
 pub mod ssh_manager;
@@ -6,6 +7,7 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use launch::CliConnectPayload;
 use ssh_manager::{
     load_known_hosts_snapshot, remove_known_hosts_entry, ConnectRequest, EventSink,
     NetworkDiagnostic, PortForwardInfo, ProcessInfo, RawOutput, ServerMetrics, SessionInfo,
@@ -13,6 +15,26 @@ use ssh_manager::{
 };
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// 托盘「快捷连接」里的一条主机档案（id + 显示名）。前端推送、托盘菜单消费。
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayQuickConnect {
+    pub id: String,
+    pub name: String,
+}
+
+/// 托盘快捷连接清单：前端在主机档案变化时推送，托盘菜单据此重建。
+#[derive(Default)]
+pub struct TrayState {
+    pub quick_connects: tokio::sync::Mutex<Vec<TrayQuickConnect>>,
+}
+
+/// 启动参数里的连接意图：首启动解析一次，前端经 `cli_launch_request` 取用。
+#[derive(Default)]
+pub struct CliState {
+    pub initial: tokio::sync::Mutex<Option<CliConnectPayload>>,
+}
 
 pub struct AppState {
     pub ssh: Arc<SshManager>,
@@ -622,6 +644,68 @@ async fn tray_set_active_count(app: AppHandle, count: u64) -> Result<(), String>
     Ok(())
 }
 
+/// 前端取首启动的命令行连接意图（`catshell user@host` / `catshell 档案名`）。
+/// 不清除：dev 模式页面重载后仍能恢复意图，前端侧按一次性消费。
+#[tauri::command]
+async fn cli_launch_request(
+    state: State<'_, CliState>,
+) -> Result<Option<CliConnectPayload>, String> {
+    Ok(state.initial.lock().await.clone())
+}
+
+/// 前端推送托盘「快捷连接」清单（主机档案变化时调用），并重建托盘菜单。
+#[tauri::command]
+async fn tray_set_quick_connects(
+    app: AppHandle,
+    state: State<'_, TrayState>,
+    items: Vec<TrayQuickConnect>,
+) -> Result<(), String> {
+    *state.quick_connects.lock().await = items;
+    let snapshot = state.quick_connects.lock().await.clone();
+    rebuild_tray_menu(&app, &snapshot)
+}
+
+/// 依据快捷连接清单重建托盘菜单（快捷连接子菜单 + 显示 / 退出）。
+#[cfg(desktop)]
+fn rebuild_tray_menu(app: &AppHandle, quick: &[TrayQuickConnect]) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem, Submenu};
+
+    let tray = app.tray_by_id("main-tray").ok_or("托盘未初始化")?;
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", "退出 CatShell", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+
+    let submenu = Submenu::with_id(app, "quick-connect", "快捷连接", true)
+        .map_err(|error| error.to_string())?;
+    if quick.is_empty() {
+        let empty = MenuItem::with_id(app, "qc-empty", "暂无主机档案", false, None::<&str>)
+            .map_err(|error| error.to_string())?;
+        submenu.append(&empty).map_err(|error| error.to_string())?;
+    } else {
+        for item in quick.iter().take(15) {
+            // 显示名可能重复，菜单 id 用档案 id 保证唯一。
+            let entry = MenuItem::with_id(
+                app,
+                format!("qc:{}", item.id),
+                &item.name,
+                true,
+                None::<&str>,
+            )
+            .map_err(|error| error.to_string())?;
+            submenu.append(&entry).map_err(|error| error.to_string())?;
+        }
+    }
+    let menu =
+        Menu::with_items(app, &[&submenu, &show, &quit]).map_err(|error| error.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|error| error.to_string())
+}
+
+#[cfg(not(desktop))]
+fn rebuild_tray_menu(_app: &AppHandle, _quick: &[TrayQuickConnect]) -> Result<(), String> {
+    Ok(())
+}
+
 /// 生成活动会话角标图标：32x32 绿色圆点。
 #[cfg(desktop)]
 fn active_tray_image() -> tauri::image::Image<'static> {
@@ -835,10 +919,25 @@ fn log_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 pub fn run() {
+    // 解析命令行连接意图（`catshell user@host[:port]` / `catshell 档案名`）：
+    // 首启动存入 CliState 供前端取用；second-instance 路径在回调里另行解析转发。
+    let launch_intent = launch::parse_cli_connect(&std::env::args().skip(1).collect::<Vec<_>>());
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 第二实例的启动参数也可能携带连接意图：转发给主窗口后只显示窗口。
+            if let Some(intent) = launch::parse_cli_connect(&args) {
+                let payload = serde_json::json!({
+                    "v": ssh_manager::EVENT_SCHEMA_VERSION,
+                    "kind": intent.kind,
+                    "user": intent.user,
+                    "host": intent.host,
+                    "port": intent.port,
+                    "name": intent.name,
+                });
+                let _ = app.emit("cli-connect", payload);
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -854,6 +953,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
+        .manage(CliState {
+            initial: tokio::sync::Mutex::new(launch_intent),
+        })
+        .manage(TrayState::default())
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
             ssh_write,
@@ -913,7 +1016,9 @@ pub fn run() {
             sftp_sync_start,
             sftp_sync_cancel,
             sftp_disk_transfer_list,
-            tray_set_active_count
+            tray_set_active_count,
+            cli_launch_request,
+            tray_set_quick_connects
         ])
         .setup(|app| {
             // release 构建没有控制台，日志必须落盘才能事后追查连接/传输故障。
@@ -935,10 +1040,23 @@ pub fn run() {
                 if let Some(icon) = app.default_window_icon() {
                     tray = tray.icon(icon.clone());
                 }
-                tray.on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => show_main_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
+                tray.on_menu_event(|app, event| {
+                    let id = event.id.as_ref();
+                    if let Some(host_id) = id.strip_prefix("qc:") {
+                        // 托盘快捷连接：把档案 id 交给前端走共用直连链路。
+                        let payload = serde_json::json!({
+                            "v": ssh_manager::EVENT_SCHEMA_VERSION,
+                            "hostId": host_id,
+                        });
+                        let _ = app.emit("tray-quick-connect", payload);
+                        show_main_window(app);
+                        return;
+                    }
+                    match id {
+                        "show" => show_main_window(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {

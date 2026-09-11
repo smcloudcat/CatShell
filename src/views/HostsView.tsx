@@ -6,6 +6,8 @@ import { HostImportPreviewModal } from './hosts/HostImportPreviewModal'
 import { SshConfigImportModal } from './hosts/SshConfigImportModal'
 import { useSessions } from '../store/sessions'
 import { connectHostQuick } from '../store/hostConnect'
+import { useLaunchIntent } from '../store/launchIntent'
+import { synthesizeAdhocProfile } from '../utils/launchIntent'
 import { useHosts } from '../store/hosts'
 import { HostProfile } from '../types/host'
 import { recordAudit } from '../store/audit'
@@ -75,6 +77,14 @@ export function HostsView({ onOpenSessions }: Props) {
     setEditingHost(host)
     setDialogOpen(true)
   }, [])
+
+  // 命令行 `catshell user@host[:port]` 临时目标：打开连接对话框预填（6.16）。
+  const adhocPrefill = useLaunchIntent((s) => s.adhocPrefill)
+  useEffect(() => {
+    if (!adhocPrefill) return
+    useLaunchIntent.getState().setAdhocPrefill(null)
+    openEdit(synthesizeAdhocProfile(adhocPrefill))
+  }, [adhocPrefill, openEdit])
 
   /**
    * 从列表一键连接。
