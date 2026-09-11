@@ -20,6 +20,7 @@ export type AuditAction =
   | 'sftp.disk-upload'
   | 'sftp.delete'
   | 'sftp.edit'
+  | 'sftp.sync'
   | 'sftp.mkdir'
   | 'sftp.rename'
   | 'sftp.move'

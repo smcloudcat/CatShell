@@ -29,6 +29,7 @@ import { SftpDropZone } from './SftpDropZone'
 import { SftpEditorModal } from './SftpEditorModal'
 import { SftpChmodDialog } from './SftpChmodDialog'
 import { SftpNameDialog, SftpNameDialogState } from './SftpNameDialog'
+import { SftpSyncDialog } from './SftpSyncDialog'
 import { downloadChunkedFile, isCancellation, uploadChunkedFile } from './sftpTransferOps'
 import {
   SFTP_CHUNKED_THRESHOLD,
@@ -74,6 +75,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [nameDialog, setNameDialog] = useState<SftpNameDialogState | null>(null)
   const [nameBusy, setNameBusy] = useState(false)
   const [chmodDialog, setChmodDialog] = useState<{ target: SftpEntry; value: string } | null>(null)
+  const [syncOpen, setSyncOpen] = useState(false)
   const [chmodBusy, setChmodBusy] = useState(false)
 
   const [sortKey, setSortKey] = useState<SftpSortKey>('name')
@@ -526,6 +528,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           createDirectory: () => setNameDialog({ mode: 'mkdir', target: null, value: '' }),
           upload: (files) => void uploadFiles(files),
           diskUpload: () => void handleDiskUpload(),
+          openSync: () => setSyncOpen(true),
           goParent: () => void loadDirectory(parentPath(path)),
           openInTerminal: () => void openInTerminal(),
           changeSortKey: setSortKey,
@@ -568,6 +571,14 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         />
       )}
       <SftpTransferList sessionId={sessionId} />
+      {syncOpen && (
+        <SftpSyncDialog
+          sessionId={sessionId}
+          remoteDir={path}
+          onClose={() => setSyncOpen(false)}
+          onFinished={() => void loadDirectory()}
+        />
+      )}
     </SftpDropZone>
   )
 }

@@ -19,6 +19,7 @@ export interface SftpToolbarActions {
   createDirectory: () => void
   upload: (files: File[]) => void
   diskUpload: () => void
+  openSync: () => void
   goParent: () => void
   openInTerminal: () => void
   changeSortKey: (key: SftpSortKey) => void
@@ -73,6 +74,14 @@ export function SftpToolbar({ state, actions }: Props) {
           title={t('磁盘级上传：本地文件经 Rust 直传远端，支持断点续传')}
         >
           <Icon name="save" size={15} />
+        </button>
+        <button
+          className="glass-btn"
+          onClick={actions.openSync}
+          disabled={busy}
+          title={t('目录同步（单向）：按差异清单把本地目录与远程目录对齐')}
+        >
+          <Icon name="sync" size={15} />
         </button>
       </div>
       <div className="sftp-pathbar">

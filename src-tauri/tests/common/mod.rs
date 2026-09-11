@@ -336,6 +336,8 @@ struct MockEntry {
     is_dir: bool,
     data: Vec<u8>,
     permissions: u32,
+    /// 最近写入时间（unix 秒），同步功能依赖 mtime 比较差异。
+    mtime: u64,
 }
 
 /// 连接级共享的内存文件系统。
@@ -354,6 +356,7 @@ impl SharedFs {
                 is_dir: true,
                 data: Vec::new(),
                 permissions: 0o755,
+                mtime: now_unix_secs(),
             },
         );
         fs.insert(
@@ -362,6 +365,7 @@ impl SharedFs {
                 is_dir: true,
                 data: Vec::new(),
                 permissions: 0o755,
+                mtime: now_unix_secs(),
             },
         );
         fs.insert(
@@ -370,6 +374,7 @@ impl SharedFs {
                 is_dir: false,
                 data: b"hello from mock sftp\n".to_vec(),
                 permissions: 0o644,
+                mtime: now_unix_secs(),
             },
         );
         SharedFs(Arc::new(Mutex::new(fs)))
@@ -382,6 +387,13 @@ pub struct MockSftpFs {
     handles: HashMap<String, String>,
     read_done: HashSet<String>,
     next_handle: u64,
+}
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn mode_bits(is_dir: bool) -> u32 {
@@ -401,7 +413,7 @@ fn attrs_of(entry: &MockEntry) -> FileAttributes {
         group: None,
         permissions: Some(entry.permissions | mode_bits(entry.is_dir)),
         atime: Some(0),
-        mtime: Some(0),
+        mtime: Some(entry.mtime as u32),
     }
 }
 
@@ -540,6 +552,7 @@ impl russh_sftp::server::Handler for MockSftpFs {
             match fs.get_mut(&resolved) {
                 Some(entry) if pflags.contains(OpenFlags::TRUNCATE) && !entry.is_dir => {
                     entry.data.clear();
+                    entry.mtime = now_unix_secs();
                 }
                 Some(_) => {}
                 None => {
@@ -552,6 +565,7 @@ impl russh_sftp::server::Handler for MockSftpFs {
                             is_dir: false,
                             data: Vec::new(),
                             permissions: 0o644,
+                            mtime: now_unix_secs(),
                         },
                     );
                 }
@@ -628,6 +642,7 @@ impl russh_sftp::server::Handler for MockSftpFs {
                 is_dir: true,
                 data: Vec::new(),
                 permissions: 0o755,
+                mtime: now_unix_secs(),
             },
         );
         Ok(ok_status(id))

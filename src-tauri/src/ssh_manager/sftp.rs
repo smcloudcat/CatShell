@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use super::{EventSink, SshManager};
 
 const MAX_SFTP_FILE_SIZE: usize = 64 * 1024 * 1024;
-const SFTP_CHUNK_SIZE: usize = 256 * 1024;
+pub(super) const SFTP_CHUNK_SIZE: usize = 256 * 1024;
 const REMOTE_DELETE_MAX_DEPTH: usize = 16;
 const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
 const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);

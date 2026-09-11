@@ -21,6 +21,10 @@ import {
   SftpDiskTransferStart,
   SftpDiskUploadPick,
   SftpEntry,
+  SftpSyncPlan,
+  SftpSyncPlanEntry,
+  SftpSyncProgress,
+  SftpSyncStartInfo,
   SshConfigEntry
 } from '../types/session'
 import { EVENT_SCHEMA_VERSION, shouldDropEvent } from '../utils/eventSchema'
@@ -311,6 +315,54 @@ export async function sftpDiskUploadStartToken(
     resume,
     speedLimitKBs
   })
+}
+
+/** 打开目录选择对话框（目录同步的本地侧入口），取消返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  return invoke<string | null>('pick_directory')
+}
+
+/** 生成目录同步计划：扫描两侧目录树，产出差异动作清单供预览确认。 */
+export async function sftpSyncPlan(
+  id: number,
+  direction: 'upload' | 'download',
+  localDir: string,
+  remoteDir: string
+): Promise<SftpSyncPlan> {
+  return invoke<SftpSyncPlan>('sftp_sync_plan', { id, direction, localDir, remoteDir })
+}
+
+/** 启动目录同步执行（后台逐文件串行，进度经 sftp-sync-progress 事件推送）。 */
+export async function sftpSyncStart(
+  id: number,
+  direction: 'upload' | 'download',
+  localDir: string,
+  remoteDir: string,
+  entries: SftpSyncPlanEntry[]
+): Promise<SftpSyncStartInfo> {
+  return invoke<SftpSyncStartInfo>('sftp_sync_start', { id, direction, localDir, remoteDir, entries })
+}
+
+/** 取消会话进行中的目录同步任务。 */
+export async function sftpSyncCancel(id: number): Promise<boolean> {
+  return invoke<boolean>('sftp_sync_cancel', { id })
+}
+
+/** 订阅目录同步进度事件。返回取消订阅函数。 */
+export async function subscribeSftpSyncProgress(
+  handler: (progress: SftpSyncProgress) => void
+): Promise<() => void> {
+  const unlisten = await listen<SftpSyncProgress>(
+    'sftp-sync-progress',
+    versioned<SftpSyncProgress>('sftp-sync-progress', handler)
+  )
+  return () => {
+    try {
+      unlisten()
+    } catch {
+      // 忽略重复取消订阅
+    }
+  }
 }
 
 export async function sftpDiskTransferCancel(transferId: number): Promise<void> {

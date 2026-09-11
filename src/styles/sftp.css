@@ -242,3 +242,122 @@
   font-size: 12px;
   flex: none;
 }
+
+/* 目录同步弹窗：方向单选、路径行、差异清单与进度条 */
+.sftp-sync-direction {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.sftp-sync-direction label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.sftp-sync-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sftp-sync-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sftp-sync-path-label {
+  flex: none;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.sftp-sync-path-row code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-sync-note {
+  font-size: 12px;
+  opacity: 0.7;
+  margin: 8px 0;
+}
+.sftp-sync-error {
+  color: var(--err);
+  font-size: 13px;
+  margin: 8px 0;
+}
+.sftp-sync-plan {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  margin-bottom: 10px;
+}
+.sftp-sync-plan-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sftp-sync-plan-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.sftp-sync-plan-list code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-sync-action {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-muted, rgba(127, 127, 127, 0.15));
+}
+.sftp-sync-action-add { color: var(--ok); }
+.sftp-sync-action-update { color: var(--warn); }
+.sftp-sync-action-mkdir { color: var(--info); }
+.sftp-sync-action-skip { opacity: 0.55; }
+.sftp-sync-more {
+  font-size: 12px;
+  opacity: 0.65;
+  margin: 6px 0 0;
+}
+.sftp-sync-running .sftp-sync-bar {
+  height: 8px;
+  border-radius: 6px;
+  background: var(--bg-muted, rgba(127, 127, 127, 0.2));
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.sftp-sync-bar-fill {
+  height: 100%;
+  background: var(--accent, var(--info));
+  transition: width 0.25s ease;
+}
+.sftp-sync-stat {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.sftp-sync-errors {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-muted, rgba(127, 127, 127, 0.12));
+  color: var(--err);
+  font-size: 12px;
+  max-height: 96px;
+  overflow: auto;
+}

@@ -153,6 +153,44 @@ export interface SftpDiskProgress extends VersionedEvent {
   speedLimitKBs: number
 }
 
+/** 目录同步动作：mkdir 建目录 / add 新增 / update 更新 / skip 跳过。 */
+export type SftpSyncAction = 'mkdir' | 'add' | 'update' | 'skip'
+
+export interface SftpSyncPlanEntry {
+  relativePath: string
+  action: SftpSyncAction
+  size: number
+}
+
+export interface SftpSyncPlan {
+  sessionId: number
+  direction: 'upload' | 'download'
+  localDir: string
+  remoteDir: string
+  entries: SftpSyncPlanEntry[]
+  transferCount: number
+  skipCount: number
+  totalBytes: number
+}
+
+export interface SftpSyncStartInfo {
+  totalFiles: number
+  totalBytes: number
+}
+
+export interface SftpSyncProgress extends VersionedEvent {
+  sessionId: number
+  direction: 'upload' | 'download'
+  doneFiles: number
+  totalFiles: number
+  doneBytes: number
+  totalBytes: number
+  currentFile?: string | null
+  finished: boolean
+  cancelled: boolean
+  errors: string[]
+}
+
 export interface SftpDiskTransferInfo {
   transferId: number
   sessionId: number

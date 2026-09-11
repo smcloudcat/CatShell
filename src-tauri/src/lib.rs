@@ -364,6 +364,67 @@ async fn sftp_disk_download_pick(
         .map(Some)
 }
 
+/// 打开目录选择对话框（SFTP 目录同步的本地侧入口），路径仅随选中结果返回。
+#[tauri::command]
+async fn pick_directory(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |file_path| {
+        let picked = file_path.and_then(|path| path.into_path().ok());
+        let _ = tx.send(picked);
+    });
+    let picked = rx.await.map_err(|_| "目录选择对话框已关闭".to_string())?;
+    Ok(picked.map(|path| path.to_string_lossy().to_string()))
+}
+
+/// 生成 SFTP 目录同步计划（扫描两侧目录树、产出差异动作清单供前端预览确认）。
+#[tauri::command]
+async fn sftp_sync_plan(
+    state: State<'_, AppState>,
+    id: u64,
+    direction: String,
+    local_dir: String,
+    remote_dir: String,
+) -> Result<ssh_manager::SyncPlan, String> {
+    state
+        .ssh
+        .sftp_sync_plan(id, direction, local_dir, remote_dir)
+        .await
+}
+
+/// 启动 SFTP 目录同步执行（后台逐文件串行，进度经 sftp-sync-progress 事件推送）。
+#[tauri::command]
+async fn sftp_sync_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    direction: String,
+    local_dir: String,
+    remote_dir: String,
+    entries: Vec<ssh_manager::SyncPlanEntry>,
+) -> Result<ssh_manager::SyncStartInfo, String> {
+    let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
+    state
+        .ssh
+        .sftp_sync_start(
+            state.ssh.clone(),
+            sink,
+            id,
+            direction,
+            local_dir,
+            remote_dir,
+            entries,
+        )
+        .await
+}
+
+/// 取消会话进行中的目录同步任务。返回是否存在任务。
+#[tauri::command]
+async fn sftp_sync_cancel(state: State<'_, AppState>, id: u64) -> Result<bool, String> {
+    Ok(state.ssh.sftp_sync_cancel(id).await)
+}
+
 /// 打开文件对话框选择要上传的本地文件并登记一次性令牌（真实路径不出 Rust 边界）。
 #[tauri::command]
 async fn sftp_disk_upload_pick(
@@ -739,6 +800,10 @@ pub fn run() {
             sftp_disk_upload_start_token,
             sftp_disk_transfer_cancel,
             sftp_disk_transfer_set_limit,
+            pick_directory,
+            sftp_sync_plan,
+            sftp_sync_start,
+            sftp_sync_cancel,
             sftp_disk_transfer_list,
             tray_set_active_count
         ])

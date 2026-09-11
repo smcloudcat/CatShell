@@ -32,6 +32,7 @@ export type IconName =
   | 'keyboard'
   | 'record'
   | 'play'
+  | 'sync'
   | 'pause'
 
 const paths: Record<IconName, React.ReactNode> = {
@@ -57,6 +58,14 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   play: <path d="M8 5.5v13l10.5-6.5L8 5.5Z" />,
+  sync: (
+    <>
+      <path d="M20.5 12a8.5 8.5 0 0 1-14.6 5.9L3.5 15.5" />
+      <path d="M3.5 12a8.5 8.5 0 0 1 14.6-5.9l2.4 2.4" />
+      <path d="M20.5 4.5v4h-4" />
+      <path d="M3.5 19.5v-4h4" />
+    </>
+  ),
   pause: (
     <>
       <path d="M9 5.5v13" />

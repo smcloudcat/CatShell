@@ -3,6 +3,7 @@ mod config;
 mod forward;
 mod monitor;
 mod sftp;
+mod sync;
 mod types;
 
 use std::collections::HashMap;
@@ -32,6 +33,7 @@ pub use sftp::{
     validate_sftp_path, SftpChunk, SftpDiskTransferInfo, SftpDiskTransferStart, SftpDiskUploadPick,
     SftpEntry, SftpTransferStart,
 };
+pub use sync::{SyncPlan, SyncPlanEntry, SyncProgress, SyncStartInfo};
 pub use types::{
     ConnectRequest, KnownHostEntry, KnownHostsSnapshot, NetworkDiagnostic, PartitionMetric,
     PortForwardInfo, ProcessInfo, ProxyConfig, ServerMetrics, SessionInfo, SshConfigEntry,
@@ -112,6 +114,8 @@ pub struct SshManager {
     /// 磁盘上传路径令牌：本地路径只能经 Rust 侧文件对话框选取，webview 仅持有一次性令牌。
     pub sftp_upload_path_tokens: Mutex<HashMap<u64, sftp::UploadPathToken>>,
     next_upload_token: AtomicU64,
+    /// 目录同步任务取消句柄，按会话登记（同一会话同时一个同步任务）。
+    pub sync_jobs: Mutex<HashMap<u64, Arc<sync::SyncJob>>>,
 }
 
 impl Default for SshManager {
@@ -134,6 +138,7 @@ impl Default for SshManager {
             next_disk_transfer_id: AtomicU64::new(1),
             sftp_upload_path_tokens: Mutex::new(HashMap::new()),
             next_upload_token: AtomicU64::new(1),
+            sync_jobs: Mutex::new(HashMap::new()),
         }
     }
 }
