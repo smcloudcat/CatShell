@@ -1,12 +1,18 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
 import { Modal } from './components/Modal'
 import { FeedbackHost } from './components/Feedback'
-import { confirmDialog } from './store/ui'
+import { confirmDialog, showToast } from './store/ui'
 import { useSettings } from './store/settings'
 import { useSessions } from './store/sessions'
 import { useHosts } from './store/hosts'
+import { useSessionRestore } from './store/sessionRestore'
+import { connectHostQuick } from './store/hostConnect'
+import { ShortcutsDialog } from './components/ShortcutsDialog'
+import { CommandPalette } from './components/CommandPalette'
+import { PaletteCommand } from './utils/commandPalette'
+import { HostProfile } from './types/host'
 import { useVault } from './store/vault'
 import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
@@ -74,6 +80,9 @@ function App() {
   const t = translate
   const [view, setView] = useState<ViewId>('home')
   const [kbiValues, setKbiValues] = useState<string[]>([])
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const hostProfiles = useHosts((s) => s.hosts)
 
   // 新一轮弹窗到达时清空上一轮的应答，避免陈旧凭据被静默重提
   useEffect(() => {
@@ -87,6 +96,7 @@ function App() {
     void vaultInit()
     void snippetsInit()
     void auditInit()
+    void useSessionRestore.getState().init()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
 
   // 设置读取完成后再恢复上次视图；恢复完成前不持久化，避免默认视图覆盖记录
@@ -161,6 +171,18 @@ function App() {
       const state = useSessions.getState()
       const key = event.key.toLowerCase()
 
+      // Ctrl+K 命令面板与 Ctrl+/ 速查面板：任何焦点下都可用，再按一次关闭
+      if (key === 'k' && !event.shiftKey) {
+        event.preventDefault()
+        setPaletteOpen((open) => !open)
+        return
+      }
+      if (key === '/') {
+        event.preventDefault()
+        setShortcutsOpen((open) => !open)
+        return
+      }
+
       // 终端内搜索：Ctrl+F / Ctrl+Shift+F（终端聚焦时由 TerminalPane 拦截，此处覆盖焦点在外的场景）
       if (key === 'f') {
         if (view !== 'sessions' || state.activeId === null || editable) return
@@ -231,6 +253,79 @@ function App() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [view])
+
+  const sessionOrder = useSessions((s) => s.order)
+  const sessionInfos = useSessions((s) => s.sessions)
+
+  // 命令面板清单：视图 → 快捷动作 → 主机 → 已开会话。过滤逻辑见 utils/commandPalette.ts。
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const items: PaletteCommand[] = NAV_ITEMS.map((item) => ({
+      id: `view:${item.id}`,
+      label: translate(item.labelKey) || item.fallback,
+      icon: item.icon,
+      keywords: `view ${item.id}`
+    }))
+    items.push({ id: 'action:new-session', label: t('新建会话'), icon: 'plus', keywords: 'connect ssh new' })
+    items.push({ id: 'action:shortcuts', label: t('快捷键速查'), icon: 'keyboard', keywords: 'shortcut keys help' })
+    for (const host of hostProfiles) {
+      items.push({
+        id: `host:${host.id}`,
+        label: host.name || `${host.username}@${host.host}`,
+        hint: `${host.host}:${host.port}`,
+        icon: 'server',
+        keywords: 'host connect ssh'
+      })
+    }
+    for (const id of sessionOrder) {
+      const info = sessionInfos[id]
+      if (!info) continue
+      items.push({
+        id: `session:${id}`,
+        label: info.name || `${info.username}@${info.host}`,
+        hint: t('切换到该标签'),
+        icon: 'terminal',
+        keywords: 'session tab switch'
+      })
+    }
+    return items
+  }, [hostProfiles, sessionInfos, sessionOrder, t, translate])
+
+  const runPaletteCommand = (command: PaletteCommand) => {
+    if (command.id.startsWith('view:')) {
+      setView(command.id.slice(5) as ViewId)
+      return
+    }
+    if (command.id === 'action:new-session') {
+      setView('hosts')
+      return
+    }
+    if (command.id === 'action:shortcuts') {
+      setShortcutsOpen(true)
+      return
+    }
+    if (command.id.startsWith('host:')) {
+      const hostId = command.id.slice(5)
+      const host: HostProfile | undefined = useHosts
+        .getState()
+        .hosts.find((item) => item.id === hostId)
+      if (!host) return
+      void connectHostQuick(host).then((result) => {
+        if (result === 'connected') {
+          setView('sessions')
+          return
+        }
+        setView('hosts')
+        showToast(t('该主机需要补充凭据，请在主机页连接'), 'warning')
+      })
+      return
+    }
+    if (command.id.startsWith('session:')) {
+      const id = Number(command.id.slice(8))
+      if (!Number.isInteger(id)) return
+      useSessions.getState().setActive(id)
+      setView('sessions')
+    }
+  }
 
   useEffect(() => {
     const root = document.documentElement.style
@@ -457,6 +552,14 @@ function App() {
               </button>
             </footer>
         </Modal>
+      )}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {paletteOpen && (
+        <CommandPalette
+          commands={paletteCommands}
+          onRun={runPaletteCommand}
+          onClose={() => setPaletteOpen(false)}
+        />
       )}
       <FeedbackHost />
     </div>

@@ -3,6 +3,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import type { Event } from '@tauri-apps/api/event'
 import {
   ConnectRequest,
+  BatchExecItem,
   HostKeyPrompt,
   HostKeyWarning,
   KbiPromptEvent,
@@ -117,6 +118,43 @@ export async function sshProcesses(id: number): Promise<ProcessInfo[]> {
 
 export async function sshKillProcess(id: number, pid: number, signal: 'TERM' | 'KILL'): Promise<void> {
   await invoke('ssh_kill_process', { id, pid, signal })
+}
+
+/** 批量在多个会话上执行同一条命令并聚合输出。危险操作，调用方负责确认与审计。 */
+export async function sshBatchExec(
+  sessionIds: number[],
+  command: string,
+  timeoutSecs: number
+): Promise<BatchExecItem[]> {
+  return invoke<BatchExecItem[]>('ssh_batch_exec', { sessionIds, command, timeoutSecs })
+}
+
+// ------------------------------------------------------------------
+// 录制库（asciicast v2 存储）
+// ------------------------------------------------------------------
+
+export interface RecordingMeta {
+  name: string
+  size: number
+  /** Unix 秒。 */
+  modifiedAt: number
+}
+
+/** 保存一条录制（asciicast v2 文本），返回文件元信息。 */
+export function recordingSave(baseName: string, content: string): Promise<RecordingMeta> {
+  return invoke<RecordingMeta>('recording_save', { baseName, content })
+}
+
+export function recordingList(): Promise<RecordingMeta[]> {
+  return invoke<RecordingMeta[]>('recording_list')
+}
+
+export function recordingRead(name: string): Promise<string> {
+  return invoke<string>('recording_read', { name })
+}
+
+export function recordingDelete(name: string): Promise<void> {
+  return invoke<void>('recording_delete', { name })
 }
 
 export async function sshNetworkDiagnostic(id: number, kind: 'ping' | 'trace', target: string): Promise<NetworkDiagnostic> {

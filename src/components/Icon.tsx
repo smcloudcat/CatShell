@@ -27,8 +27,42 @@ export type IconName =
   | 'columns'
   | 'download'
   | 'info'
+  | 'clock'
+  | 'command'
+  | 'keyboard'
+  | 'record'
+  | 'play'
+  | 'pause'
 
 const paths: Record<IconName, React.ReactNode> = {
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3.2 1.8" />
+    </>
+  ),
+  command: (
+    <path d="M9 9V6.5a2.5 2.5 0 1 0-2.5 2.5H9Zm0 0v6m0-6h6m-6 6H6.5A2.5 2.5 0 1 0 9 17.5V15Zm6-6V6.5A2.5 2.5 0 1 1 17.5 9H15Zm0 0v6m0 0h2.5a2.5 2.5 0 1 1-2.5 2.5V15Z" />
+  ),
+  keyboard: (
+    <>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" />
+    </>
+  ),
+  record: (
+    <>
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+    </>
+  ),
+  play: <path d="M8 5.5v13l10.5-6.5L8 5.5Z" />,
+  pause: (
+    <>
+      <path d="M9 5.5v13" />
+      <path d="M15 5.5v13" />
+    </>
+  ),
   download: (
     <>
       <path d="M12 3v11" />

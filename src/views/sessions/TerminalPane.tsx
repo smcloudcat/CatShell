@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal, ITheme } from '@xterm/xterm'
+import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -9,6 +9,7 @@ import { Icon } from '../../components/Icon'
 import { getSessionLog, useSessions } from '../../store/sessions'
 import { TerminalSettings, useSettings } from '../../store/settings'
 import { useT } from '../../i18n'
+import { DARK_TERM_THEME, LIGHT_TERM_THEME } from './terminalTheme'
 
 interface Props {
   id: number
@@ -22,54 +23,6 @@ const BASE_OPTIONS = {
   lineHeight: 1.25,
   convertEol: false,
   allowProposedApi: false
-}
-
-const DARK_TERM_THEME: ITheme = {
-  background: 'rgba(2, 6, 23, 0.35)',
-  foreground: '#dbe4f5',
-  cursor: '#38bdf8',
-  cursorAccent: '#0f172a',
-  selectionBackground: 'rgba(56, 189, 248, 0.3)',
-  black: '#0f172a',
-  red: '#f87171',
-  green: '#4ade80',
-  yellow: '#facc15',
-  blue: '#60a5fa',
-  magenta: '#c084fc',
-  cyan: '#22d3ee',
-  white: '#e2e8f0',
-  brightBlack: '#64748b',
-  brightRed: '#fca5a5',
-  brightGreen: '#86efac',
-  brightYellow: '#fde047',
-  brightBlue: '#93c5fd',
-  brightMagenta: '#d8b4fe',
-  brightCyan: '#67e8f9',
-  brightWhite: '#f8fafc'
-}
-
-const LIGHT_TERM_THEME: ITheme = {
-  background: 'rgba(255, 255, 255, 0.55)',
-  foreground: '#1e293b',
-  cursor: '#2563eb',
-  cursorAccent: '#f8fafc',
-  selectionBackground: 'rgba(37, 99, 235, 0.25)',
-  black: '#1e293b',
-  red: '#dc2626',
-  green: '#16a34a',
-  yellow: '#ca8a04',
-  blue: '#2563eb',
-  magenta: '#9333ea',
-  cyan: '#0891b2',
-  white: '#e2e8f0',
-  brightBlack: '#64748b',
-  brightRed: '#ef4444',
-  brightGreen: '#22c55e',
-  brightYellow: '#eab308',
-  brightBlue: '#3b82f6',
-  brightMagenta: '#a855f7',
-  brightCyan: '#06b6d4',
-  brightWhite: '#f8fafc'
 }
 
 function useEffectiveMode(): 'light' | 'dark' {
@@ -232,7 +185,8 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
       fit: () => {
         fit.fit()
       },
-      openSearch: () => openSearchRef.current()
+      openSearch: () => openSearchRef.current(),
+      getSize: () => ({ cols: term.cols, rows: term.rows })
     })
 
     if (history.length) {

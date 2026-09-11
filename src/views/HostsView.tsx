@@ -5,13 +5,12 @@ import { HostRow } from './hosts/HostRow'
 import { HostImportPreviewModal } from './hosts/HostImportPreviewModal'
 import { SshConfigImportModal } from './hosts/SshConfigImportModal'
 import { useSessions } from '../store/sessions'
+import { connectHostQuick } from '../store/hostConnect'
 import { useHosts } from '../store/hosts'
-import { useVault } from '../store/vault'
 import { HostProfile } from '../types/host'
-import { buildConnectRequest } from '../types/session'
 import { recordAudit } from '../store/audit'
 import { ImportPreview, previewHostImport } from '../store/hosts'
-import { requestVaultUnlock, showToast } from '../store/ui'
+import { showToast } from '../store/ui'
 import { collectTags, filterHosts, groupHosts } from '../utils/hostList'
 import { useT } from '../i18n'
 import { errorText } from '../i18n/errors'
@@ -38,12 +37,9 @@ export function HostsView({ onOpenSessions }: Props) {
 
   const sessions = useSessions((s) => s.sessions)
   const sessionOrder = useSessions((s) => s.order)
-  const openSession = useSessions((s) => s.open)
   const hosts = useHosts((s) => s.hosts)
   const removeHost = useHosts((s) => s.remove)
   const importProfiles = useHosts((s) => s.importProfiles)
-  const vaultConfigured = useVault((s) => s.configured)
-  const getCredential = useVault((s) => s.getCredential)
 
   useEffect(() => {
     void useHosts.getState().init()
@@ -83,63 +79,19 @@ export function HostsView({ onOpenSessions }: Props) {
   /**
    * 从列表一键连接。
    * 缺少可用凭据（或保险箱锁定）时不硬连，直接把连接对话框打开让用户补齐。
+   * 与命令面板共用 `connectHostQuick`，保持同一条直连链路。
    */
-  const reconnect = useCallback(async (host: HostProfile) => {
-    const needsVault =
-      host.authMethod === 'password' ||
-      host.authMethod === 'key' ||
-      (host.proxy.enabled && (host.proxy.authMethod === 'password' || host.proxy.authMethod === 'key'))
-    if (vaultConfigured && !useVault.getState().unlocked && needsVault) {
-      if (!(await requestVaultUnlock())) return
-    }
-    const unlocked = useVault.getState().unlocked
-    const credential = unlocked ? getCredential(host.id) : null
-    const proxyCredential = host.proxy.enabled && unlocked ? getCredential(`proxy:${host.id}`) : null
-    const hasAuth =
-      host.authMethod === 'key'
-        ? Boolean(host.keyPath)
-        : host.authMethod === 'agent'
-          ? true
-          : Boolean(credential?.password)
-    if (!hasAuth) {
-      openEdit(host)
-      return
-    }
-    // 与连接对话框共用 buildConnectRequest，避免两处各自拼装请求导致字段漂移。
-    const request = buildConnectRequest({
-      name: host.name,
-      host: host.host,
-      port: host.port,
-      username: host.username,
-      authMethod: host.authMethod,
-      password: credential?.password ?? null,
-      keyPath: host.keyPath ?? null,
-      passphrase: credential?.passphrase ?? null,
-      otpSecret: null,
-      keepalive: host.keepAliveInterval,
-      autoReconnect: host.autoReconnect,
-      proxy: host.proxy.enabled
-        ? {
-            host: host.proxy.host,
-            port: host.proxy.port,
-            username: host.proxy.username,
-            authMethod: host.proxy.authMethod,
-            password: proxyCredential?.password ?? null,
-            keyPath: host.proxy.keyPath ?? null,
-            passphrase: proxyCredential?.passphrase ?? null
-          }
-        : null
-    })
-    const label = `${host.name} (${host.host}:${host.port})`
-    try {
-      await openSession(request)
-      recordAudit('session.connect', label, 'success', '从主机列表快速连接')
+  const reconnect = useCallback(
+    async (host: HostProfile) => {
+      const result = await connectHostQuick(host)
+      if (result === 'needs-form') {
+        openEdit(host)
+        return
+      }
       onOpenSessions()
-    } catch {
-      recordAudit('session.connect', label, 'failure', '快速连接失败，打开连接对话框')
-      openEdit(host)
-    }
-  }, [getCredential, openEdit, openSession, onOpenSessions, vaultConfigured])
+    },
+    [openEdit, onOpenSessions]
+  )
 
   const handleDelete = useCallback(
     async (host: HostProfile) => {

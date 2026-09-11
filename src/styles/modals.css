@@ -271,3 +271,168 @@
     display: none;
   }
 }
+
+/* ============ 快捷键速查 / 命令面板 ============ */
+
+.kbd-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--soft-bg-strong);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-main);
+}
+
+.modal-title .kbd-chip {
+  margin-right: 8px;
+}
+
+.kbd-plus {
+  margin-right: 8px;
+  opacity: 0.6;
+}
+
+.shortcuts-modal {
+  width: min(520px, calc(100vw - 64px));
+}
+
+.shortcuts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.shortcut-group-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.shortcut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shortcut-row .kbd-chip {
+  flex-shrink: 0;
+  min-width: 120px;
+}
+
+.shortcut-label {
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.palette-modal {
+  width: min(560px, calc(100vw - 64px));
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-muted);
+}
+
+.palette-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 14px;
+}
+
+.palette-input::placeholder {
+  color: var(--text-faint);
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.palette-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.palette-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-item-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-empty {
+  padding: 22px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.palette-footer {
+  display: flex;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.palette-footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.palette-footer .kbd-chip {
+  min-width: 20px;
+  padding: 1px 6px;
+}

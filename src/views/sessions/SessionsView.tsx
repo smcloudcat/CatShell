@@ -5,17 +5,23 @@ import { TerminalPane } from './TerminalPane'
 import { SessionSftpPanel } from './SessionSftpPanel'
 import { SessionMonitorPanel } from './SessionMonitorPanel'
 import { SessionTabBar } from './SessionTabBar'
+import { RestoreLastTabsActions } from './RestoreLastTabsActions'
 import { SessionToolbar } from './SessionToolbar'
 import { BroadcastBar } from './BroadcastBar'
-import { BulkCommandDialog } from './BulkCommandDialog'
+import { BulkCommandDialog, BulkCommandMode } from './BulkCommandDialog'
 import { SnippetParamDialog } from './SnippetParamDialog'
 import { useSessionPanelResize } from './usePanelResize'
+import { RecordingLibraryDialog } from './RecordingLibraryDialog'
 import { cleanTerminalLog, sessionLogFileName } from './sessionViewUtils'
 import { useSnippets } from '../../store/snippets'
 import { useSettings } from '../../store/settings'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { CommandSnippet, getSnippetParameters, renderCommandTemplate } from '../../types/snippet'
+import { BatchExecItem } from '../../types/session'
+import { sshBatchExec, recordingSave } from '../../api/ssh'
+import { recordingBaseName, startRecording, stopRecording, useRecordingStore } from '../../store/recording'
+import { normalizeBatchCommand, normalizeBatchTargets, parseBatchTimeout, summarizeBatchResults } from '../../utils/batchExec'
 import { useT } from '../../i18n'
 import { errorText } from '../../i18n/errors'
 
@@ -32,6 +38,7 @@ export function SessionsView() {
   const order = useSessions((s) => s.order)
   const activeId = useSessions((s) => s.activeId)
   const splitId = useSessions((s) => s.splitId)
+  const terminals = useSessions((s) => s.terminals)
   const connectedAt = useSessions((s) => s.connectedAt)
   const init = useSessions((s) => s.init)
   const setActive = useSessions((s) => s.setActive)
@@ -54,9 +61,14 @@ export function SessionsView() {
 
   const [snippetId, setSnippetId] = useState('')
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkMode, setBulkMode] = useState<BulkCommandMode>('send')
   const [bulkCommand, setBulkCommand] = useState('')
+  const [bulkTimeout, setBulkTimeout] = useState('10')
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState<string | null>(null)
+  const [bulkResults, setBulkResults] = useState<BatchExecItem[] | null>(null)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const recordingActive = useRecordingStore((s) => s.active)
   const [snippetPrompt, setSnippetPrompt] = useState<CommandSnippet | null>(null)
   const [snippetValues, setSnippetValues] = useState<Record<string, string>>({})
   const [snippetError, setSnippetError] = useState<string | null>(null)
@@ -169,17 +181,42 @@ export function SessionsView() {
   }
 
   // ----------------------------------------------------------------
-  // 批量下发与日志导出
+  // 会话录制（asciinema）
   // ----------------------------------------------------------------
 
-  const sendBulkCommand = async () => {
-    const command = bulkCommand.trim()
-    if (!command) return
-    const targets = order.filter((id) => sessions[id]?.status === 'connected')
-    if (!targets.length) {
-      setBulkResult(t('没有已连接的目标会话'))
+  /** 开始 / 停止当前会话的录制。停止时合成 asciicast 并落盘到录制库。 */
+  const toggleRecording = async () => {
+    if (activeId === null) return
+    const info = sessions[activeId]
+    if (!info) return
+    if (recordingActive[activeId] === true) {
+      const content = stopRecording(activeId)
+      const label = `${info.name} (${info.host}:${info.port})`
+      if (!content) return
+      try {
+        const meta = await recordingSave(
+          recordingBaseName(info.name, Date.now()),
+          content
+        )
+        recordAudit('session.record-stop', label, 'success', meta.name)
+        showToast(t('录制已保存到录制库'), 'success')
+      } catch (err: unknown) {
+        recordAudit('session.record-stop', label, 'failure', '录制保存失败')
+        showToast(errorText(err, t, '录制保存失败'), 'error')
+      }
       return
     }
+    const size = terminals[activeId]?.getSize?.() ?? { cols: 80, rows: 24 }
+    startRecording(activeId, { title: info.name, cols: size.cols, rows: size.rows })
+    recordAudit('session.record-start', `${info.name} (${info.host}:${info.port})`, 'info', '开始录制终端输出')
+  }
+
+  // ----------------------------------------------------------------
+  // 批量下发 / 批量执行聚合与日志导出
+  // ----------------------------------------------------------------
+
+  /** send 模式：把命令写入各会话终端（交互式）。 */
+  const sendBulkToTerminals = async (command: string, targets: number[]) => {
     if (!(await confirmDialog({
       title: t('批量下发命令'),
       message: t('将向 ') + targets.length + t(' 台服务器发送此命令，是否继续？'),
@@ -200,6 +237,49 @@ export function SessionsView() {
     recordAudit('command.bulk-send', `${success}/${targets.length}`, success === targets.length ? 'success' : 'failure', t('批量发送命令'))
     setBulkResult(t('已发送 ') + success + '/' + targets.length + t(' 个会话'))
     setBulkBusy(false)
+  }
+
+  /** exec 模式：在专用通道执行并聚合输出。 */
+  const execBulkCommand = async (command: string, targets: number[]) => {
+    if (!(await confirmDialog({
+      title: t('批量执行命令'),
+      message: t('将在 ') + targets.length + t(' 台服务器上执行此命令并收集输出，是否继续？'),
+      confirmLabel: t('执行并收集输出'),
+      danger: true
+    }))) return
+    setBulkBusy(true)
+    setBulkResults(null)
+    setBulkResult(null)
+    try {
+      const results = await sshBatchExec(targets, command, parseBatchTimeout(bulkTimeout))
+      setBulkResults(results)
+      const summary = summarizeBatchResults(results)
+      recordAudit(
+        'command.batch-exec',
+        `${summary.okCount}/${summary.total}`,
+        summary.allOk ? 'success' : summary.okCount > 0 ? 'info' : 'failure',
+        command
+      )
+    } catch (err: unknown) {
+      showToast(errorText(err, t, '批量执行失败，请稍后重试'), 'error')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const sendBulkCommand = async () => {
+    const command = normalizeBatchCommand(bulkCommand)
+    if (!command) return
+    const targets = normalizeBatchTargets(order.filter((id) => sessions[id]?.status === 'connected'))
+    if (!targets.length) {
+      setBulkResult(t('没有已连接的目标会话'))
+      return
+    }
+    if (bulkMode === 'exec') {
+      await execBulkCommand(command, targets)
+    } else {
+      await sendBulkToTerminals(command, targets)
+    }
   }
 
   const exportSessionLog = () => {
@@ -243,6 +323,7 @@ export function SessionsView() {
           <div className="empty-desc">
             {t('前往「主机」页点击「新建连接」，或在主机列表点击「连接」，即可在此处打开终端标签。')}
           </div>
+          <RestoreLastTabsActions />
         </section>
       </div>
     )
@@ -268,14 +349,18 @@ export function SessionsView() {
         splitActive={splitId !== null}
         tabCount={order.length}
         activeId={activeId}
+        recordingActive={activeId !== null && recordingActive[activeId] === true}
         onSelectSnippet={setSnippetId}
         onSendSnippet={() => void sendSnippet()}
         onOpenBulk={() => setBulkOpen(true)}
         onToggleBroadcast={() => setBroadcastEnabled(!broadcastEnabled)}
         onToggleSplit={toggleSplit}
         onExportLog={exportSessionLog}
+        onToggleRecording={() => void toggleRecording()}
+        onOpenRecordings={() => setLibraryOpen(true)}
       />
       {snippetError && <div className="form-error">{snippetError}</div>}
+      {libraryOpen && <RecordingLibraryDialog onClose={() => setLibraryOpen(false)} />}
       {bulkResult && <div className="form-notice">{bulkResult}</div>}
       {broadcastEnabled && (
         <BroadcastBar
@@ -370,10 +455,18 @@ export function SessionsView() {
       )}
       {bulkOpen && (
         <BulkCommandDialog
+          mode={bulkMode}
           value={bulkCommand}
+          timeout={bulkTimeout}
           busy={bulkBusy}
+          results={bulkResults}
+          onModeChange={setBulkMode}
           onChange={setBulkCommand}
-          onClose={() => setBulkOpen(false)}
+          onTimeoutChange={setBulkTimeout}
+          onClose={() => {
+            setBulkOpen(false)
+            setBulkResults(null)
+          }}
           onSubmit={() => void sendBulkCommand()}
         />
       )}

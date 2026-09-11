@@ -10,15 +10,18 @@ interface Props {
   splitActive: boolean
   tabCount: number
   activeId: number | null
+  recordingActive: boolean
   onSelectSnippet: (id: string) => void
   onSendSnippet: () => void
   onOpenBulk: () => void
   onToggleBroadcast: () => void
   onToggleSplit: () => void
   onExportLog: () => void
+  onToggleRecording: () => void
+  onOpenRecordings: () => void
 }
 
-/** 会话页工具条：片段下发、批量下发、广播、分屏、导出日志。 */
+/** 会话页工具条：片段下发、批量下发、广播、分屏、录制、导出日志。 */
 export function SessionToolbar({
   snippets,
   snippetId,
@@ -27,12 +30,15 @@ export function SessionToolbar({
   splitActive,
   tabCount,
   activeId,
+  recordingActive,
   onSelectSnippet,
   onSendSnippet,
   onOpenBulk,
   onToggleBroadcast,
   onToggleSplit,
-  onExportLog
+  onExportLog,
+  onToggleRecording,
+  onOpenRecordings
 }: Props) {
   const t = useT()
   return (
@@ -80,6 +86,23 @@ export function SessionToolbar({
         >
           <Icon name="columns" size={14} />
           {t('分屏')}
+        </button>
+        <button
+          className={`glass-btn ${recordingActive ? 'primary recording-active' : ''}`}
+          onClick={onToggleRecording}
+          disabled={activeId === null}
+          title={
+            recordingActive
+              ? t('停止录制当前会话并保存')
+              : t('录制当前会话的终端输出为 asciinema 格式，屏幕上回显的内容（含敏感信息）都会被保存')
+          }
+        >
+          <Icon name="record" size={14} />
+          {recordingActive ? t('停止录制') : t('录制')}
+        </button>
+        <button className="glass-btn" onClick={onOpenRecordings} title={t('浏览与回放已保存的录制')}>
+          <Icon name="play" size={14} />
+          {t('录制库')}
         </button>
         <button className="glass-btn" onClick={onExportLog} disabled={activeId === null} title={t('导出当前会话最近 2 MB 输出')}>
           <Icon name="save" size={14} />

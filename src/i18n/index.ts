@@ -753,7 +753,84 @@ const en: Record<string, string> = {
   '跳板机配置无效': 'Invalid jump host configuration',
   '系统等宽字体': 'System monospace',
   '界面发生错误': 'Something went wrong',
-  '重新加载': 'Reload'
+  '重新加载': 'Reload',
+  // 会话状态通知（store/sessions.ts + utils/sessionStatusToast.ts）
+  '连接已断开，正在自动重连': 'Connection lost, reconnecting automatically',
+  '连接已断开，正在自动重连（第 {n} 次尝试）': 'Connection lost, reconnecting (attempt {n})',
+  '会话连接已断开': 'Session disconnected',
+  '会话已重新连接': 'Session reconnected',
+  // 会话恢复（store/sessionRestore.ts + views/sessions/RestoreLastTabsActions.tsx）
+  '恢复上次会话': 'Restore last session',
+  '正在恢复会话…': 'Restoring sessions…',
+  '已恢复 {n} 个会话': 'Restored {n} session(s)',
+  '{n} 个会话缺少凭据，请在主机页手动连接':
+    '{n} session(s) lack credentials. Connect them manually from the Hosts page.',
+  '{n} 个会话对应的主机配置已不存在，已跳过':
+    '{n} session(s) reference deleted host profiles and were skipped.',
+  '会话恢复失败，请从主机页手动连接':
+    'Could not restore sessions. Connect manually from the Hosts page.',
+  // 快捷键速查（components/ShortcutsDialog.tsx + utils/shortcuts.ts）
+  '快捷键速查': 'Keyboard shortcuts',
+  '全局': 'Global',
+  '打开命令面板': 'Open command palette',
+  '打开快捷键速查': 'Open keyboard shortcuts',
+  '新建会话（前往主机页）': 'New session (go to Hosts)',
+  '在当前终端中搜索': 'Search in current terminal',
+  '下一个标签': 'Next tab',
+  '上一个标签': 'Previous tab',
+  '切换到第 N 个标签': 'Switch to tab N',
+  '关闭标签（活动连接需确认）': 'Close tab (confirm for active connections)',
+  '断开并关闭标签': 'Disconnect and close tab',
+  '终端搜索': 'Terminal search',
+  '跳到下一个匹配': 'Jump to next match',
+  '跳到上一个匹配': 'Jump to previous match',
+  '关闭搜索框': 'Close search box',
+  // 命令面板（components/CommandPalette.tsx + App.tsx）
+  '命令面板': 'Command palette',
+  '搜索视图、主机、会话与操作…': 'Search views, hosts, sessions and actions…',
+  '没有匹配的命令': 'No matching commands',
+  '新建会话': 'New session',
+  '切换到该标签': 'Switch to this tab',
+  '该主机需要补充凭据，请在主机页连接':
+    'This host needs credentials. Connect it from the Hosts page.',
+  // 批量执行聚合（views/sessions/BulkCommandDialog.tsx + utils/batchExec.ts）
+  '执行方式': 'Execution mode',
+  '写入终端': 'Write to terminal',
+  '执行并聚合输出': 'Run and collect output',
+  '超时（秒）': 'Timeout (seconds)',
+  '执行并收集输出': 'Run and collect output',
+  '全部成功': 'All succeeded',
+  '成功': 'Success',
+  '失败': 'Failed',
+  '输出过长已截断': 'Output truncated',
+  '批量执行命令': 'Run command in batch',
+  '将在 ': 'Will run on ',
+  ' 台服务器上执行此命令并收集输出，是否继续？':
+    ' server(s) and collect the output. Continue?',
+  '命令将在每台已连接服务器的独立通道执行并收集输出，不会写入终端；目标过多或输出过长时会被限制。':
+    'The command runs on a dedicated channel of each connected server and the output is collected; nothing is written to the terminal. Targets and output size are capped.',
+  // 会话录制与回放（store/recording.ts + views/sessions/Recording*Dialog.tsx）
+  '录制': 'Record',
+  '停止录制': 'Stop recording',
+  '录制库': 'Recordings',
+  '录制回放': 'Recording playback',
+  '停止录制当前会话并保存': 'Stop recording the current session and save it',
+  '录制当前会话的终端输出为 asciinema 格式，屏幕上回显的内容（含敏感信息）都会被保存':
+    "Record the session's terminal output in asciinema format. Everything echoed on screen (including secrets) will be saved.",
+  '浏览与回放已保存的录制': 'Browse and replay saved recordings',
+  '录制已保存到录制库': 'Recording saved to the library',
+  '录制保存失败': 'Failed to save the recording',
+  '还没有录制。在会话工具栏点击「录制」开始，停止后自动保存到这里。':
+    'No recordings yet. Click "Record" in the session toolbar to start; finished recordings are saved here.',
+  '加载中…': 'Loading…',
+  '回放': 'Play',
+  '重新播放': 'Replay',
+  '播放': 'Play',
+  '暂停': 'Pause',
+  '删除录制': 'Delete recording',
+  '回放倍速': 'Playback speed',
+  '回放进度': 'Playback position',
+  '文件有 {n} 行无法解析，已跳过。': '{n} line(s) in the file could not be parsed and were skipped.'
 }
 
 const dictionaries: Record<Language, Record<string, string>> = {

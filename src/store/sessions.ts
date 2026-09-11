@@ -15,7 +15,12 @@ import {
 import { ConnectRequest, HostKeyPrompt, HostKeyWarning, KbiPromptEvent, SessionInfo, SessionStatusEvent } from '../types/session'
 import { AppError, ERROR_CODES } from '../types/errors'
 import { logger } from '../utils/logger'
+import { formatSessionNotice, sessionNoticeFor } from '../utils/sessionStatusToast'
+import { sendSystemNotification } from '../utils/notify'
+import { t } from '../i18n'
 import { recordAudit } from './audit'
+import { showToast } from './ui'
+import { recordOutput } from './recording'
 
 export interface TerminalRef {
   id: number
@@ -23,6 +28,8 @@ export interface TerminalRef {
   focus: () => void
   fit: () => void
   openSearch?: () => void
+  /** 当前可视尺寸（列/行），录制等需要真实终端几何的场景使用；缺省回落 80x24。 */
+  getSize?: () => { cols: number; rows: number }
 }
 
 interface SessionsState {
@@ -33,6 +40,8 @@ interface SessionsState {
   splitId: number | null
   terminals: Record<number, TerminalRef>
   requests: Record<number, ConnectRequest>
+  /** 会话 → 主机配置 id 的关联，用于「恢复上次会话」定位主机与凭据 */
+  hostIds: Record<number, string>
   connectedAt: Record<number, number>
   hostKeyPrompt: HostKeyPrompt | null
   hostKeyWarning: HostKeyWarning | null
@@ -41,7 +50,7 @@ interface SessionsState {
   broadcastEnabled: boolean
   broadcastTargets: number[]
   init: () => Promise<void>
-  open: (request: ConnectRequest) => Promise<number>
+  open: (request: ConnectRequest, hostId?: string) => Promise<number>
   reconnect: (id: number) => Promise<number>
   write: (id: number, data: Uint8Array) => Promise<void>
   resize: (id: number, cols: number, rows: number) => void
@@ -126,6 +135,7 @@ function createOutputChannel(idBox: { id: number }): SshOutputChannel {
     const bytes = bytesFromChannel(data)
     if (!bytes.length) return
     appendSessionLog(idBox.id, bytes)
+    recordOutput(idBox.id, bytes)
     const term = useSessions.getState().terminals[idBox.id]
     if (term) term.write(bytes)
   }
@@ -140,6 +150,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   splitId: null,
   terminals: {},
   requests: {},
+  hostIds: {},
   connectedAt: {},
   hostKeyPrompt: null,
   hostKeyWarning: null,
@@ -169,6 +180,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
           onStatus: (event) => get().updateStatus(event),
           onOutput: (id, data) => {
             appendSessionLog(id, data)
+            recordOutput(id, data)
             const term = get().terminals[id]
             if (term) term.write(data)
           },
@@ -226,6 +238,18 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (info && (event.status === 'connected' || event.status === 'disconnected' || event.status === 'closed')) {
       recordAudit('session.status', `${info.name} (${info.host}:${info.port})`, event.status === 'connected' ? 'success' : 'info', event.reason ?? event.status)
     }
+    // 状态转变通知：掉线 / 重连 / 重连成功。判定与文案键选择在纯函数里，便于单测。
+    const notice = sessionNoticeFor(info?.status, event.status, event.attempt, {
+      autoReconnect: Boolean(get().requests[event.id]?.autoReconnect)
+    })
+    if (notice) {
+      const text = formatSessionNotice(notice, t)
+      showToast(text, notice.kind)
+      if (notice.systemNotify && typeof document !== 'undefined' && document.hidden) {
+        const label = info?.name ? `${info.name}：` : ''
+        void sendSystemNotification('CatShell', `${label}${text}`)
+      }
+    }
   },
   confirmHostKey: async (accepted) => {
     const prompt = get().hostKeyPrompt
@@ -236,7 +260,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       set({ hostKeyPrompt: null })
     }
   },
-  open: async (request: ConnectRequest) => {
+  open: async (request: ConnectRequest, hostId?: string) => {
     const idBox: { id: number } = { id: 0 }
     let id: number
     try {
@@ -254,6 +278,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
         order,
         activeId: id,
         requests: { ...s.requests, [id]: request },
+        hostIds: hostId ? { ...s.hostIds, [id]: hostId } : s.hostIds,
         sessions: {
           ...s.sessions,
           [id]: {
@@ -282,10 +307,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const sessions = { ...s.sessions }
       const requests = { ...s.requests }
       const terminals = { ...s.terminals }
+      const hostIds = { ...s.hostIds }
       const connectedAt = { ...s.connectedAt }
+      const carriedHostId = hostIds[id]
       delete sessions[id]
       delete requests[id]
       delete terminals[id]
+      delete hostIds[id]
       delete connectedAt[id]
       sessions[newId] = {
         id: newId,
@@ -298,7 +326,16 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const order = [...new Set(s.order.map((item) => (item === id ? newId : item)))]
       const activeId = s.activeId === id ? newId : s.activeId
       const splitId = s.splitId === id ? newId : s.splitId
-      return { sessions, requests, order, terminals, connectedAt, activeId, splitId }
+      return {
+        sessions,
+        requests,
+        hostIds: carriedHostId ? { ...hostIds, [newId]: carriedHostId } : hostIds,
+        order,
+        terminals,
+        connectedAt,
+        activeId,
+        splitId
+      }
     })
     return newId
   },
@@ -329,11 +366,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const order = s.order.filter((x) => x !== id)
       const terminals = { ...s.terminals }
       delete terminals[id]
+      const hostIds = { ...s.hostIds }
+      delete hostIds[id]
       const connectedAt = { ...s.connectedAt }
       delete connectedAt[id]
       const nextActive = s.activeId === id ? order[order.length - 1] ?? null : s.activeId
       const splitId = s.splitId === id ? null : nextActive === s.splitId ? null : s.splitId
-      return { sessions, requests, order, terminals, connectedAt, activeId: nextActive, splitId }
+      return { sessions, requests, order, terminals, hostIds, connectedAt, activeId: nextActive, splitId }
     })
   },
   renameSession: (id, name) => {

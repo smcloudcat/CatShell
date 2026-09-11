@@ -88,6 +88,17 @@ export interface NetworkDiagnostic {
   collectedAt: number
 }
 
+/** 批量命令执行的单台结果（Rust `ssh_manager::BatchExecItem`）。 */
+export interface BatchExecItem {
+  sessionId: number
+  name: string
+  ok: boolean
+  output: string
+  error: string | null
+  durationMs: number
+  truncated: boolean
+}
+
 export interface PortForwardInfo {
   id: number
   sessionId: number

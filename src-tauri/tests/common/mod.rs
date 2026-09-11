@@ -221,6 +221,21 @@ impl server::Handler for TestSession {
         Ok(())
     }
 
+    /// exec 请求：回显命令行并正常退出，供监控与批量执行的端到端测试使用。
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        let _ = session.channel_success(channel);
+        let echoed = format!("exec: {}\r\n", String::from_utf8_lossy(data));
+        session.data(channel, echoed.into_bytes())?;
+        let _ = session.eof(channel);
+        let _ = session.close(channel);
+        Ok(())
+    }
+
     async fn data(
         &mut self,
         channel: ChannelId,

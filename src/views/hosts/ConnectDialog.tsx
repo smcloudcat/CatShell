@@ -189,7 +189,7 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     const hostId = profile?.id ?? crypto.randomUUID()
     setBusy(true)
     try {
-      const id = await openSession(request)
+      const id = await openSession(request, hostId)
       if (id <= 0) return
       await persistHost(hostId, request, Date.now())
       if (useVault.getState().unlocked && (request.password || request.passphrase)) {

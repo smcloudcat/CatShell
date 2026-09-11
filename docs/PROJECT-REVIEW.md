@@ -542,6 +542,60 @@ if (key === 'w') {
 
 **验证**：`cargo fmt --check` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **42 例**（32 单测 + 10 集成）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check`（101 文件）✓ · 前端 **171 例**（13 文件）✓ · `build` ✓。
 
+### 6.7 体验功能批（同日，路线图阶段二收尾）
+
+阶段二最后一行「新增」落地，共 4 项：
+
+| 功能 | 处理 |
+| --- | --- |
+| 会话掉线 / 重连 Toast | `utils/sessionStatusToast.ts` 纯函数判定状态转变（12 例单测）：进入重连 → warning、重连成功 → success、意外断开 → error；用户主动断开（closing → closed）与常规连接成功保持安静。开启自动重连的会话断开时不再报错，避免与随后的重连警告双响。页面不可见时联动系统通知。文案走 i18n，`{n}` 占位做重连次数插值 |
+| 快捷键速查面板 | `Ctrl+/` 打开（再按关闭）。数据在 `utils/shortcuts.ts` 与实际按键行为同步维护，`shortcuts.test.ts` 守护关键键位不丢（Ctrl+K///T/F/Tab/W/1…9 等） |
+| 命令面板 | `Ctrl+K` 打开：视图跳转、新建会话、快捷键速查、主机直连、会话标签切换。过滤为大小写不敏感子串匹配（label + keywords，纯函数 5 例单测）；↑↓ 选择、Enter 执行、Escape 关闭，aria-combobox 标注 |
+| 会话恢复 | 标签轮廓（hostId + 名称，**绝不落凭据**）经 `session-restore.json` 持久化；`useSessions.subscribe` 在 store 层单向跟踪变化，避免循环依赖。会话页空态提供「恢复上次会话（N）」入口：保险箱锁定时先请求解锁，`planSessionRestore` 纯函数（10 例单测）判定可恢复性——主机配置被删 / 凭据缺失的会话跳过并分类提示，不在恢复路径弹密码框 |
+
+**顺手收敛**：主机快速连接抽成 `store/hostConnect.ts` 的 `connectHostQuick`，主机列表与命令面板共用同一条「解锁保险箱 → 取凭据 → `buildRequestFromProfile` → 直连」链路；`HostsView.reconnect` 由 26 行缩到 10 行。`open()` 增加 `hostId` 参数（`hostIds` 关联会话与主机配置），这是会话恢复定位凭据的依据。新增图标 clock / command / keyboard。
+
+**验证**：`tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `i18n:audit`（仅审计 detail 类提示，属约定内不翻译项）✓ · `mojibake:check`（114 文件）✓ · 前端 **201 例**（17 文件，新增 sessionStatusToast / shortcuts / commandPalette / sessionRestore 四组）✓ · `build` ✓。
+
+**待真机确认**：命令面板与快捷键面板的焦点陷阱在玻璃主题下的观感；会话恢复在保险箱未配置时的引导是否顺畅；掉线 Toast 与既有重连状态标签的信息是否重复。
+
+### 6.8 批量命令执行聚合（同日，阶段三第一项）
+
+路线图阶段三「多跳 ProxyJump、批量命令执行聚合」拆分：聚合部分落地，ProxyJump（链式多跳）另行排期。
+
+**Rust**（`ssh_manager/batch.rs` + `lib.rs`）：
+- 新命令 `ssh_batch_exec(sessionIds, command, timeoutSecs)`：在每个目标会话的专用通道上执行同一条命令（通道协商沿用 P2-2 的锁外模式，不阻塞终端输入），`tokio::spawn` 并发推进、逐台聚合输出与耗时。
+- 防护：命令 trim 非空且 ≤4096 字节；目标去重保持顺序、上限 32；超时夹取 `[1,120]` 秒；单台输出截断 64KB 并标记 `truncated`；单台失败（含任务 panic）归一为该条 `error`，不影响其余目标。
+- `exec_command` 增加 `timeout` 参数（监控类调用点统一走 `EXEC_COMMAND_TIMEOUT` 常量）。
+
+**前端**（`utils/batchExec.ts` + `BulkCommandDialog` 升级）：
+- 批量命令弹窗新增模式切换：「写入终端」（原交互式行为保留）与「执行并聚合输出」（专用通道执行、逐台展示状态/耗时/输出/截断标记）。
+- 纯函数 `normalizeBatchCommand` / `normalizeBatchTargets` / `parseBatchTimeout` / `summarizeBatchResults`（12 例单测），上限与夹取区间与 Rust 常量对齐。
+- 审计 `command.batch-exec`（target 为 `成功/总数`，detail 记命令原文）；执行前 confirmDialog 二次确认。
+
+**测试**：集成测试服务器新增 `exec_request` handler（回显命令行并正常退出），新增 `batch_exec_e2e.rs` 2 例（多会话聚合 + 失败隔离、入参校验）。
+
+**验证**：`cargo fmt` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **44 例**（32 单测 + 12 集成）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check`（116 文件）✓ · 前端 **213 例**（18 文件）✓ · `build` ✓。
+
+**回归项**：多个已连接会话（含一台故意断开的）执行批量命令，确认失败台仅标失败、其余正常出输出；输出超过 64KB 的命令确认截断提示。
+
+### 6.9 会话录制与回放（同日，阶段三第二项）
+
+会话工具栏新增录制开关（录制中脉冲指示）与「录制库」入口：开启后采集当前会话输出，停止时合成 asciicast v2（asciinema）文件落盘；录制库支持浏览、回放与删除。
+
+**架构：前端采集 + Rust 落盘**（输出天然汇聚在 `store/sessions.ts`，不在 Rust 输出路径插桩）：
+- `store/recording.ts`：按会话维护录制缓冲，`TextDecoder('utf-8', {stream: true})` 保证跨块多字节字符不碎，记录毫秒偏移与文本；停止时交给 `buildAsciicast` 合成 JSONL。
+- `utils/asciicast.ts` 纯函数：`buildAsciicast` / `parseAsciicast`（坏行归 warnings、version≠2 时 header 置 null）/ `asciicastDuration` / `playbackTimeline`，8 例单测。
+- `recording_store.rs` + `lib.rs` 四命令（`recording_save / list / read / delete`，读写走 `spawn_blocking`）：文件名清洗（保留字母数字 / CJK / `_ - .`，截断 80 字符）、读取与删除侧防路径穿越校验、单文件 64MB 上限、同名覆盖、mtime 倒序列表。
+
+**回放**（`RecordingPlayerDialog`）：只读 xterm 按时间轴逐事件写入，播放 / 暂停、1×/2×/4× 倍速、进度条拖动（拖动即暂停并从该时刻全量重放）、时钟显示；配色复用主终端主题，观感一致。
+
+**其它**：终端主题常量从 `TerminalPane` 抽到 `views/sessions/terminalTheme.ts` 供录制回放共享；审计 `session.record-start / record-stop`；录制相关文案补齐 `en` 字典。
+
+**验证**：`cargo fmt` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **48 例**（36 单测 + 12 集成，`recording_store` 新增 4 例）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check`（154 文件）✓ · 前端 **221 例**（19 文件，新增 asciicast 组）✓ · `build` ✓。
+
+**回归项**：连接会话 → 开启录制 → 执行几条命令 → 停止并在录制库回放（倍速、拖动进度、CJK 文件名）；亮暗主题下回放观感；录制中直接断开会话的行为。
+
 ---
 
 ## 七、建议路线图
@@ -568,14 +622,15 @@ if (key === 'w') {
 - [x] **P1-7** 抽取 `buildConnectRequest` 纯函数 + 单测
 - [x] **P1-10 / P1-11** 公共 `<Modal>` 组件 + 巨型组件拆分
 - [x] **P2-14** 前端分包 + 按视图懒加载（首屏 JS 从 915 KB / gzip 256 KB 降到约 296 KB / gzip 96 KB）
-- [ ] 新增：会话恢复、快捷键速查面板、命令面板、会话掉线 Toast
+- [x] **新增**：会话恢复（空态一键恢复上次标签）、快捷键速查面板（`Ctrl+/`）、命令面板（`Ctrl+K`）、会话掉线 / 重连 Toast（详见 6.7）
 - [x] **P1-12** 补齐 SFTP / 转发 / 指纹变更测试（前端纯函数层 141 例，收尾补齐错误码映射后共 155 例；新增 SFTP 全链路 3 例、端口转发 2 例、指纹变更拒绝 1 例。远程转发、SOCKS5 端到端与并发场景仍待补）
 
 ### 阶段三 · 能力扩展（v0.4+）
 > 目标：从"好用的 SSH 客户端"走向"运维工作台"
 
-- [ ] 多跳 ProxyJump、批量命令执行聚合
-- [ ] 会话录制与回放（asciinema 格式）
+- [ ] 多跳 ProxyJump（当前已支持经单级跳板/代理隧道连接，链式多跳待排期）
+- [x] 批量命令执行聚合（详见 6.8：`ssh_batch_exec` 专用通道执行 + 逐台输出聚合，原有「写入终端」模式保留）
+- [x] 会话录制与回放（详见 6.9：前端采集输出 + Rust 落盘 asciicast v2，录制库支持倍速回放与进度拖动）
 - [ ] SFTP 双向同步、传输队列持久化、带宽限速
 - [ ] 密钥管理 UI、SSH config 写回
 - [ ] 类型自动生成（`tauri-specta` / `ts-rs`）
@@ -615,6 +670,9 @@ npm run tauri dev
 7. 进入含数千项的 SFTP 目录，滚动到底部确认行高与滚动条长度正常（验证 P2-19 窗口化）
 8. 生产构建（`npm run tauri build` 或 `tauri dev --release` 的 dist 产物）启动后确认不白屏，且首帧主题仍按系统外观生效（验证 P2-10）
 9. 停止一条已建立连接的本地端口转发，确认在飞连接被立即断开（验证 P2-6）
+10. 断开会话的网络（或重启远端 sshd），观察是否出现「正在自动重连」Toast、重连成功后出现成功提示；窗口最小化到托盘时重复一次，确认收到系统通知（验证会话状态通知）
+11. 打开若干会话后完全退出应用再启动，在会话页空态点「恢复上次会话」，观察标签重建、保险箱解锁引导与凭据缺失会话的跳过提示（验证会话恢复）
+12. `Ctrl+K` 打开命令面板搜索主机 / 会话 / 视图并执行，`Ctrl+/` 打开快捷键速查；两者再按一次应关闭（验证命令面板与快捷键速查）
 
 ---
 

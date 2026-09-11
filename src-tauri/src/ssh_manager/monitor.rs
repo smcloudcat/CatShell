@@ -97,6 +97,9 @@ pub(super) fn parse_metrics(session_id: u64, output: &[u8]) -> Result<ServerMetr
     })
 }
 
+/// 单条监控类命令的默认整体限时。
+pub(super) const EXEC_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+
 async fn read_exec_output(mut read: ChannelReadHalf) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     while let Some(message) = read.wait().await {
@@ -122,13 +125,14 @@ async fn read_exec_output(mut read: ChannelReadHalf) -> Result<Vec<u8>, String> 
 pub(super) async fn exec_command(
     channel: russh::Channel<russh::client::Msg>,
     command: &str,
+    timeout: Duration,
 ) -> Result<Vec<u8>, String> {
     channel
         .exec(false, command)
         .await
         .map_err(|error| format!("执行远程命令失败: {error}"))?;
     let (read, _write) = channel.split();
-    tokio::time::timeout(Duration::from_secs(8), read_exec_output(read))
+    tokio::time::timeout(timeout, read_exec_output(read))
         .await
         .map_err(|_| "远程命令执行超时".to_string())?
 }
@@ -213,7 +217,7 @@ impl SshManager {
     pub async fn list_processes(&self, id: u64) -> Result<Vec<ProcessInfo>, String> {
         let channel = self.open_session_channel(id).await?;
         Ok(parse_processes(
-            &exec_command(channel, PROCESS_COMMAND).await?,
+            &exec_command(channel, PROCESS_COMMAND, EXEC_COMMAND_TIMEOUT).await?,
         ))
     }
 
@@ -228,7 +232,9 @@ impl SshManager {
         };
         let channel = self.open_session_channel(id).await?;
         let command = format!("kill -{signal} {pid}");
-        exec_command(channel, &command).await.map(|_| ())
+        exec_command(channel, &command, EXEC_COMMAND_TIMEOUT)
+            .await
+            .map(|_| ())
     }
 
     pub async fn network_diagnostic(
@@ -248,7 +254,7 @@ impl SshManager {
             format!("(tracepath -m 12 -w 2 {target} || traceroute -m 12 -w 2 {target} || ping -c 1 -W 2 {target}) 2>&1")
         };
         let channel = self.open_session_channel(id).await?;
-        let output = exec_command(channel, &command).await?;
+        let output = exec_command(channel, &command, EXEC_COMMAND_TIMEOUT).await?;
         Ok(NetworkDiagnostic {
             session_id: id,
             kind,

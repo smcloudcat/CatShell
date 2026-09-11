@@ -1,4 +1,5 @@
 pub mod logging;
+pub mod recording_store;
 pub mod ssh_manager;
 
 use std::sync::Arc;
@@ -118,6 +119,21 @@ async fn ssh_kill_process(
     signal: String,
 ) -> Result<(), String> {
     state.ssh.kill_process(id, pid, &signal).await
+}
+
+/// 批量在多个会话上执行同一条命令并聚合输出。危险操作由前端负责二次确认与审计。
+#[tauri::command]
+async fn ssh_batch_exec(
+    state: State<'_, AppState>,
+    session_ids: Vec<u64>,
+    command: String,
+    timeout_secs: Option<u64>,
+) -> Result<Vec<ssh_manager::BatchExecItem>, String> {
+    state
+        .ssh
+        .clone()
+        .batch_exec(session_ids, command, timeout_secs.unwrap_or(10))
+        .await
 }
 
 #[tauri::command]
@@ -553,6 +569,53 @@ async fn known_hosts_set_mode(
     Ok(())
 }
 
+// ------------------------------------------------------------------
+// 录制存储（asciicast v2）。录制采集在前端输出流上，这里只负责落盘与读取。
+// ------------------------------------------------------------------
+
+fn recordings_dir_of(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "无法定位应用数据目录".to_string())?;
+    recording_store::ensure_recordings_dir(&dir)
+}
+
+#[tauri::command]
+async fn recording_save(
+    app: AppHandle,
+    base_name: String,
+    content: String,
+) -> Result<recording_store::RecordingMeta, String> {
+    let dir = recordings_dir_of(&app)?;
+    // 文件写入很快，直接放 async 上下文执行可接受；用 spawn_blocking 隔离潜在的磁盘阻塞。
+    tokio::task::spawn_blocking(move || recording_store::save_recording(&dir, &base_name, &content))
+        .await
+        .map_err(|error| format!("保存任务异常: {error}"))?
+}
+
+#[tauri::command]
+async fn recording_list(app: AppHandle) -> Result<Vec<recording_store::RecordingMeta>, String> {
+    let dir = recordings_dir_of(&app)?;
+    Ok(recording_store::list_recordings(&dir))
+}
+
+#[tauri::command]
+async fn recording_read(app: AppHandle, name: String) -> Result<String, String> {
+    let dir = recordings_dir_of(&app)?;
+    tokio::task::spawn_blocking(move || recording_store::read_recording(&dir, &name))
+        .await
+        .map_err(|error| format!("读取任务异常: {error}"))?
+}
+
+#[tauri::command]
+async fn recording_delete(app: AppHandle, name: String) -> Result<(), String> {
+    let dir = recordings_dir_of(&app)?;
+    tokio::task::spawn_blocking(move || recording_store::delete_recording(&dir, &name))
+        .await
+        .map_err(|error| format!("删除任务异常: {error}"))?
+}
+
 #[tauri::command]
 async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     let path = ssh_manager::ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
@@ -618,10 +681,15 @@ pub fn run() {
             known_hosts_list,
             known_hosts_remove,
             known_hosts_set_mode,
+            recording_save,
+            recording_list,
+            recording_read,
+            recording_delete,
             ssh_config_parse,
             ssh_monitor,
             ssh_processes,
             ssh_kill_process,
+            ssh_batch_exec,
             ssh_network_diagnostic,
             ssh_forward_start,
             ssh_forward_start_remote,

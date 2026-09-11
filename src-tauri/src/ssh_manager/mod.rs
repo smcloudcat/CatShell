@@ -1,3 +1,4 @@
+mod batch;
 mod config;
 mod forward;
 mod monitor;
@@ -22,6 +23,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
+pub use batch::{BatchExecItem, BATCH_MAX_TIMEOUT_SECS, BATCH_MIN_TIMEOUT_SECS};
 pub use config::{
     default_known_hosts_path, load_known_hosts_snapshot, parse_known_hosts, parse_ssh_config,
     remove_known_hosts_entries, remove_known_hosts_entry, ssh_config_path,
