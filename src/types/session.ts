@@ -131,6 +131,8 @@ export interface SftpDiskTransferStart {
   transferId: number
   total: number
   resumed: boolean
+  /** 真实本地路径（用于传输队列持久化与续传）。 */
+  localPath: string
 }
 
 export interface SftpDiskUploadPick {

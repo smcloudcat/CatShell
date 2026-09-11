@@ -10,6 +10,7 @@ import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
 import { beginTransfer, cancelFlags, removeTransfer, updateTransfer, useSftpTransferStore, type TransferProgress } from './sftpTransferStore'
+import { onDiskProgress, onDiskTransferFinished } from '../../store/transferQueue'
 import { useT } from '../../i18n'
 
 /** 限速档位（KB/s，0 = 不限）。 */
@@ -79,6 +80,11 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
     void subscribeSftpDiskProgress((progress) => {
       if (progress.sessionId !== sessionId) return
       if (progress.done) {
+        // 终态同步到持久化队列：完成/取消移出，失败保留待续传（断点仍在）。
+        onDiskTransferFinished(
+          progress.transferId,
+          progress.cancelled ? 'cancelled' : progress.error ? 'failed' : 'done'
+        )
         const directionLabel = progress.direction === 'upload' ? t('上传') : t('下载')
         if (progress.cancelled) {
           showToast(`${t('已取消 ')}${progress.fileName}`)
@@ -104,6 +110,8 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
         disk: true,
         speedLimitKBs: progress.speedLimitKBs
       })
+      // 断点进度写入持久化队列（内部按 3 秒节流落盘）
+      onDiskProgress(progress.transferId, progress.transferred)
     }).then((dispose) => {
       if (disposed) void dispose()
       else unlisten = dispose

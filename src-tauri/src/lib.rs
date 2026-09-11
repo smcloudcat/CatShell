@@ -501,6 +501,58 @@ async fn sftp_disk_upload_start_token(
         .await
 }
 
+/// 队列续传（下载）：不经对话框，以持久化队列中记录的显式本地路径启动磁盘级下载，
+/// 恒为断点续传模式。路径经 validate_local_path 校验，防止路径穿越。
+#[tauri::command]
+async fn sftp_disk_download_start_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    remote_path: String,
+    local_path: String,
+    speed_limit_kbs: Option<u64>,
+) -> Result<ssh_manager::SftpDiskTransferStart, String> {
+    let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
+    state
+        .ssh
+        .sftp_disk_download_start(
+            state.ssh.clone(),
+            sink,
+            id,
+            remote_path,
+            local_path,
+            true,
+            speed_limit_kbs.unwrap_or(0),
+        )
+        .await
+}
+
+/// 队列续传（上传）：以持久化队列中记录的显式本地路径启动磁盘级上传，
+/// 恒为断点续传模式。本地文件必须真实存在（validate_local_path + 存在性检查在核心方法内）。
+#[tauri::command]
+async fn sftp_disk_upload_start_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    local_path: String,
+    remote_path: String,
+    speed_limit_kbs: Option<u64>,
+) -> Result<ssh_manager::SftpDiskTransferStart, String> {
+    let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
+    state
+        .ssh
+        .sftp_disk_upload_start(
+            state.ssh.clone(),
+            sink,
+            id,
+            local_path,
+            remote_path,
+            true,
+            speed_limit_kbs.unwrap_or(0),
+        )
+        .await
+}
+
 #[tauri::command]
 async fn sftp_disk_transfer_cancel(
     app: AppHandle,
@@ -796,8 +848,10 @@ pub fn run() {
             sftp_upload_finish,
             sftp_transfer_cancel,
             sftp_disk_download_pick,
+            sftp_disk_download_start_path,
             sftp_disk_upload_pick,
             sftp_disk_upload_start_token,
+            sftp_disk_upload_start_path,
             sftp_disk_transfer_cancel,
             sftp_disk_transfer_set_limit,
             pick_directory,

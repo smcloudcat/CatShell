@@ -19,10 +19,12 @@ import { useSessions } from '../../store/sessions'
 import { SftpEntry } from '../../types/session'
 import { shellQuote } from '../../types/snippet'
 import { recordAudit } from '../../store/audit'
+import { bindTransfer, enqueueDiskTransfer } from '../../store/transferQueue'
 import { confirmDialog } from '../../store/ui'
 import { useT } from '../../i18n'
 import { errorText } from '../../i18n/errors'
 import { SftpToolbar } from './SftpToolbar'
+import { SftpQueueResume } from './SftpQueueResume'
 import { SftpEntryList } from './SftpEntryList'
 import type { SftpEntryActions } from './SftpEntryList'
 import { SftpDropZone } from './SftpDropZone'
@@ -84,6 +86,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const [nameFilter, setNameFilter] = useState('')
 
   const connected = sessions[sessionId]?.status === 'connected'
+  const hostId = useSessions((state) => state.hostIds[sessionId]) ?? ''
   const shown = visibleEntries(entries, { nameFilter, showHidden, sortKey, sortAsc })
 
   /** 把 command 抛出的错误转成可展示文案；AppError 走错误码映射，其余原样。 */
@@ -232,6 +235,16 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
             total: start.total,
             disk: true
           })
+          if (hostId) {
+            bindTransfer(start.transferId, enqueueDiskTransfer({
+              hostId,
+              direction: 'upload',
+              fileName: pick.fileName,
+              remotePath: pick.remotePath,
+              localPath: start.localPath,
+              total: start.total
+            }))
+          }
           recordAudit('sftp.disk-upload', pick.remotePath, 'success', start.resumed ? t('磁盘级上传（断点续传）') : t('磁盘级上传开始'))
           started += 1
         } catch (err) {
@@ -263,6 +276,16 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
         total: start.total,
         disk: true
       })
+      if (hostId) {
+        bindTransfer(start.transferId, enqueueDiskTransfer({
+          hostId,
+          direction: 'download',
+          fileName: entry.name,
+          remotePath: entry.path,
+          localPath: start.localPath,
+          total: start.total
+        }))
+      }
       recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? t('磁盘级下载（断点续传）') : t('磁盘级下载开始'))
     } catch (err) {
       recordAudit('sftp.disk-download', entry.path, 'failure', t('磁盘级下载启动失败'))
@@ -539,6 +562,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       />
       {error && <div className="form-error">{error}</div>}
       {notice && <div className="form-notice">{notice}</div>}
+      <SftpQueueResume sessionId={sessionId} hostId={hostId} onChanged={() => void loadDirectory(path)} />
       <SftpEntryList entries={shown} totalCount={entries.length} busy={busy} actions={entryActions} />
       {editor && (
         <SftpEditorModal

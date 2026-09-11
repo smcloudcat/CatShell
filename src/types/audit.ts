@@ -18,6 +18,7 @@ export type AuditAction =
   | 'sftp.download'
   | 'sftp.disk-download'
   | 'sftp.disk-upload'
+  | 'sftp.queue-resume'
   | 'sftp.delete'
   | 'sftp.edit'
   | 'sftp.sync'

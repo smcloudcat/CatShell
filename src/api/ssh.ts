@@ -317,6 +317,36 @@ export async function sftpDiskUploadStartToken(
   })
 }
 
+/** 队列续传（下载）：以持久化队列记录的显式本地路径启动磁盘级下载（恒为断点续传）。 */
+export async function sftpDiskDownloadStartPath(
+  id: number,
+  remotePath: string,
+  localPath: string,
+  speedLimitKBs = 0
+): Promise<SftpDiskTransferStart> {
+  return invoke<SftpDiskTransferStart>('sftp_disk_download_start_path', {
+    id,
+    remotePath,
+    localPath,
+    speedLimitKBs
+  })
+}
+
+/** 队列续传（上传）：以持久化队列记录的显式本地路径启动磁盘级上传（恒为断点续传）。 */
+export async function sftpDiskUploadStartPath(
+  id: number,
+  localPath: string,
+  remotePath: string,
+  speedLimitKBs = 0
+): Promise<SftpDiskTransferStart> {
+  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start_path', {
+    id,
+    localPath,
+    remotePath,
+    speedLimitKBs
+  })
+}
+
 /** 打开目录选择对话框（目录同步的本地侧入口），取消返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   return invoke<string | null>('pick_directory')

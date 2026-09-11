@@ -8,6 +8,7 @@ import { useSettings } from './store/settings'
 import { useSessions } from './store/sessions'
 import { useHosts } from './store/hosts'
 import { useSessionRestore } from './store/sessionRestore'
+import { useTransferQueue } from './store/transferQueue'
 import { connectHostQuick } from './store/hostConnect'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { CommandPalette } from './components/CommandPalette'
@@ -97,6 +98,7 @@ function App() {
     void snippetsInit()
     void auditInit()
     void useSessionRestore.getState().init()
+    void useTransferQueue.getState().init()
   }, [init, sessionsInit, hostsInit, vaultInit, snippetsInit, auditInit])
 
   // 设置读取完成后再恢复上次视图；恢复完成前不持久化，避免默认视图覆盖记录

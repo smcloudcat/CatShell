@@ -53,6 +53,9 @@ pub struct SftpDiskTransferStart {
     pub transfer_id: u64,
     pub total: u64,
     pub resumed: bool,
+    /// 真实本地路径。令牌/对话框流程中它本就留在 Rust 侧；这里回传给前端
+    /// 仅用于传输队列持久化（重启后续传需要），发起上传的令牌安全边界不变。
+    pub local_path: String,
 }
 
 /// 一次性上传路径令牌：webview 仅凭令牌发起磁盘上传，无法指定任意本地路径。
@@ -975,7 +978,7 @@ impl SshManager {
             id: transfer_id,
             session_id: id,
             remote_path,
-            local_path,
+            local_path: local_path.clone(),
             part_path: part_path.clone(),
             file_name,
             direction: "download",
@@ -1065,6 +1068,7 @@ impl SshManager {
             transfer_id,
             total,
             resumed,
+            local_path,
         })
     }
 
@@ -1153,7 +1157,7 @@ impl SshManager {
             id: transfer_id,
             session_id: id,
             remote_path,
-            local_path,
+            local_path: local_path.clone(),
             part_path: part_path.clone(),
             file_name,
             direction: "upload",
@@ -1256,6 +1260,7 @@ impl SshManager {
             transfer_id,
             total,
             resumed,
+            local_path,
         })
     }
 

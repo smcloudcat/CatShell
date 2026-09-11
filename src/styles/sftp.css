@@ -361,3 +361,46 @@
   max-height: 96px;
   overflow: auto;
 }
+
+/* ------------------------------------------------------------------ */
+/* 传输队列续传条                                                       */
+/* ------------------------------------------------------------------ */
+.sftp-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--soft-bg);
+  border-radius: 8px;
+  background: var(--bg-muted, rgba(127, 127, 127, 0.08));
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.sftp-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.sftp-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sftp-queue-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.sftp-queue-progress {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.sftp-queue-btn {
+  font-size: 12px;
+  padding: 2px 10px;
+}
