@@ -406,7 +406,9 @@ impl client::Handler for SshHandler {
             return Ok(());
         };
 
-        tokio::spawn(async move {
+        // 中继任务句柄登记进路由：stop_forward 撤销路由时 abort 全部在飞连接（审计 R-2）。
+        let relays = route.relays.clone();
+        let relay_handle = tokio::spawn(async move {
             let local =
                 match TcpStream::connect((route.target_host.as_str(), route.target_port)).await {
                     Ok(stream) => stream,
@@ -420,6 +422,7 @@ impl client::Handler for SshHandler {
             let mut local = local;
             let _ = tokio::io::copy_bidirectional(&mut remote, &mut local).await;
         });
+        relays.push(relay_handle.abort_handle());
         Ok(())
     }
 }

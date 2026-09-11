@@ -31,10 +31,10 @@
 | P-3 ✅ | 已修复 | 进程列表接入 `useVirtualWindow`（>50 行启用） |
 | P-4 ✅ | 已修复 | `reconnect` 清理旧会话日志缓冲 |
 | P-5 ✅ | 已修复 | 输出 Channel id 回填前缓冲、回填后 flush，banner/MOTD 不再丢失 |
-| P-6 ⏭ | 暂缓 | P3：零散小文件阻塞 IO 与现有 spawn_blocking 口径不一致；单次量小，择机统一 |
+| P-6 ✅ | 已修复 | 异步命令小文件 IO 统一口径：`recording_list`/`ssh_config_parse` 走 `spawn_blocking`；sftp.rs 指纹读写/`create_dir_all`/半成品 `metadata`/收尾 `rename` 改 `tokio::fs`（内部走阻塞池） |
 | P-7 ✅ | 已修复 | `visibleEntries` useMemo；`onFinished` 引用稳定化；`lastRate` 写入移入 effect |
 | R-1 ✅ | 已修复 | ProxyJump `expect` 改 `ok_or_else` 正常错误路径 |
-| R-2 ⏭ | 暂缓 | P3 且泄漏有界（连接数×存活时长）：修复需改 handler 结构与 forward.rs 取消机制，投入产出比低，择机处理 |
+| R-2 ✅ | 已修复 | `RemoteForwardRoute` 挂 `RemoteForwardRelays`（AbortHandle 集合，push 时剔除已结束句柄）；每条在飞中继 spawn 后登记，`stop_forward` 撤销路由时 `abort_all()` 全部在飞连接 |
 | R-3 ✅ | 已修复 | 终端输出 IPC 丢弃计数 + 周期性 warn（`dropped_outputs`） |
 | R-4 ✅ | 已修复 | `validate_relative_path` 加括号，空段一律拒绝 |
 | R-5 ✅ | 已修复 | AI 设置 localStorage 兜底补读回 |
@@ -216,6 +216,8 @@
 - **CSP**：生产 `script-src 'self'`、`object-src 'none'`，无内联脚本；AI 请求走 Rust reqwest 不受 connect-src 影响。
 
 ## 六、建议修复顺序
+
+> ✅ **2026-09-11 收官**：本报告 27 项发现已全部修复完毕（P-6/R-2 为当日第二批），验证全绿（Rust fmt/clippy/101 测试）。以下为修复时的批次规划，仅留档。
 
 1. **立即**（数据安全）：B-3（删旧重试）、B-5（覆盖确认）、S-1（先 metadata 后读）
 2. **本迭代**（功能正确性）：B-1（目录竞态）、B-2（sync_jobs 泄漏）、B-4（会话关闭取消同步）、B-6（倍速闭包）

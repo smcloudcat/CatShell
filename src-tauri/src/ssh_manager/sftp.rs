@@ -309,26 +309,29 @@ fn resume_stamp_path(stamp_base: &str) -> String {
     format!("{stamp_base}{RESUME_STAMP_SUFFIX}")
 }
 
-fn read_resume_stamp(stamp_base: &str) -> Option<ResumeStamp> {
-    let raw = std::fs::read_to_string(resume_stamp_path(stamp_base)).ok()?;
+async fn read_resume_stamp(stamp_base: &str) -> Option<ResumeStamp> {
+    let raw = tokio::fs::read_to_string(resume_stamp_path(stamp_base))
+        .await
+        .ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-fn write_resume_stamp(stamp_base: &str, stamp: &ResumeStamp) {
+async fn write_resume_stamp(stamp_base: &str, stamp: &ResumeStamp) {
     if let Ok(raw) = serde_json::to_string(stamp) {
-        let _ = std::fs::write(resume_stamp_path(stamp_base), raw);
+        let _ = tokio::fs::write(resume_stamp_path(stamp_base), raw).await;
     }
 }
 
-fn clear_resume_stamp(stamp_base: &str) {
-    let _ = std::fs::remove_file(resume_stamp_path(stamp_base));
+async fn clear_resume_stamp(stamp_base: &str) {
+    let _ = tokio::fs::remove_file(resume_stamp_path(stamp_base)).await;
 }
 
 /// 本地源文件的指纹（上传方向用）。
-fn local_file_stamp(path: &str, total: u64) -> ResumeStamp {
+async fn local_file_stamp(path: &str, total: u64) -> ResumeStamp {
     ResumeStamp {
         total,
-        mtime: std::fs::metadata(path)
+        mtime: tokio::fs::metadata(path)
+            .await
             .and_then(|meta| meta.modified())
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -948,8 +951,10 @@ impl SshManager {
             .map(|name| name.to_string_lossy().to_string())
             .ok_or_else(|| "远程路径无效".to_string())?;
         if let Some(parent) = Path::new(&local_path).parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent)
+            if !parent.as_os_str().is_empty() {
+                // create_dir_all 对已存在目录是 no-op；走 tokio 阻塞池避免慢盘卡 worker。
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .map_err(|error| format!("创建本地目录失败: {error}"))?;
             }
         }
@@ -973,10 +978,11 @@ impl SshManager {
         let mut start_offset: u64 = 0;
         let mut resumed = false;
         if resume && !occupied {
-            let part_len = std::fs::metadata(&part_path)
+            let part_len = tokio::fs::metadata(&part_path)
+                .await
                 .map(|meta| meta.len())
                 .unwrap_or(0);
-            let recorded = read_resume_stamp(&part_path);
+            let recorded = read_resume_stamp(&part_path).await;
             if let Some(offset) = resume_offset(part_len, recorded.as_ref(), &source_stamp) {
                 start_offset = offset;
                 resumed = true;
@@ -1004,7 +1010,7 @@ impl SshManager {
                 .await
                 .map_err(|error| format!("创建本地文件失败: {error}"))?;
             // 半成品与源文件指纹同时落盘，中途中断也能安全续传。
-            write_resume_stamp(&part_path, &source_stamp);
+            write_resume_stamp(&part_path, &source_stamp).await;
             file
         };
 
@@ -1066,15 +1072,18 @@ impl SshManager {
                         drop(local_file);
                         drop(remote_file);
                         let _ = sftp.close().await;
-                        if Path::new(&transfer.local_path).exists() {
-                            let _ = std::fs::remove_file(&transfer.local_path);
+                        // Windows 跨卷 rename 可能阻塞较久，收尾 IO 统一走 tokio 阻塞池。
+                        if tokio::fs::metadata(&transfer.local_path).await.is_ok() {
+                            let _ = tokio::fs::remove_file(&transfer.local_path).await;
                         }
-                        if let Err(error) = std::fs::rename(&part_path, &transfer.local_path) {
+                        if let Err(error) =
+                            tokio::fs::rename(&part_path, &transfer.local_path).await
+                        {
                             transfer.finish_with_error(format!("保存本地文件失败: {error}"));
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
                         }
-                        clear_resume_stamp(&part_path);
+                        clear_resume_stamp(&part_path).await;
                         transfer.done.store(true, Ordering::SeqCst);
                         emit_disk_progress(sink.as_ref(), &transfer, true);
                         break;
@@ -1138,13 +1147,13 @@ impl SshManager {
         let part_path = part_path_for(&part_base, transfer_id, occupied);
         // 上传方向的指纹跟随本地源文件落盘（半成品在远端）。
         let stamp_base = format!("{local_path}{DISK_PART_SUFFIX}");
-        let source_stamp = local_file_stamp(&local_path, total);
+        let source_stamp = local_file_stamp(&local_path, total).await;
 
         let sftp = self.open_sftp_channel(id).await?;
         let mut start_offset: u64 = 0;
         let mut resumed = false;
         if resume && !occupied {
-            let recorded = read_resume_stamp(&stamp_base);
+            let recorded = read_resume_stamp(&stamp_base).await;
             let part_len = match recorded {
                 Some(_) => sftp
                     .metadata(&part_path)
@@ -1174,7 +1183,7 @@ impl SshManager {
                 .await
                 .map_err(|error| format!("创建远程半成品文件失败: {error}"))?;
             // 半成品与源文件指纹同时就位，中途中断也能安全续传。
-            write_resume_stamp(&stamp_base, &source_stamp);
+            write_resume_stamp(&stamp_base, &source_stamp).await;
             file
         };
         let mut local_file = tokio::fs::File::open(&local_path)
@@ -1282,7 +1291,7 @@ impl SshManager {
                             }
                         }
                         let _ = sftp.close().await;
-                        clear_resume_stamp(&stamp_base);
+                        clear_resume_stamp(&stamp_base).await;
                         transfer.done.store(true, Ordering::SeqCst);
                         emit_disk_progress(sink.as_ref(), &transfer, true);
                         break;

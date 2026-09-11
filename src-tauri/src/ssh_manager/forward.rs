@@ -15,6 +15,41 @@ use super::{ForwardChildren, SshHandler, SshManager};
 pub(super) struct RemoteForwardRoute {
     pub(super) target_host: String,
     pub(super) target_port: u16,
+    /// 服务端主动打开的 forwarded-tcpip 中继任务句柄：停止转发时 abort 全部在飞连接（审计 R-2）。
+    pub(super) relays: RemoteForwardRelays,
+}
+
+/// 在飞转发中继任务的 AbortHandle 集合。
+/// push 时顺带剔除已自然结束的句柄，集合规模以存活连接数为上界；
+/// 纯同步方法内短临界区，用 std 锁（不跨 await）。
+#[derive(Clone, Default)]
+pub(super) struct RemoteForwardRelays(Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>);
+
+impl std::fmt::Debug for RemoteForwardRelays {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("RemoteForwardRelays").finish_non_exhaustive()
+    }
+}
+
+impl RemoteForwardRelays {
+    pub(super) fn push(&self, handle: tokio::task::AbortHandle) {
+        let mut handles = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        handles.retain(|existing| !existing.is_finished());
+        handles.push(handle);
+    }
+
+    pub(super) fn abort_all(&self) {
+        let handles = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for handle in handles.iter() {
+            handle.abort();
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +273,7 @@ impl SshManager {
             RemoteForwardRoute {
                 target_host: target_host.clone(),
                 target_port,
+                relays: RemoteForwardRelays::default(),
             },
         );
         self.remote_forwards.lock().await.insert(
@@ -409,10 +445,15 @@ impl SshManager {
             self.remote_forwards.lock().await.insert(id, remote);
             return Err(error);
         }
-        self.remote_routes
+        // 路由撤销时一并 abort 全部在飞中继连接（审计 R-2）。
+        if let Some(route) = self
+            .remote_routes
             .lock()
             .await
-            .remove(&(remote.session_id, remote.bind_port));
+            .remove(&(remote.session_id, remote.bind_port))
+        {
+            route.relays.abort_all();
+        }
         self.forward_info.lock().await.remove(&id);
         Ok(())
     }

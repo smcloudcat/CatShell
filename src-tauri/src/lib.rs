@@ -941,7 +941,10 @@ async fn recording_save(
 #[tauri::command]
 async fn recording_list(app: AppHandle) -> Result<Vec<recording_store::RecordingMeta>, String> {
     let dir = recordings_dir_of(&app)?;
-    Ok(recording_store::list_recordings(&dir))
+    // 录制数量多时 read_dir + 元数据读取仍可能碰到慢盘，与 save/read/delete 统一口径走阻塞线程池。
+    tokio::task::spawn_blocking(move || recording_store::list_recordings(&dir))
+        .await
+        .map_err(|error| format!("列举任务异常: {error}"))
 }
 
 #[tauri::command]
@@ -963,12 +966,17 @@ async fn recording_delete(app: AppHandle, name: String) -> Result<(), String> {
 #[tauri::command]
 async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     let path = ssh_manager::ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
-    if !path.exists() {
-        return Err("未找到 ~/.ssh/config 文件".to_string());
-    }
-    let content =
-        std::fs::read_to_string(&path).map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
-    Ok(ssh_manager::parse_ssh_config(&content))
+    // exists/read_to_string 都是阻塞 IO；config 文件可能挂在网络盘，统一移入阻塞线程池。
+    tokio::task::spawn_blocking(move || {
+        if !path.exists() {
+            return Err("未找到 ~/.ssh/config 文件".to_string());
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|err| format!("读取 ~/.ssh/config 失败: {err}"))?;
+        Ok(ssh_manager::parse_ssh_config(&content))
+    })
+    .await
+    .map_err(|error| format!("解析任务异常: {error}"))?
 }
 
 /// 生成 Ed25519 密钥对（可选口令加密），写入私钥与 `.pub` 公钥文件。
