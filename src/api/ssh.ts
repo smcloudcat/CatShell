@@ -282,9 +282,15 @@ export async function sftpTransferCancel(transferId: number): Promise<void> {
 export async function sftpDiskDownloadPick(
   id: number,
   remotePath: string,
-  resume: boolean
+  resume: boolean,
+  speedLimitKBs = 0
 ): Promise<SftpDiskTransferStart | null> {
-  return invoke<SftpDiskTransferStart | null>('sftp_disk_download_pick', { id, remotePath, resume })
+  return invoke<SftpDiskTransferStart | null>('sftp_disk_download_pick', {
+    id,
+    remotePath,
+    resume,
+    speedLimitKBs
+  })
 }
 
 /** 磁盘级上传：打开 Rust 侧文件对话框并登记一次性上传令牌（真实本地路径不出 Rust 边界）。 */
@@ -296,13 +302,24 @@ export async function sftpDiskUploadPick(id: number, remoteDir: string): Promise
 export async function sftpDiskUploadStartToken(
   id: number,
   token: number,
-  resume: boolean
+  resume: boolean,
+  speedLimitKBs = 0
 ): Promise<SftpDiskTransferStart> {
-  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start_token', { id, token, resume })
+  return invoke<SftpDiskTransferStart>('sftp_disk_upload_start_token', {
+    id,
+    token,
+    resume,
+    speedLimitKBs
+  })
 }
 
 export async function sftpDiskTransferCancel(transferId: number): Promise<void> {
   await invoke('sftp_disk_transfer_cancel', { transferId })
+}
+
+/** 运行中动态调整磁盘传输的带宽限速（KB/s，0 = 不限）。 */
+export async function sftpDiskTransferSetLimit(transferId: number, speedLimitKBs: number): Promise<void> {
+  await invoke('sftp_disk_transfer_set_limit', { transferId, speedLimitKBs })
 }
 
 export async function sftpDiskTransferList(sessionId: number): Promise<SftpDiskTransferInfo[]> {

@@ -327,6 +327,7 @@ async fn sftp_disk_download_pick(
     id: u64,
     remote_path: String,
     resume: bool,
+    speed_limit_kbs: Option<u64>,
 ) -> Result<Option<ssh_manager::SftpDiskTransferStart>, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -350,7 +351,15 @@ async fn sftp_disk_download_pick(
     let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
     state
         .ssh
-        .sftp_disk_download_start(state.ssh.clone(), sink, id, remote_path, local_path, resume)
+        .sftp_disk_download_start(
+            state.ssh.clone(),
+            sink,
+            id,
+            remote_path,
+            local_path,
+            resume,
+            speed_limit_kbs.unwrap_or(0),
+        )
         .await
         .map(Some)
 }
@@ -413,6 +422,7 @@ async fn sftp_disk_upload_start_token(
     id: u64,
     token: u64,
     resume: bool,
+    speed_limit_kbs: Option<u64>,
 ) -> Result<ssh_manager::SftpDiskTransferStart, String> {
     let picked = state.ssh.consume_upload_token(id, token).await?;
     let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
@@ -425,6 +435,7 @@ async fn sftp_disk_upload_start_token(
             picked.local_path,
             picked.remote_path,
             resume,
+            speed_limit_kbs.unwrap_or(0),
         )
         .await
 }
@@ -437,6 +448,19 @@ async fn sftp_disk_transfer_cancel(
 ) -> Result<(), String> {
     let sink: Arc<dyn EventSink> = Arc::new(AppEventSink(app));
     state.ssh.sftp_disk_transfer_cancel(sink, transfer_id).await
+}
+
+/// 运行中动态调整磁盘传输的带宽限速（KB/s，0 = 不限）。
+#[tauri::command]
+async fn sftp_disk_transfer_set_limit(
+    state: State<'_, AppState>,
+    transfer_id: u64,
+    speed_limit_kbs: u64,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_disk_transfer_set_limit(transfer_id, speed_limit_kbs)
+        .await
 }
 
 #[tauri::command]
@@ -714,6 +738,7 @@ pub fn run() {
             sftp_disk_upload_pick,
             sftp_disk_upload_start_token,
             sftp_disk_transfer_cancel,
+            sftp_disk_transfer_set_limit,
             sftp_disk_transfer_list,
             tray_set_active_count
         ])

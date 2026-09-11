@@ -234,3 +234,11 @@
   color: var(--ok);
   font-size: 12px;
 }
+
+/* 传输行的限速下拉：紧凑，不挤压进度条 */
+.sftp-transfer-limit {
+  width: 108px;
+  padding: 3px 6px;
+  font-size: 12px;
+  flex: none;
+}

@@ -95,6 +95,8 @@ pub struct SftpDiskTransferInfo {
     pub done: bool,
     pub cancelled: bool,
     pub error: Option<String>,
+    /// 当前限速（KB/s，0 表示不限速）。
+    pub speed_limit_kbs: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -110,6 +112,7 @@ struct SftpDiskProgress {
     done: bool,
     cancelled: bool,
     error: Option<String>,
+    speed_limit_kbs: u64,
 }
 
 /// 落盘流式传输任务：数据完全在 Rust 侧读写本地磁盘，不经过前端内存。
@@ -129,6 +132,16 @@ pub struct SftpDiskTransfer {
     pub done: AtomicBool,
     pub error: StdMutex<Option<String>>,
     pub last_emit: AtomicU64,
+    /// 带宽限速（字节/秒，0 = 不限）。运行中可动态调整。
+    pub speed_limit_bps: AtomicU64,
+}
+
+/// 单条限速档位上限：防止误输入出天文数字（1 GB/s）以外的值没有意义。
+pub const MAX_SPEED_LIMIT_KBS: u64 = 1024 * 1024;
+
+/// 把前端传来的 KB/s 限速归一：0 表示不限，上限 [`MAX_SPEED_LIMIT_KBS`]。
+pub fn normalize_speed_limit_kbs(kbs: u64) -> u64 {
+    kbs.min(MAX_SPEED_LIMIT_KBS)
 }
 
 fn now_millis() -> u64 {
@@ -161,6 +174,7 @@ impl SftpDiskTransfer {
             done: self.done.load(Ordering::SeqCst),
             cancelled: self.cancelled.load(Ordering::SeqCst),
             error: self.error_guard().clone(),
+            speed_limit_kbs: self.speed_limit_bps.load(Ordering::SeqCst) / 1024,
         }
     }
 
@@ -176,6 +190,7 @@ impl SftpDiskTransfer {
             done: self.done.load(Ordering::SeqCst),
             cancelled: self.cancelled.load(Ordering::SeqCst),
             error: self.error_guard().clone(),
+            speed_limit_kbs: self.speed_limit_bps.load(Ordering::SeqCst) / 1024,
         }
     }
 
@@ -207,6 +222,32 @@ fn emit_disk_progress(sink: &dyn EventSink, transfer: &SftpDiskTransfer, force: 
         "sftp-disk-progress",
         serde_json::to_value(transfer.progress()).unwrap_or_default(),
     );
+}
+
+/// 带宽限速的自校准等待：以「本次传输会话内已传字节 / 限速」算出应耗时长，
+/// 落后于计划就睡到追平。每次醒来检查取消标记，分片 ≤100 ms 保证取消响应。
+/// 续传的起始偏移不算会话字节，因此恢复后立刻按当前限速推进，不会先冲一段。
+async fn pace_transfer(
+    transfer: &SftpDiskTransfer,
+    started_at: std::time::Instant,
+    session_bytes: u64,
+) {
+    loop {
+        let limit = transfer.speed_limit_bps.load(Ordering::SeqCst);
+        if limit == 0 {
+            return;
+        }
+        let target = std::time::Duration::from_secs_f64(session_bytes as f64 / limit as f64);
+        let elapsed = started_at.elapsed();
+        if target <= elapsed {
+            return;
+        }
+        let slice = (target - elapsed).min(std::time::Duration::from_millis(100));
+        tokio::time::sleep(slice).await;
+        if transfer.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+    }
 }
 
 pub fn validate_local_path(path: &str) -> Result<String, String> {
@@ -858,6 +899,7 @@ impl SshManager {
         remote_path: String,
         local_path: String,
         resume: bool,
+        speed_limit_kbs: u64,
     ) -> Result<SftpDiskTransferStart, String> {
         let remote_path = validate_sftp_path(remote_path)?;
         let local_path = validate_local_path(&local_path)?;
@@ -943,6 +985,7 @@ impl SshManager {
             done: AtomicBool::new(false),
             error: StdMutex::new(None),
             last_emit: AtomicU64::new(now_millis()),
+            speed_limit_bps: AtomicU64::new(normalize_speed_limit_kbs(speed_limit_kbs) * 1024),
         });
         self.sftp_disk_transfers
             .lock()
@@ -950,6 +993,8 @@ impl SshManager {
             .insert(transfer_id, transfer.clone());
 
         tauri::async_runtime::spawn(async move {
+            let started_at = std::time::Instant::now();
+            let mut session_bytes: u64 = 0;
             let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
             loop {
                 if transfer.cancelled.load(Ordering::SeqCst) {
@@ -1004,7 +1049,9 @@ impl SshManager {
                             break;
                         }
                         transfer.transferred.fetch_add(n as u64, Ordering::SeqCst);
+                        session_bytes += n as u64;
                         emit_disk_progress(sink.as_ref(), &transfer, false);
+                        pace_transfer(&transfer, started_at, session_bytes).await;
                     }
                 }
             }
@@ -1032,6 +1079,7 @@ impl SshManager {
         local_path: String,
         remote_path: String,
         resume: bool,
+        speed_limit_kbs: u64,
     ) -> Result<SftpDiskTransferStart, String> {
         let remote_path = validate_sftp_path(remote_path)?;
         let local_path = validate_local_path(&local_path)?;
@@ -1115,6 +1163,7 @@ impl SshManager {
             done: AtomicBool::new(false),
             error: StdMutex::new(None),
             last_emit: AtomicU64::new(now_millis()),
+            speed_limit_bps: AtomicU64::new(normalize_speed_limit_kbs(speed_limit_kbs) * 1024),
         });
         self.sftp_disk_transfers
             .lock()
@@ -1122,6 +1171,8 @@ impl SshManager {
             .insert(transfer_id, transfer.clone());
 
         tauri::async_runtime::spawn(async move {
+            let started_at = std::time::Instant::now();
+            let mut session_bytes: u64 = 0;
             let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
             loop {
                 if transfer.cancelled.load(Ordering::SeqCst) {
@@ -1187,7 +1238,9 @@ impl SshManager {
                             }
                             Ok(Ok(())) => {
                                 transfer.transferred.fetch_add(n as u64, Ordering::SeqCst);
+                                session_bytes += n as u64;
                                 emit_disk_progress(sink.as_ref(), &transfer, false);
+                                pace_transfer(&transfer, started_at, session_bytes).await;
                             }
                         }
                     }
@@ -1224,6 +1277,29 @@ impl SshManager {
         transfer.cancelled.store(true, Ordering::SeqCst);
         // 循环下一轮读到取消标记后自行收尾；这里同步推送一次状态。
         emit_disk_progress(sink.as_ref(), &transfer, true);
+        Ok(())
+    }
+
+    /// 运行中动态调整带宽限速（KB/s，0 = 不限）。限速被调小后传输循环会在
+    /// 下一个 pace 点自行放慢，无需重建传输。
+    pub async fn sftp_disk_transfer_set_limit(
+        &self,
+        transfer_id: u64,
+        speed_limit_kbs: u64,
+    ) -> Result<(), String> {
+        let removed = self
+            .sftp_disk_transfers
+            .lock()
+            .await
+            .get(&transfer_id)
+            .cloned();
+        let Some(transfer) = removed else {
+            return Err("传输不存在或已结束".to_string());
+        };
+        transfer.speed_limit_bps.store(
+            normalize_speed_limit_kbs(speed_limit_kbs) * 1024,
+            Ordering::SeqCst,
+        );
         Ok(())
     }
 
@@ -1362,6 +1438,59 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_speed_limit_kbs() {
+        assert_eq!(normalize_speed_limit_kbs(0), 0);
+        assert_eq!(normalize_speed_limit_kbs(1024), 1024);
+        // 超上限截断到 1 GB/s，防止误输入出天文数字
+        assert_eq!(normalize_speed_limit_kbs(u64::MAX), MAX_SPEED_LIMIT_KBS);
+    }
+
+    fn paced_transfer(limit_bps: u64) -> SftpDiskTransfer {
+        SftpDiskTransfer {
+            id: 1,
+            session_id: 1,
+            remote_path: "/r".to_string(),
+            local_path: "/l".to_string(),
+            part_path: "/l.catshell-part".to_string(),
+            file_name: "f".to_string(),
+            direction: "download",
+            total: 0,
+            transferred: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            error: StdMutex::new(None),
+            last_emit: AtomicU64::new(0),
+            speed_limit_bps: AtomicU64::new(limit_bps),
+        }
+    }
+
+    #[tokio::test]
+    async fn pace_returns_immediately_without_limit() {
+        let transfer = paced_transfer(0);
+        let started = std::time::Instant::now();
+        pace_transfer(&transfer, started, u64::MAX / 2).await;
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn pace_throttles_when_ahead_of_schedule() {
+        // 限速 4 KB/s，已传 6 KB：应耗 1.5 s，pace 至少等到接近该时刻。
+        let transfer = paced_transfer(4 * 1024);
+        let started = std::time::Instant::now();
+        pace_transfer(&transfer, started, 6 * 1024).await;
+        assert!(started.elapsed() >= std::time::Duration::from_millis(1400));
+    }
+
+    #[tokio::test]
+    async fn pace_skips_when_behind_schedule() {
+        // 限速 1 MB/s，只传了 1 KB：远未到计划时间，应立即返回。
+        let transfer = paced_transfer(1024 * 1024);
+        let started = std::time::Instant::now();
+        pace_transfer(&transfer, started, 1024).await;
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[test]
     fn poisoned_error_slot_does_not_abort_the_transfer() {
         let transfer = SftpDiskTransfer {
             id: 1,
@@ -1377,6 +1506,7 @@ mod tests {
             done: AtomicBool::new(false),
             error: StdMutex::new(None),
             last_emit: AtomicU64::new(0),
+            speed_limit_bps: AtomicU64::new(0),
         };
         // 模拟其他线程在持锁时 panic，导致错误槽中毒
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

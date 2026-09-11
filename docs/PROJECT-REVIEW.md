@@ -616,6 +616,21 @@ if (key === 'w') {
 
 **回归项**：单级跳板老配置直连主机一键重连；两级 / 三级跳板链连接（每跳指纹逐个确认）；中间某跳密码输错时的报错信息；跳板链主机的「编辑并连接」回填与凭据解锁。
 
+### 6.11 磁盘级传输带宽限速（同日，阶段三第四项切片）
+
+磁盘级 SFTP 传输（大文件直传）增加带宽限速：开始传输与运行中均可限制速率，传输列表行内下拉随时切换（不限速 / 256 KB/s / 1 / 4 / 16 / 64 MB/s），无需重建传输。
+
+**实现**（`ssh_manager/sftp.rs` + `lib.rs` + 前端 `SftpTransferList`）：
+- `SftpDiskTransfer` 增加 `speed_limit_bps: AtomicU64`；`pace_transfer` 以「本次传输会话内已传字节 / 限速」自校准等待（分片 ≤100 ms，每片醒来检查取消标记，取消响应性不受影响）。按会话字节而非总量计速，断点续传的起始偏移不会被「预付」，恢复后立即按当前限速推进。
+- `sftp_disk_download_pick` / `sftp_disk_upload_start_token` 增加 `speedLimitKBs` 参数（缺省 0 = 不限）；新命令 `sftp_disk_transfer_set_limit` 运行中动态调整；限速值上限 1 GB/s（`normalize_speed_limit_kbs` 截断）。
+- 进度事件与 `sftp_disk_transfer_list` 携带 `speedLimitKBs`，前端传输行显示当前限速并可直接改档。
+
+**测试**：Rust 新增 4 例（限速归一化、不限速立即返回、超速节流、低速不等待）。
+
+**验证**：`cargo fmt` ✓ · `cargo clippy --all-targets -- -D warnings` ✓ · `cargo test` **57 例**（42 单测 + 15 集成）✓ · `tsc -b` ✓ · `eslint .` ✓ · `i18n:check` ✓ · `mojibake:check` ✓ · 前端 226 例 ✓ · `build` ✓。
+
+**回归项**：大文件下载选 256 KB/s 后速率贴近上限；传输中途切到「不限速」立即提速；限速生效时取消传输仍即时响应；限速传输中途断开后的断点续传。
+
 ---
 
 ## 七、建议路线图
@@ -651,7 +666,8 @@ if (key === 'w') {
 - [x] 多跳 ProxyJump（详见 6.10：`ProxyConfig` 链式 `next` 字段，逐级 direct-tcpip 隧道，每跳独立指纹确认与凭据；表单支持增删跳，上限 4 级）
 - [x] 批量命令执行聚合（详见 6.8：`ssh_batch_exec` 专用通道执行 + 逐台输出聚合，原有「写入终端」模式保留）
 - [x] 会话录制与回放（详见 6.9：前端采集输出 + Rust 落盘 asciicast v2，录制库支持倍速回放与进度拖动）
-- [ ] SFTP 双向同步、传输队列持久化、带宽限速
+- [x] 磁盘级传输带宽限速（详见 6.11：自校准 pace，开始时或运行中随时调档，取消响应不受限速影响）
+- [ ] SFTP 双向同步、传输队列持久化
 - [ ] 密钥管理 UI、SSH config 写回
 - [ ] 类型自动生成（`tauri-specta` / `ts-rs`）
 - [ ] 命令行启动参数、托盘快捷连接

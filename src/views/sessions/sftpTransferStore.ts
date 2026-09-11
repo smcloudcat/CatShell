@@ -7,6 +7,8 @@ export interface TransferProgress {
   transferred: number
   total: number
   disk?: boolean
+  /** 带宽限速（KB/s，0 = 不限）。仅磁盘级传输可调。 */
+  speedLimitKBs?: number
 }
 
 interface TransferStoreState {
@@ -26,9 +28,14 @@ export function beginTransfer(sessionId: number, progress: TransferProgress) {
   setSessionTransfers(sessionId, (list) => [...list.filter((item) => item.id !== progress.id), progress])
 }
 
-export function updateTransfer(sessionId: number, id: number, transferred: number) {
+export function updateTransfer(
+  sessionId: number,
+  id: number,
+  transferred: number,
+  patch: Partial<Pick<TransferProgress, 'speedLimitKBs'>> = {}
+) {
   setSessionTransfers(sessionId, (list) =>
-    list.map((item) => (item.id === id ? { ...item, transferred } : item))
+    list.map((item) => (item.id === id ? { ...item, transferred, ...patch } : item))
   )
 }
 

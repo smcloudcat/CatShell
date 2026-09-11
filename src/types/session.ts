@@ -149,6 +149,8 @@ export interface SftpDiskProgress extends VersionedEvent {
   done: boolean
   cancelled: boolean
   error?: string | null
+  /** 当前限速（KB/s，0 表示不限速）。 */
+  speedLimitKBs: number
 }
 
 export interface SftpDiskTransferInfo {
@@ -163,6 +165,8 @@ export interface SftpDiskTransferInfo {
   done: boolean
   cancelled: boolean
   error?: string | null
+  /** 当前限速（KB/s，0 表示不限速）。 */
+  speedLimitKBs: number
 }
 
 export interface KnownHostEntry {

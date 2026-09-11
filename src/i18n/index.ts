@@ -436,6 +436,8 @@ const en: Record<string, string> = {
   // SftpTransferList
   '已取消 ': 'Cancelled ',
   '磁盘级传输完成': 'Disk-level transfer finished',
+  '不限速': 'Unlimited',
+  '带宽限速': 'Bandwidth limit',
   '完成：': ' finished: ',
   '取消传输': 'Cancel transfer',
   // SessionMonitorPanel

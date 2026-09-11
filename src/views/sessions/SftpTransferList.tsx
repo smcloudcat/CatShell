@@ -3,15 +3,25 @@ import { Icon } from '../../components/Icon'
 import {
   sftpDiskTransferCancel,
   sftpDiskTransferList,
+  sftpDiskTransferSetLimit,
   subscribeSftpDiskProgress
 } from '../../api/ssh'
 import { formatBytes } from '../../utils/format'
 import { recordAudit } from '../../store/audit'
 import { showToast } from '../../store/ui'
-import { beginTransfer, cancelFlags, removeTransfer, useSftpTransferStore, type TransferProgress } from './sftpTransferStore'
+import { beginTransfer, cancelFlags, removeTransfer, updateTransfer, useSftpTransferStore, type TransferProgress } from './sftpTransferStore'
 import { useT } from '../../i18n'
 
-function TransferRow({ transfer }: { transfer: TransferProgress }) {
+/** 限速档位（KB/s，0 = 不限）。 */
+const SPEED_LIMIT_OPTIONS = [0, 256, 1024, 4 * 1024, 16 * 1024, 64 * 1024]
+
+function speedLimitLabel(kbs: number, t: (key: string) => string): string {
+  if (kbs === 0) return t('不限速')
+  if (kbs >= 1024) return `${Math.round((kbs / 1024) * 10) / 10} MB/s`
+  return `${kbs} KB/s`
+}
+
+function TransferRow({ transfer, sessionId }: { transfer: TransferProgress; sessionId: number }) {
   const t = useT()
   const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0
   const requestCancel = () => {
@@ -20,6 +30,12 @@ function TransferRow({ transfer }: { transfer: TransferProgress }) {
       return
     }
     cancelFlags.add(transfer.id)
+  }
+  const changeLimit = (kbs: number) => {
+    updateTransfer(sessionId, transfer.id, transfer.transferred, { speedLimitKBs: kbs })
+    if (transfer.disk) {
+      void sftpDiskTransferSetLimit(transfer.id, kbs).catch(() => undefined)
+    }
   }
   return (
     <div className="sftp-transfer">
@@ -31,6 +47,18 @@ function TransferRow({ transfer }: { transfer: TransferProgress }) {
         </div>
         <div className="metric-bar"><span style={{ width: `${percent}%` }} /></div>
       </div>
+      {transfer.disk && (
+        <select
+          className="glass-input sftp-transfer-limit"
+          value={transfer.speedLimitKBs ?? 0}
+          title={t('带宽限速')}
+          onChange={(e) => changeLimit(Number(e.target.value))}
+        >
+          {SPEED_LIMIT_OPTIONS.map((kbs) => (
+            <option key={kbs} value={kbs}>{speedLimitLabel(kbs, t)}</option>
+          ))}
+        </select>
+      )}
       <button className="host-icon-btn danger" onClick={requestCancel} title={t('取消传输')}><Icon name="x" size={13} /></button>
     </div>
   )
@@ -73,7 +101,8 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
         kind: progress.direction === 'upload' ? 'upload' : 'download',
         transferred: progress.transferred,
         total: progress.total,
-        disk: true
+        disk: true,
+        speedLimitKBs: progress.speedLimitKBs
       })
     }).then((dispose) => {
       if (disposed) void dispose()
@@ -91,7 +120,8 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
             kind: info.direction === 'upload' ? 'upload' : 'download',
             transferred: info.transferred,
             total: info.total,
-            disk: true
+            disk: true,
+            speedLimitKBs: info.speedLimitKBs
           })
         }
       })
@@ -106,7 +136,7 @@ export function SftpTransferList({ sessionId }: { sessionId: number }) {
   return (
     <div className="sftp-transfers">
       {transfers.map((transfer) => (
-        <TransferRow key={transfer.id} transfer={transfer} />
+        <TransferRow key={transfer.id} transfer={transfer} sessionId={sessionId} />
       ))}
     </div>
   )
