@@ -4,6 +4,8 @@
 //! `SshManager::open_session_channel`），并发推进、逐台收集输出与耗时，
 //! 单台失败不影响其余目标。
 
+use ts_rs::TS;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,14 +24,17 @@ pub const BATCH_MAX_TIMEOUT_SECS: u64 = 120;
 const _: () = assert!(BATCH_MAX_TIMEOUT_SECS >= BATCH_MIN_TIMEOUT_SECS);
 
 /// 一台会话的批量执行结果。
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct BatchExecItem {
+    #[ts(type = "number")]
     pub session_id: u64,
     pub name: String,
     pub ok: bool,
     pub output: String,
     pub error: Option<String>,
+    #[ts(type = "number")]
     pub duration_ms: u64,
     pub truncated: bool,
 }

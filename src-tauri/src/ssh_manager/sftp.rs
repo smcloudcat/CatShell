@@ -8,6 +8,7 @@ use base64::Engine;
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+use ts_rs::TS;
 
 use super::{EventSink, SshManager};
 
@@ -18,39 +19,51 @@ const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
 const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const DISK_PART_SUFFIX: &str = ".catshell-part";
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpEntry {
     pub name: String,
     pub path: String,
     pub kind: String,
+    #[ts(type = "number")]
     pub size: u64,
+    #[ts(type = "number | null")]
     pub modified_at: Option<i64>,
     pub permissions: Option<u32>,
     pub owner: Option<String>,
     pub group: Option<String>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpTransferStart {
+    #[ts(type = "number")]
     pub transfer_id: u64,
+    #[ts(type = "number")]
     pub total: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpChunk {
     pub data: String,
     pub done: bool,
+    #[ts(type = "number")]
     pub transferred: u64,
+    #[ts(type = "number")]
     pub total: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpDiskTransferStart {
+    #[ts(type = "number")]
     pub transfer_id: u64,
+    #[ts(type = "number")]
     pub total: u64,
     pub resumed: bool,
     /// 真实本地路径。令牌/对话框流程中它本就留在 Rust 侧；这里回传给前端
@@ -76,29 +89,37 @@ impl UploadPathToken {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpDiskUploadPick {
+    #[ts(type = "number")]
     pub token: u64,
     pub file_name: String,
     pub remote_path: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SftpDiskTransferInfo {
+    #[ts(type = "number")]
     pub transfer_id: u64,
+    #[ts(type = "number")]
     pub session_id: u64,
     pub direction: String,
     pub file_name: String,
     pub remote_path: String,
     pub local_path: String,
+    #[ts(type = "number")]
     pub transferred: u64,
+    #[ts(type = "number")]
     pub total: u64,
     pub done: bool,
     pub cancelled: bool,
     pub error: Option<String>,
     /// 当前限速（KB/s，0 表示不限速）。
+    #[ts(type = "number")]
     pub speed_limit_kbs: u64,
 }
 

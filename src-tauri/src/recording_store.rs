@@ -6,17 +6,21 @@
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+use ts_rs::TS;
 
 /// 单个录制文件的最大字节数（读与写共用），防内存炸弹。
 pub const MAX_RECORDING_BYTES: u64 = 64 * 1024 * 1024;
 /// 清洗后的文件名基名最大字符数。
 const MAX_BASE_CHARS: usize = 80;
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct RecordingMeta {
     pub name: String,
+    #[ts(type = "number")]
     pub size: u64,
+    #[ts(type = "number")]
     pub modified_at: u64,
 }
 

@@ -676,6 +676,24 @@ SFTP 面板新增「目录同步（单向）」：把本地目录与远程目录
 
 **回归项**：Ed25519 + 口令生成后可用口令解密、指纹可复算；删除拒绝 config 与 `~/.ssh` 外路径；config 写回保留无关块与 Match 块、重复写回幂等、备份文件生成。
 
+### 6.15 类型自动生成：ts-rs 绑定管道（同日，阶段三第八项切片）
+
+Rust DTO 与前端 `src/types/*.ts` 手写类型长期靠人肉同步，漂移只能靠运行时炸出来。本切片引入 [ts-rs](https://github.com/Aleph-Alpha/ts-rs) 生成管道，建立**机器维护的对照源**。
+
+**实现**（依赖 `ts-rs 10.1`，仅 derive 编译期，运行时零开销）：
+- 跨 IPC 的 **24 个 DTO** 全部 `#[derive(TS)]` + `#[ts(export)]`：`types.rs` 9 个、`sftp.rs` 6 个、`sync.rs` 4 个、`batch.rs` / `config.rs` / `keys.rs` / `recording_store.rs` 各 1–2 个。
+- 导出目录经 `src-tauri/.cargo/config.toml` 的 `TS_RS_EXPORT_DIR` 注入，落到 `src/types/bindings/`（带 README 说明用途与边界）；`cargo test export_bindings` 一键再生成。
+- **64 位整数一律 `#[ts(type = "number")]`**：ts-rs 默认把 `u64` / `i64` 映射为 `bigint`，但 Tauri IPC 走 JSON，前端实际拿到 `number`——已全局修正并在守卫测试里防回归。
+- **三层防漂移**：
+  1. `npm run bindings:check`（cargo test 导出 + `git diff --exit-code`），Rust DTO 改动未同步时直接红；
+  2. CI 的 Rust job 在 `cargo test` 后同样跑 diff 守卫；
+  3. 前端 `bindings.test.ts` 3 例：关键绑定文件存在且含导出、绑定中不得出现 `bigint`、文件仍带生成头（防手改）。
+- **刻意不导出**：`ConnectRequest` / `ProxyConfig`（递归 + 明文凭据，安全约定不实现 Serialize；前端 `host.ts` 已有稳定镜像）；内部状态类型（`SyncJob` / `SftpDiskTransfer` 等，不过 IPC）；事件 payload（`mod.rs` 内以 `json!` 内联构造，未结构化，属后续工作）。
+
+**边界说明**：手写 TS 类型仍是应用公共 API——它们含窄化联合（`status: SessionStatus`、`direction: 'local' | 'remote' | 'dynamic'`），Rust 侧是 `String`，ts-rs 无法表达。绑定作对照源使用：改 Rust DTO 后 `bindings:check` 的 diff 即为前端同步要求。前端直接消费绑定（去掉手写镜像）属后续演进。
+
+**测试**：前端 +3（守卫测试），Rust +24（ts-rs 导出用例）；其余验证全绿。
+
 ---
 
 ## 七、建议路线图
@@ -715,7 +733,7 @@ SFTP 面板新增「目录同步（单向）」：把本地目录与远程目录
 - [x] SFTP 目录同步（单向 mirror，详见 6.12：差异预览确认 + 逐文件失败隔离执行；不做镜像删除）
 - [x] 传输队列持久化（详见 6.13：磁盘级传输断点进度落盘，重启后按主机续传；分块传输保持会话内体验）
 - [x] 密钥管理 UI、SSH config 写回（详见 6.14：russh 内置 ssh_key 生成、~/.ssh 边界删除防护、Host 块原子写回 + 备份）
-- [ ] 类型自动生成（`tauri-specta` / `ts-rs`）
+- [x] 类型自动生成（`ts-rs`，详见 6.15：24 个 IPC DTO 生成绑定 + bindings:check / CI / vitest 三层防漂移；事件 payload 结构化与前端直连绑定属后续）
 - [ ] 命令行启动参数、托盘快捷连接
 - [ ] AI 辅助（命令生成、日志诊断、风险提示）
 

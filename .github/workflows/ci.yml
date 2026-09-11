@@ -45,6 +45,9 @@ jobs:
         working-directory: src-tauri
       - run: cargo test
         working-directory: src-tauri
+      # 类型自动生成（6.15）：cargo test 会重新导出 TS 绑定，diff 非空说明
+      # Rust DTO 改动后忘了同步（或没跑 bindings:check 就提交）。
+      - run: git diff --exit-code -- src/types/bindings
 
   audit:
     name: Dependency audit (RustSec)

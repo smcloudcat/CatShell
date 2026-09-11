@@ -11,3 +11,8 @@
 # 换来的是不再随机崩在编译器内部。等 rustc 修复后可移除本节。
 [build]
 incremental = false
+
+# 类型自动生成（6.15）：ts-rs 在 cargo test export_bindings 时把 TS 绑定写到该目录。
+# relative = true 相对 workspace 根（src-tauri/）解析，落到仓库的 src/types/bindings/。
+[env]
+TS_RS_EXPORT_DIR = { value = "../src/types/bindings", relative = true }

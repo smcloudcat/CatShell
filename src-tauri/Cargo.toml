@@ -23,6 +23,11 @@ tauri-build = { version = "2", features = [] }
 # 精确到小版本，避免解析到新版本时引入行为漂移。实际锁定由 Cargo.lock 兜底。
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
+
+# 类型自动生成（6.15）：为跨 IPC 的 DTO 派生 TS 绑定，cargo test 时导出到
+# ../src/types/bindings/（对照源，见该目录 README）；不影响 ConnectRequest 等
+# 「不实现 Serialize」的凭据安全约定——TS 派生只做类型映射，不引入 serde 序列化。
+ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }

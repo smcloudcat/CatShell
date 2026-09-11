@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use russh::keys::ssh_key::{Algorithm, HashAlg, LineEnding, PrivateKey, PublicKey};
-
+use ts_rs::TS;
 
 const PRIVATE_PEM_PREFIX: &str = "-----BEGIN";
 
@@ -25,8 +25,9 @@ fn default_known_hosts_parent() -> Result<PathBuf, String> {
         .ok_or_else(|| "无法定位 .ssh 目录".to_string())
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SshKeyEntry {
     /// 主文件名：私钥名（有私钥时）或 `.pub` 去掉后缀的名。
     pub file_name: String,
@@ -39,14 +40,17 @@ pub struct SshKeyEntry {
     pub comment: Option<String>,
     /// 私钥是否带口令（OpenSSH 格式；其它格式无法判断时保持 false）。
     pub encrypted: bool,
+    #[ts(type = "number")]
     pub size: u64,
+    #[ts(type = "number")]
     pub modified_ms: u64,
     pub private_path: Option<String>,
     pub public_path: Option<String>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct GeneratedKeypair {
     pub private_path: String,
     pub public_path: String,
@@ -115,7 +119,9 @@ pub fn generate_keypair(
         }
     }
 
-    let public_key = key.public_key().to_openssh()
+    let public_key = key
+        .public_key()
+        .to_openssh()
         .map_err(|error| format!("序列化公钥失败: {error}"))?;
     let private_pem = key
         .to_openssh(LineEnding::LF)
@@ -147,8 +153,16 @@ fn parse_public_text(text: &str) -> Option<(String, String, Option<String>)> {
     let line = text.lines().find(|line| !line.trim().is_empty())?;
     let public = PublicKey::from_openssh(line).ok()?;
     let comment = public.comment().to_string();
-    let comment = if comment.is_empty() { None } else { Some(comment) };
-    Some((public.algorithm().to_string(), fingerprint_of(&public), comment))
+    let comment = if comment.is_empty() {
+        None
+    } else {
+        Some(comment)
+    };
+    Some((
+        public.algorithm().to_string(),
+        fingerprint_of(&public),
+        comment,
+    ))
 }
 
 /// 判断私钥文件：返回 (解析成功, 是否加密)。
@@ -163,13 +177,17 @@ fn inspect_private(path: &Path) -> (bool, bool) {
         return (true, key.is_encrypted());
     }
     // OpenSSH 之外的 PEM（PKCS#8 / 传统 RSA）交给 russh 的加载器兜底。
-    (russh::keys::load_secret_key(path.to_string_lossy().as_ref(), None).is_ok(), false)
+    (
+        russh::keys::load_secret_key(path.to_string_lossy().as_ref(), None).is_ok(),
+        false,
+    )
 }
 
 /// 浏览 `~/.ssh` 目录：密钥成组（私钥 + `.pub`），其余文件原样列出（kind=other）。
 pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
     let dir = ssh_dir()?;
-    let entries = std::fs::read_dir(&dir).map_err(|error| format!("读取 .ssh 目录失败: {error}"))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|error| format!("读取 .ssh 目录失败: {error}"))?;
 
     // base 名 -> (私钥路径, 公钥路径)
     let mut grouped: std::collections::BTreeMap<String, (Option<PathBuf>, Option<PathBuf>)> =
@@ -179,7 +197,10 @@ pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
         if !path.is_file() {
             continue;
         }
-        let name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
         if name.is_empty() {
             continue;
         }
@@ -199,7 +220,9 @@ pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
     for (base, (private, public)) in grouped {
         let primary = private.as_ref().or(public.as_ref());
         let Some(primary) = primary else { continue };
-        let size = std::fs::metadata(primary).map(|meta| meta.len()).unwrap_or(0);
+        let size = std::fs::metadata(primary)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
 
         let mut entry = SshKeyEntry {
             file_name: base.clone(),
@@ -212,8 +235,12 @@ pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
             encrypted: false,
             size,
             modified_ms: modified_ms(primary),
-            private_path: private.as_ref().map(|path| path.to_string_lossy().to_string()),
-            public_path: public.as_ref().map(|path| path.to_string_lossy().to_string()),
+            private_path: private
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            public_path: public
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
         };
 
         // 公钥信息优先从 .pub 拿；私钥能无口令加载时以其为准。
@@ -232,7 +259,9 @@ pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
                 entry.kind = "key".to_string();
                 entry.encrypted = encrypted;
                 if !encrypted {
-                    if let Ok(key) = russh::keys::load_secret_key(private_path.to_string_lossy().as_ref(), None) {
+                    if let Ok(key) =
+                        russh::keys::load_secret_key(private_path.to_string_lossy().as_ref(), None)
+                    {
                         entry.key_type = Some(key.public_key().algorithm().to_string());
                         entry.fingerprint = Some(fingerprint_of(key.public_key()));
                         let comment = key.public_key().comment().to_string();
@@ -252,7 +281,9 @@ pub fn list_keys() -> Result<Vec<SshKeyEntry>, String> {
 
     result.sort_by(|a, b| {
         let rank = |entry: &SshKeyEntry| if entry.kind == "key" { 0 } else { 1 };
-        rank(a).cmp(&rank(b)).then_with(|| a.file_name.cmp(&b.file_name))
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.file_name.cmp(&b.file_name))
     });
     Ok(result)
 }
@@ -271,7 +302,9 @@ fn delete_keypair_in(dir: &Path, private_path: &str) -> Result<usize, String> {
         return Err("路径必须是绝对路径".to_string());
     }
     // 路径必须位于指定目录内（防误删任意位置的文件）。
-    let canonical_dir = dir.canonicalize().map_err(|error| format!("定位目录失败: {error}"))?;
+    let canonical_dir = dir
+        .canonicalize()
+        .map_err(|error| format!("定位目录失败: {error}"))?;
     let canonical = path.canonicalize().map_err(|_| "文件不存在".to_string())?;
     if !canonical.starts_with(&canonical_dir) {
         return Err("只能删除 ~/.ssh 目录内的密钥文件".to_string());
@@ -296,8 +329,9 @@ fn delete_keypair_in(dir: &Path, private_path: &str) -> Result<usize, String> {
 /// 读取公钥单行内容（传入私钥路径时自动找同名 `.pub`）。仅允许 `~/.ssh` 内的文件。
 pub fn read_public_key(private_path: &str) -> Result<String, String> {
     let dir = ssh_dir()?;
-    let canonical_dir =
-        dir.canonicalize().map_err(|error| format!("定位 .ssh 目录失败: {error}"))?;
+    let canonical_dir = dir
+        .canonicalize()
+        .map_err(|error| format!("定位 .ssh 目录失败: {error}"))?;
     let path = PathBuf::from(private_path.trim());
     if !path.is_absolute() {
         return Err("路径必须是绝对路径".to_string());
@@ -306,7 +340,11 @@ pub fn read_public_key(private_path: &str) -> Result<String, String> {
     if !canonical.starts_with(&canonical_dir) {
         return Err("只能读取 ~/.ssh 目录内的公钥文件".to_string());
     }
-    let public_path = if canonical.extension().map(|ext| ext == "pub").unwrap_or(false) {
+    let public_path = if canonical
+        .extension()
+        .map(|ext| ext == "pub")
+        .unwrap_or(false)
+    {
         canonical
     } else {
         PathBuf::from(format!("{}.pub", canonical.to_string_lossy()))
@@ -341,13 +379,8 @@ mod tests {
     fn generates_keypair_that_roundtrips() {
         let dir = temp_dir("roundtrip");
         let private = dir.join("id_test");
-        let generated = generate_keypair(
-            private.to_str().unwrap(),
-            None,
-            "catshell-test",
-            false,
-        )
-        .unwrap();
+        let generated =
+            generate_keypair(private.to_str().unwrap(), None, "catshell-test", false).unwrap();
 
         assert_eq!(generated.key_type, "ssh-ed25519");
         assert!(generated.fingerprint.starts_with("SHA256:"));
@@ -373,13 +406,8 @@ mod tests {
     fn encrypted_keypair_requires_passphrase() {
         let dir = temp_dir("encrypted");
         let private = dir.join("id_enc");
-        let generated = generate_keypair(
-            private.to_str().unwrap(),
-            Some("secret-pass"),
-            "",
-            false,
-        )
-        .unwrap();
+        let generated =
+            generate_keypair(private.to_str().unwrap(), Some("secret-pass"), "", false).unwrap();
 
         let text = std::fs::read_to_string(&private).unwrap();
         let parsed = russh::keys::ssh_key::PrivateKey::from_openssh(&text).unwrap();
@@ -387,7 +415,9 @@ mod tests {
 
         // 无口令加载失败，正确口令加载成功且指纹一致。
         assert!(russh::keys::load_secret_key(private.to_string_lossy().as_ref(), None).is_err());
-        let loaded = russh::keys::load_secret_key(private.to_string_lossy().as_ref(), Some("secret-pass")).unwrap();
+        let loaded =
+            russh::keys::load_secret_key(private.to_string_lossy().as_ref(), Some("secret-pass"))
+                .unwrap();
         assert_eq!(fingerprint_of(loaded.public_key()), generated.fingerprint);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -429,6 +459,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
     }
-
-
 }

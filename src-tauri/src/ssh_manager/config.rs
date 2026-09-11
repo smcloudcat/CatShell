@@ -1,3 +1,5 @@
+use ts_rs::TS;
+
 use std::path::{Path, PathBuf};
 
 use super::types::{home_dir, KnownHostEntry, KnownHostsSnapshot, SshConfigEntry};
@@ -225,8 +227,9 @@ pub fn remove_known_hosts_entry(
 }
 
 /// 主机档案写回 `~/.ssh/config` 的草稿（不含任何凭据，私钥只写路径）。
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct HostConfigDraft {
     /// Host 模式（即主机档案名称）。
     pub name: String,
@@ -239,11 +242,18 @@ pub struct HostConfigDraft {
 
 /// 渲染一个 Host 块（不含尾部空行，块与块之间靠换行自然分隔）。
 pub fn build_host_block(draft: &HostConfigDraft) -> String {
-    let mut block = format!("Host {}\n  HostName {}\n  Port {}\n", draft.name, draft.hostname, draft.port);
+    let mut block = format!(
+        "Host {}\n  HostName {}\n  Port {}\n",
+        draft.name, draft.hostname, draft.port
+    );
     if !draft.user.trim().is_empty() {
         block.push_str(&format!("  User {}\n", draft.user.trim()));
     }
-    if let Some(identity) = draft.identity_file.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(identity) = draft
+        .identity_file
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         block.push_str(&format!("  IdentityFile {}\n", identity.trim()));
     }
     block
@@ -307,8 +317,7 @@ pub fn upsert_host_blocks(content: &str, drafts: &[HostConfigDraft]) -> (String,
 /// 把主机草稿写回 `~/.ssh/config`：先备份到 `.catshell-bak`，经 `.tmp` 临时文件
 /// 原子替换（避免写一半崩溃留下残缺配置）。返回 (替换块数, 写入块数)。
 pub fn write_ssh_config(drafts: &[HostConfigDraft]) -> Result<(usize, usize), String> {
-    let path =
-        ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let path = ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
     write_ssh_config_to(&path, drafts)
 }
 
@@ -320,14 +329,18 @@ fn write_ssh_config_to(path: &Path, drafts: &[HostConfigDraft]) -> Result<(usize
     for draft in drafts {
         let name = draft.name.trim();
         if name.is_empty() || name.contains(' ') {
-            return Err(format!("主机名「{}」不能作为 Host 模式（不允许空格）", draft.name));
+            return Err(format!(
+                "主机名「{}」不能作为 Host 模式（不允许空格）",
+                draft.name
+            ));
         }
         if draft.hostname.trim().is_empty() {
             return Err(format!("主机「{}」缺少地址", draft.name));
         }
     }
     let original = if path.exists() {
-        std::fs::read_to_string(path).map_err(|error| format!("读取 ~/.ssh/config 失败: {error}"))?
+        std::fs::read_to_string(path)
+            .map_err(|error| format!("读取 ~/.ssh/config 失败: {error}"))?
     } else {
         String::new()
     };
@@ -413,7 +426,10 @@ mod tests {
     #[test]
     fn builds_host_block_with_optional_fields() {
         let block = build_host_block(&draft("web", "web.example.com"));
-        assert_eq!(block, "Host web\n  HostName web.example.com\n  Port 22\n  User alice\n");
+        assert_eq!(
+            block,
+            "Host web\n  HostName web.example.com\n  Port 22\n  User alice\n"
+        );
         let full = build_host_block(&HostConfigDraft {
             name: "db".to_string(),
             hostname: "10.0.0.2".to_string(),
@@ -437,7 +453,9 @@ mod tests {
         assert!(updated.contains("# my keys"));
         assert!(updated.contains("HostName db.example.com"));
         assert!(updated.contains("Host *\n  Compression yes"));
-        assert!(updated.ends_with("Host web\n  HostName web.example.com\n  Port 22\n  User alice\n\n"));
+        assert!(
+            updated.ends_with("Host web\n  HostName web.example.com\n  Port 22\n  User alice\n\n")
+        );
     }
 
     #[test]
@@ -473,8 +491,14 @@ mod tests {
         assert!(!dir.join("config.catshell-bak").exists());
 
         // 第二次写入替换同名块并留备份。
-        let (replaced, written) =
-            write_ssh_config_to(&path, &[draft("web", "new.example.com"), draft("db", "db.example.com")]).unwrap();
+        let (replaced, written) = write_ssh_config_to(
+            &path,
+            &[
+                draft("web", "new.example.com"),
+                draft("db", "db.example.com"),
+            ],
+        )
+        .unwrap();
         assert_eq!((replaced, written), (1, 2));
         assert!(dir.join("config.catshell-bak").exists());
         let content = std::fs::read_to_string(&path).unwrap();
@@ -483,18 +507,23 @@ mod tests {
         assert!(content.contains("db.example.com"));
         // 解析器能读回写出的块。
         let entries = parse_ssh_config(&content);
-        assert!(entries.iter().any(|entry| entry.host == "web" && entry.hostname.as_deref() == Some("new.example.com")));
+        assert!(entries.iter().any(
+            |entry| entry.host == "web" && entry.hostname.as_deref() == Some("new.example.com")
+        ));
 
         // 校验拒绝：空名单 / 空格主机名 / 空地址。
         assert!(write_ssh_config_to(&path, &[]).is_err());
         assert!(write_ssh_config_to(&path, &[draft("bad name", "h")]).is_err());
-        assert!(write_ssh_config_to(&path, &[HostConfigDraft {
-            name: "x".to_string(),
-            hostname: " ".to_string(),
-            port: 22,
-            user: String::new(),
-            identity_file: None,
-        }])
+        assert!(write_ssh_config_to(
+            &path,
+            &[HostConfigDraft {
+                name: "x".to_string(),
+                hostname: " ".to_string(),
+                port: 22,
+                user: String::new(),
+                identity_file: None,
+            }]
+        )
         .is_err());
 
         let _ = std::fs::remove_dir_all(&dir);

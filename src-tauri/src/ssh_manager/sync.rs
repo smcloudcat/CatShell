@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use ts_rs::TS;
 
 use super::sftp::SFTP_CHUNK_SIZE;
 use super::{EventSink, SshManager};
@@ -33,19 +34,23 @@ const SYNC_PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
 const SYNC_MAX_REPORTED_ERRORS: usize = 20;
 
 /// 单条同步动作。`action`：`mkdir`（建目录）/ `add`（新增）/ `update`（更新）/ `skip`（跳过）。
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SyncPlanEntry {
     /// 相对路径，一律使用 `/` 分隔，不含 `..` 与前导分隔符。
     pub relative_path: String,
     pub action: String,
     /// 文件字节数（目录为 0）。
+    #[ts(type = "number")]
     pub size: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SyncPlan {
+    #[ts(type = "number")]
     pub session_id: u64,
     pub direction: String,
     pub local_dir: String,
@@ -55,25 +60,32 @@ pub struct SyncPlan {
     pub transfer_count: usize,
     pub skip_count: usize,
     /// 将实际传输的字节总量。
+    #[ts(type = "number")]
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SyncStartInfo {
     pub total_files: usize,
+    #[ts(type = "number")]
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SyncProgress {
     pub v: u32,
+    #[ts(type = "number")]
     pub session_id: u64,
     pub direction: String,
     pub done_files: usize,
     pub total_files: usize,
+    #[ts(type = "number")]
     pub done_bytes: u64,
+    #[ts(type = "number")]
     pub total_bytes: u64,
     pub current_file: Option<String>,
     pub finished: bool,

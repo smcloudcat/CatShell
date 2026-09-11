@@ -5,7 +5,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default tseslint.config(
-  { ignores: ['dist', 'src-tauri', 'src-tauri/**', 'node_modules'] },
+  { ignores: ['dist', 'src-tauri', 'src-tauri/**', 'node_modules', 'src/types/bindings/**'] },
   {
     files: ['**/*.{ts,tsx}'],
     // 启用 type-checked 规则集：`recommendedTypeChecked` 借助 TS 的类型信息，能捕获

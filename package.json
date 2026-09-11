@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "bindings:check": "cd src-tauri && cargo test export_bindings && git diff --exit-code -- src/types/bindings",
     "lint": "eslint .",
     "i18n:check": "node scripts/check-i18n.mjs",
     "i18n:audit": "node scripts/audit-untranslated.mjs",

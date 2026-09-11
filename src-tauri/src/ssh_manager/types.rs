@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 pub(super) const MAX_RECONNECT_ATTEMPTS: u32 = 3;
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -127,9 +128,11 @@ fn default_keepalive() -> u64 {
     30
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
+    #[ts(type = "number")]
     pub id: u64,
     pub name: String,
     pub host: String,
@@ -139,18 +142,24 @@ pub struct SessionInfo {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PartitionMetric {
     pub mount_point: String,
+    #[ts(type = "number")]
     pub total_kb: u64,
+    #[ts(type = "number")]
     pub used_kb: u64,
+    #[ts(type = "number")]
     pub available_kb: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerMetrics {
+    #[ts(type = "number")]
     pub session_id: u64,
     pub hostname: String,
     pub os: String,
@@ -158,17 +167,26 @@ pub struct ServerMetrics {
     pub load_1m: f64,
     pub cpu_percent: Option<f64>,
     pub partitions: Vec<PartitionMetric>,
+    #[ts(type = "number")]
     pub memory_total_kb: u64,
+    #[ts(type = "number")]
     pub memory_available_kb: u64,
+    #[ts(type = "number")]
     pub disk_total_kb: u64,
+    #[ts(type = "number")]
     pub disk_used_kb: u64,
+    #[ts(type = "number")]
     pub disk_available_kb: u64,
+    #[ts(type = "number")]
     pub network_rx_bytes: u64,
+    #[ts(type = "number")]
     pub network_tx_bytes: u64,
+    #[ts(type = "number")]
     pub collected_at: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
     pub pid: u32,
@@ -177,20 +195,26 @@ pub struct ProcessInfo {
     pub memory_percent: f64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkDiagnostic {
+    #[ts(type = "number")]
     pub session_id: u64,
     pub kind: String,
     pub target: String,
     pub output: String,
+    #[ts(type = "number")]
     pub collected_at: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PortForwardInfo {
+    #[ts(type = "number")]
     pub id: u64,
+    #[ts(type = "number")]
     pub session_id: u64,
     pub direction: String,
     pub bind_host: String,
@@ -199,7 +223,8 @@ pub struct PortForwardInfo {
     pub target_port: u16,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostEntry {
     pub pattern: String,
@@ -207,14 +232,16 @@ pub struct KnownHostEntry {
     pub fingerprint: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostsSnapshot {
     pub path: String,
     pub entries: Vec<KnownHostEntry>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConfigEntry {
     pub host: String,
