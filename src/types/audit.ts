@@ -22,6 +22,7 @@ export type AuditAction =
   | 'sftp.delete'
   | 'sftp.edit'
   | 'sftp.sync'
+  | 'ai.complete'
   | 'sftp.mkdir'
   | 'sftp.rename'
   | 'sftp.move'

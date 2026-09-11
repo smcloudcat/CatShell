@@ -8,6 +8,8 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '../../components/Icon'
 import { getSessionLog, useSessions } from '../../store/sessions'
 import { TerminalSettings, useSettings } from '../../store/settings'
+import { TerminalLineGuard, type GuardDecision } from '../../utils/lineGuard'
+import { TerminalAiPopover } from './TerminalAiPopover'
 import { useT } from '../../i18n'
 import { DARK_TERM_THEME, LIGHT_TERM_THEME } from './terminalTheme'
 
@@ -62,6 +64,14 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchValue, setSearchValue] = useState('')
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const [hold, setHold] = useState<GuardDecision | null>(null)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiSelection, setAiSelection] = useState('')
+  const riskGuardEnabled = useSettings((s) => s.ai.riskGuard)
+  const riskGuardRef = useRef(riskGuardEnabled)
+  riskGuardRef.current = riskGuardEnabled
+  const guardRef = useRef<TerminalLineGuard | null>(null)
+  const sendRef = useRef<(text: string) => void>(() => undefined)
 
   const openSearch = () => {
     setSearchValue(termRef.current?.getSelection() || '')
@@ -144,8 +154,11 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
       return true
     })
 
-    const dataSubscription = term.onData((data) => {
-      const bytes = new TextEncoder().encode(data)
+    // 行守卫（6.17 风险提示）：Enter 前分析缓冲行，高危命令扣下待确认。
+    const guard = new TerminalLineGuard()
+    guardRef.current = guard
+    const send = (text: string) => {
+      const bytes = new TextEncoder().encode(text)
       void write(id, bytes).catch(() => undefined)
       const state = useSessions.getState()
       if (!state.broadcastEnabled) return
@@ -154,6 +167,16 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
         if (state.sessions[target]?.status !== 'connected') continue
         void state.write(target, bytes).catch(() => undefined)
       }
+    }
+    sendRef.current = send
+    const dataSubscription = term.onData((data) => {
+      if (!riskGuardRef.current) {
+        send(data)
+        return
+      }
+      const { passthrough, held } = guard.feed(data)
+      if (passthrough) send(passthrough)
+      if (held) setHold(held)
     })
     const resizeSubscription = term.onResize(({ cols, rows }) => {
       resize(id, cols, rows)
@@ -196,6 +219,9 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      guardRef.current = null
+      sendRef.current = () => undefined
+      setHold(null)
       dataSubscription.dispose()
       resizeSubscription.dispose()
       webglRef.current?.dispose()
@@ -233,6 +259,56 @@ export function TerminalPane({ id, active, splitRole = 'none' }: Props) {
       className={`terminal-pane glass ${active ? 'active' : ''} ${splitRole !== 'none' ? `split-${splitRole}` : ''}`}
     >
       <div className="terminal-host" ref={containerRef} />
+      <button
+        className="terminal-ai-btn"
+        title={t('AI 助手：生成命令 / 诊断日志')}
+        onClick={() => {
+          setAiSelection(termRef.current?.getSelection() || '')
+          setAiOpen((open) => !open)
+        }}
+      >
+        <Icon name="sparkles" size={14} />
+      </button>
+      {aiOpen && (
+        <TerminalAiPopover
+          selection={aiSelection}
+          onInsertCommand={(command) => sendRef.current(command)}
+          onClose={() => setAiOpen(false)}
+        />
+      )}
+      {hold && (
+        <div className="terminal-risk glass">
+          <div className="terminal-risk-head">
+            <Icon name="sparkles" size={14} /> {t('检测到高危命令')}
+          </div>
+          <code className="terminal-risk-cmd">{hold.line}</code>
+          <ul className="terminal-risk-reasons">
+            {hold.risks.map((risk) => (
+              <li key={risk.id}>{risk.reason}</li>
+            ))}
+          </ul>
+          <div className="terminal-risk-actions">
+            <button
+              className="glass-btn sftp-queue-btn"
+              onClick={() => {
+                setHold(null)
+                sendRef.current('\r')
+              }}
+            >
+              {t('仍要执行')}
+            </button>
+            <button
+              className="glass-btn sftp-queue-btn"
+              onClick={() => {
+                setHold(null)
+                sendRef.current('\x03')
+              }}
+            >
+              {t('取消（发送 Ctrl+C）')}
+            </button>
+          </div>
+        </div>
+      )}
       {searchOpen && (
         <div className="terminal-search glass">
           <input

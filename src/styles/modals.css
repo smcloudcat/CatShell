@@ -436,3 +436,159 @@
   min-width: 20px;
   padding: 1px 6px;
 }
+
+/* ============ 终端 AI 助手 + 高危命令守卫（6.17） ============ */
+.terminal-ai-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 14px;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.12));
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.terminal-ai-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.terminal-ai {
+  position: absolute;
+  bottom: 48px;
+  right: 14px;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(430px, calc(100% - 28px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+}
+
+.terminal-ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.terminal-ai-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.terminal-ai-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminal-ai-tabs button.active {
+  border-color: var(--hairline);
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.08));
+  color: var(--text-main);
+}
+
+.terminal-ai-input {
+  width: 100%;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.terminal-ai-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.terminal-ai-result {
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.05));
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal-ai-error {
+  margin: 0;
+}
+
+.terminal-ai-foot {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.terminal-risk {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(480px, calc(100% - 28px));
+  padding: 12px 14px;
+  border: 1px solid rgba(220, 80, 80, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+}
+
+.terminal-risk-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--err);
+}
+
+.terminal-risk-cmd {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgb(var(--glass-bg) / calc(var(--bg-opacity) + 0.06));
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  word-break: break-all;
+  max-height: 90px;
+  overflow-y: auto;
+}
+
+.terminal-risk-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.terminal-risk-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

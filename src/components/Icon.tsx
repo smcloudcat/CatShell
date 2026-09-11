@@ -7,6 +7,7 @@ export type IconName =
   | 'folder'
   | 'plus'
   | 'save'
+  | 'sparkles'
   | 'copy'
   | 'image'
   | 'refresh'
@@ -139,6 +140,12 @@ const paths: Record<IconName, React.ReactNode> = {
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
   ),
   plus: <path d="M12 5v14M5 12h14" />,
+  sparkles: (
+    <>
+      <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
+      <path d="M19 15l.9 2.4L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.6L19 15Z" />
+    </>
+  ),
   save: (
     <>
       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />

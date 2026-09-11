@@ -16,6 +16,7 @@ const SESSION_PANELS_KEY = 'sessionPanelsCollapsed'
 const LAST_VIEW_KEY = 'lastView'
 const CLOSE_TO_TRAY_KEY = 'closeToTray'
 const LANGUAGE_KEY = 'language'
+const AI_KEY = 'ai'
 
 export const VAULT_AUTO_LOCK_OPTIONS = [0, 5, 15, 30]
 export const DEFAULT_VAULT_AUTO_LOCK_MINUTES = 15
@@ -50,6 +51,32 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
 
 export const MONITOR_INTERVAL_OPTIONS = [5, 10, 30, 60]
 export const DEFAULT_MONITOR_INTERVAL_SECONDS = 10
+
+export interface AiSettings {
+  /** OpenAI 兼容接口基础地址（不含 /chat/completions） */
+  endpoint: string
+  /** 接口密钥；明文存本机 app-settings.json，绝不发送到 CatShell 之外的遥测 */
+  apiKey: string
+  model: string
+  /** 终端高危命令确认开关（本地规则，与 AI 接口无关） */
+  riskGuard: boolean
+}
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  endpoint: 'https://api.openai.com/v1',
+  apiKey: '',
+  model: 'gpt-4o-mini',
+  riskGuard: true
+}
+
+function normalizeAiSettings(value: Partial<AiSettings> | null | undefined): AiSettings {
+  return {
+    endpoint: typeof value?.endpoint === 'string' && value.endpoint.trim() ? value.endpoint.trim() : DEFAULT_AI_SETTINGS.endpoint,
+    apiKey: typeof value?.apiKey === 'string' ? value.apiKey : DEFAULT_AI_SETTINGS.apiKey,
+    model: typeof value?.model === 'string' && value.model.trim() ? value.model.trim() : DEFAULT_AI_SETTINGS.model,
+    riskGuard: value?.riskGuard !== false
+  }
+}
 
 export type Language = 'zh-CN' | 'en-US'
 export const LANGUAGE_OPTIONS: Language[] = ['zh-CN', 'en-US']
@@ -93,7 +120,10 @@ interface SettingsState {
   lastView: string | null
   closeToTray: boolean
   language: Language
+  ai: AiSettings
   ready: boolean
+  setAi: (patch: Partial<AiSettings>) => void
+  saveAi: () => Promise<void>
   setTheme: (patch: Partial<ThemeConfig>) => void
   setAppearanceMode: (mode: ThemeConfig['mode']) => void
   resetTheme: () => void
@@ -141,7 +171,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
   lastView: null,
   closeToTray: true,
   language: DEFAULT_LANGUAGE,
+  ai: { ...DEFAULT_AI_SETTINGS },
   ready: false,
+  setAi: (patch) => set((state) => ({ ai: { ...state.ai, ...patch } })),
+  saveAi: async () => {
+    const ai = get().ai
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(AI_KEY, ai)
+      await store.save()
+    } catch {
+      localStorage.setItem(AI_KEY, JSON.stringify(ai))
+    }
+  },
   setTheme: (patch) => set((state) => ({ theme: { ...state.theme, ...patch } })),
   setAppearanceMode: (mode) =>
     set((state) => ({ theme: withModeBackgrounds({ ...state.theme, mode }, mode) })),
@@ -319,6 +361,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const savedLastView = await store.get<string>(LAST_VIEW_KEY)
       const savedCloseToTray = await store.get<boolean>(CLOSE_TO_TRAY_KEY)
       const savedLanguage = await store.get<Language>(LANGUAGE_KEY)
+      const savedAi = await store.get<Partial<AiSettings>>(AI_KEY)
       if (saved && !isLegacyTheme(saved)) {
         set({ theme: { ...get().theme, ...saved, gradient: { ...get().theme.gradient, ...saved.gradient } } })
       }
@@ -342,6 +385,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (typeof savedInterval === 'number' && MONITOR_INTERVAL_OPTIONS.includes(savedInterval)) {
         set({ monitorIntervalSeconds: savedInterval })
+      }
+      if (savedAi && typeof savedAi === 'object') {
+        set({ ai: normalizeAiSettings(savedAi) })
       }
       if (savedPanels && typeof savedPanels === 'object') {
         set({ sessionPanels: normalizeSessionPanels(savedPanels) })

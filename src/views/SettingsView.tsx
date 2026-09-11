@@ -8,6 +8,7 @@ import { Icon, IconName } from '../components/Icon'
 import { VaultPanel } from './settings/VaultPanel'
 import { KnownHostsPanel } from './settings/KnownHostsPanel'
 import { KeypairPanel } from './settings/KeypairPanel'
+import { AiPanel } from './settings/AiPanel'
 import { SnippetPanel } from './settings/SnippetPanel'
 import { AuditPanel } from './settings/AuditPanel'
 import { BackupPanel } from './settings/BackupPanel'
@@ -16,13 +17,14 @@ import { showToast } from '../store/ui'
 import { useT } from '../i18n'
 import { errorText } from '../i18n/errors'
 
-type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'backup' | 'update'
+type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'ai' | 'backup' | 'update'
 
 const TABS: { id: SettingsTab; labelKey: string; hintKey: string; icon: IconName }[] = [
   { id: 'appearance', labelKey: '外观', hintKey: '主题与质感', icon: 'palette' },
   { id: 'monitor', labelKey: '监控告警', hintKey: '阈值与通知', icon: 'monitor' },
   { id: 'snippets', labelKey: '命令片段', hintKey: '常用命令库', icon: 'terminal' },
   { id: 'security', labelKey: '安全与审计', hintKey: '保险箱与日志', icon: 'key' },
+  { id: 'ai', labelKey: 'AI 助手', hintKey: '命令生成 · 日志诊断 · 接口配置', icon: 'sparkles' },
   { id: 'backup', labelKey: '备份与还原', hintKey: '导入导出配置', icon: 'database' },
   { id: 'update', labelKey: '应用更新', hintKey: '语言与自动更新', icon: 'refresh' }
 ]
@@ -173,6 +175,7 @@ export function SettingsView() {
           <section className="glass settings-panel">
             {tab === 'monitor' && <MonitorThresholdPanel />}
             {tab === 'snippets' && <SnippetPanel />}
+            {tab === 'ai' && <AiPanel />}
             {tab === 'security' && (
               <>
                 <VaultPanel />

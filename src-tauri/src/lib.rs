@@ -665,6 +665,94 @@ async fn tray_set_quick_connects(
     rebuild_tray_menu(&app, &snapshot)
 }
 
+/// AI 请求参数：端点 / 密钥 / 模型全部由前端每次传入，Rust 侧不落盘、不进审计。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCompleteRequest {
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+    /// 完整的 OpenAI chat 格式消息序列（前端拼好 system / user）。
+    messages: Vec<AiChatMessage>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    temperature: Option<f32>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatMessage {
+    role: String,
+    content: String,
+}
+
+/// 调用用户配置的 OpenAI 兼容 `/chat/completions` 接口（AI 辅助，6.17）。
+/// 无状态透传：CatShell 不内置任何模型服务，网络与凭据行为完全由用户配置决定。
+#[tauri::command]
+async fn ai_complete(request: AiCompleteRequest) -> Result<String, String> {
+    let endpoint = request.endpoint.trim().trim_end_matches('/').to_string();
+    if endpoint.is_empty() {
+        return Err("AI 接口地址未配置".to_string());
+    }
+    if request.model.trim().is_empty() {
+        return Err("AI 模型名未配置".to_string());
+    }
+    if request.messages.is_empty() {
+        return Err("AI 请求内容为空".to_string());
+    }
+    let url = format!("{endpoint}/chat/completions");
+    let mut body = serde_json::json!({
+        "model": request.model.trim(),
+        "messages": request.messages,
+        "stream": false,
+    });
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = serde_json::json!(max_tokens);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = serde_json::json!(temperature);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))?;
+    let mut http = client.post(&url).json(&body);
+    if let Some(key) = request.api_key.as_deref() {
+        let key = key.trim();
+        if !key.is_empty() {
+            http = http.bearer_auth(key);
+        }
+    }
+    let response = http
+        .send()
+        .await
+        .map_err(|error| format!("请求 AI 接口失败: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("读取 AI 响应失败: {error}"))?;
+    if !status.is_success() {
+        // 截断错误体，避免超长 HTML 错误页刷屏。
+        let snippet: String = text.chars().take(400).collect();
+        return Err(format!("AI 接口返回 {status}: {snippet}"));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("解析 AI 响应失败: {error}"))?;
+    parsed
+        .pointer("/choices/0/message/content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            format!("AI 响应缺少 choices[0].message.content: {}", {
+                let snippet: String = text.chars().take(200).collect();
+                snippet
+            })
+        })
+}
+
 /// 依据快捷连接清单重建托盘菜单（快捷连接子菜单 + 显示 / 退出）。
 #[cfg(desktop)]
 fn rebuild_tray_menu(app: &AppHandle, quick: &[TrayQuickConnect]) -> Result<(), String> {
@@ -1017,6 +1105,7 @@ pub fn run() {
             sftp_sync_cancel,
             sftp_disk_transfer_list,
             tray_set_active_count,
+            ai_complete,
             cli_launch_request,
             tray_set_quick_connects
         ])

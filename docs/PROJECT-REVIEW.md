@@ -708,6 +708,24 @@ Rust DTO 与前端 `src/types/*.ts` 手写类型长期靠人肉同步，漂移�
 
 **测试**：Rust +6（launch 解析），前端 +6（意图规范化 / 档案名匹配 / 临时目标合成）；验证全绿（Rust 101 / 前端 255 / fmt / clippy -D warnings / tsc / eslint / i18n / mojibake / build）。
 
+### 6.17 AI 辅助：风险守卫 + 命令生成 / 日志诊断（同日，阶段三收官切片）
+
+路线图三件事的落地形态——**风险提示走本地规则（默认开启、零依赖），生成与诊断走用户自配的 OpenAI 兼容接口（默认关闭、无内置服务）**：
+
+**命令风险守卫（本地规则，`utils/riskAnalyzer.ts` + `utils/lineGuard.ts`）**
+- 20 条静态规则：`rm -rf /`（含 `--no-preserve-root`）、fork 炸弹、`mkfs` / `dd of=/dev/*` / 重定向写块设备（nvme/mmcblk 数字命名齐全）、`wipefs` / `blkdiscard`、递归 777/000、`find / -delete`、`mv … /dev/null`、`curl | sh`、关机重启、kill PID 1、`DROP DATABASE` / `TRUNCATE`、`git push --force main` 等；规则刻意保守，只报「明确不可逆破坏」，避免误报疲劳。
+- `TerminalLineGuard` 插在 xterm `onData` 与 SSH 通道之间做**行缓冲**：Enter 前分析整行，命中即**扣下回车**弹确认框（展示原文与原因），「仍要执行」补发 ``、「取消」补发 ``；退格 / Ctrl+U / Ctrl+C 同步维护缓冲；粘贴块含高危行整块扣下。已知盲区（历史召回、Tab 补全不经过 onData）设计上宁可漏报不误拦，且弹窗永远展示被分析的原文。
+- 设置 → AI 助手里可整体关闭（`ai.riskGuard`）。
+
+**AI 命令生成 / 日志诊断（`lib.rs` 1 命令 `ai_complete`，命令数 60→61）**
+- Rust 侧 `reqwest`（rustls，已在依赖树）无状态透传 OpenAI 兼容 `/chat/completions`：端点 / 密钥 / 模型每次随请求由前端传入，**Rust 不落盘、不进审计日志**；60s 超时，非 2xx 截断错误体回传。
+- 配置在 设置 → AI 助手（新 tab）：接口地址、API 密钥、模型名，存 `app-settings.json`（本机明文，文档明示）。
+- 终端右下角「AI」浮动按钮：生成命令（自然语言 → 单条命令，一键**填入终端**——命令进 shell 输入行仍需手动回车，正好经过风险守卫）与诊断日志（粘贴或自动带入终端选中文本 → 原因 + 修复建议）两 tab；审计 `ai.complete` 只记模型与类型，不含 prompt 内容（隐私）。
+
+**边界说明**：AI 输出仅供参考（弹窗常驻提示）；`AiCompleteRequest` 为内部请求体，刻意不进 ts-rs 绑定（前端以字面量传参）。
+
+**测试**：前端 +19（风险规则 10 例 + 行守卫 9 例），Rust 不变（`ai_complete` 为薄透传，HTTP 行为由集成环境覆盖成本过高，记为已知取舍）；验证全绿（Rust 101 / 前端 274 / fmt / clippy 0 告警 / tsc / eslint / i18n / mojibake / build）。
+
 ---
 
 ## 七、建议路线图
@@ -749,7 +767,7 @@ Rust DTO 与前端 `src/types/*.ts` 手写类型长期靠人肉同步，漂移�
 - [x] 密钥管理 UI、SSH config 写回（详见 6.14：russh 内置 ssh_key 生成、~/.ssh 边界删除防护、Host 块原子写回 + 备份）
 - [x] 类型自动生成（`ts-rs`，详见 6.15：24 个 IPC DTO 生成绑定 + bindings:check / CI / vitest 三层防漂移；事件 payload 结构化与前端直连绑定属后续）
 - [x] 命令行启动参数、托盘快捷连接（详见 6.16：`catshell user@host[:port]` / 档案名直连 + 托盘子菜单 15 条直连）
-- [ ] AI 辅助（命令生成、日志诊断、风险提示）
+- [x] AI 辅助（详见 6.17：本地 20 规则风险守卫默认开启 + OpenAI 兼容接口命令生成 / 日志诊断，无内置服务）
 
 ---
 
