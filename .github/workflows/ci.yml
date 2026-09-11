@@ -52,6 +52,11 @@ jobs:
   audit:
     name: Dependency audit (RustSec)
     runs-on: ubuntu-latest
+    # audit-check 结束时要回写 Check Run（绕过 vulnerability report），
+    # 默认 token 无 checks:write 会报 "Resource not accessible by integration"。
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       # 只扫描 Cargo.lock，不编译，因此用 ubuntu 跑更快。
