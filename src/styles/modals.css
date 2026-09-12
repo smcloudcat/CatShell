@@ -114,6 +114,15 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* 位于 `modal-body` **内部**的按钮行（如同步对话框）：只做右对齐与间距，
+   不复制 `.modal-footer` 的边框与内边距（审计 R-6）。 */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -128,6 +137,15 @@
 
 .field.span-2 {
   grid-column: span 2;
+}
+
+/* 跳板链的「添加下一跳 / 移除末跳」按钮行：`.field` 默认是纵向布局，会把两个按钮
+   叠成上下两行，这里改回横向（审计 R-6）。 */
+.field.proxy-hop-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .field-label {

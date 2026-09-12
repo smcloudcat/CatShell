@@ -8,7 +8,9 @@ import { useT } from '../../i18n'
 import { errorText } from '../../i18n/errors'
 
 const AUTO_LOCK_LABELS: Record<number, string> = {
-  0: '关闭',
+  // 不能直接用「关闭」：全局 en 字典里 '关闭': 'Close'（关窗口），这里语义是
+  // 「不自动锁定」（审计 X-10），改用独立键。
+  0: '不自动锁定',
   5: '5 分钟',
   15: '15 分钟',
   30: '30 分钟'
@@ -131,7 +133,7 @@ export function VaultPanel() {
   const credentialIds = Object.keys(entries)
 
   return (
-    <div className="settings-section vault-panel">
+    <div className="settings-section">
       <div className="settings-section-title"><Icon name="key" size={15} /> {t('凭据保险箱')}</div>
       <div className="section-tip">
         {t('密码和私钥口令使用 PBKDF2 + AES-GCM 加密保存。主密码不会写入磁盘，忘记主密码无法恢复保险箱内容。')}

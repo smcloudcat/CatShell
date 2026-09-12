@@ -108,6 +108,15 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     }
   }, [])
 
+  /**
+   * 卸载保护守卫（审计 R-13）：`await` 之后、写状态与记审计之前统一调用。
+   *
+   * 组件以 `key={activeId}` 重挂载，旧实例的 in-flight 回调若继续收尾，会写出与
+   * 新实例无关的 notice/error，并打乱审计时序。`loadDirectory` 另有请求序号保护，
+   * 其余异步路径（上传/下载/删除/编辑/重命名/权限）复用这一个判断即可。
+   */
+  const guard = () => !disposedRef.current
+
   const loadDirectory = async (nextPath?: string) => {
     const target = nextPath ?? path
     // 目录列表竞态保护（审计 B-1）：快速连续切换目录时只采纳最新请求的响应，
@@ -118,16 +127,16 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setNotice(null)
     try {
       const list = await sftpList(sessionId, target)
-      if (disposedRef.current || seq !== loadSeqRef.current) return
+      if (!guard() || seq !== loadSeqRef.current) return
       setEntries(list)
       recordAudit('sftp.list', target, 'success', t('读取远程目录'))
       setPath(target)
     } catch (err) {
-      if (disposedRef.current || seq !== loadSeqRef.current) return
+      if (!guard() || seq !== loadSeqRef.current) return
       recordAudit('sftp.list', target, 'failure', t('读取远程目录失败'))
       setError(asMessage(err, t('无法读取远程目录')))
     } finally {
-      if (!disposedRef.current && seq === loadSeqRef.current) setBusy(false)
+      if (guard() && seq === loadSeqRef.current) setBusy(false)
     }
   }
 
@@ -146,6 +155,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       await write(sessionId, new TextEncoder().encode(`cd ${shellQuote(path)}\n`))
+      if (!guard()) return
       terminals[sessionId]?.focus()
       recordAudit('sftp.open-in-terminal', path, 'success', t('在终端中打开此目录'))
     } catch (err) {
@@ -174,11 +184,14 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       try {
         existingNames = new Set((await sftpList(sessionId, path)).map((entry) => entry.name))
       } catch (err) {
+        if (!guard()) return
         recordAudit('sftp.batch-upload', path, 'failure', t('同名检查目录列表拉取失败，已中止上传'))
         setError(asMessage(err, t('无法确认远端同名文件（目录列表拉取失败），已中止上传以防误覆盖')))
         return
       }
+      if (!guard()) return
       for (const file of files) {
+        if (!guard()) return
         if (existingNames.has(file.name)) {
           const overwrite = await confirmDialog({
             title: t('覆盖远程文件'),
@@ -186,6 +199,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
             confirmLabel: t('覆盖'),
             danger: true
           })
+          if (!guard()) return
           if (!overwrite) {
             skipped += 1
             continue
@@ -217,6 +231,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           }
         }
       }
+      if (!guard()) return
       recordAudit(
         'sftp.batch-upload',
         `${uploaded}/${files.length}`,
@@ -229,6 +244,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       setNotice(parts.join(t('，')))
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       setError(asMessage(err, t('上传失败')))
     } finally {
       setBusy(false)
@@ -240,6 +256,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       const picks = await sftpDiskUploadPick(sessionId, path)
+      if (!guard()) return
       if (!picks.length) return
       const existing = picks.filter((pick) => entries.some((entry) => entry.name === pick.fileName))
       let targets = picks
@@ -250,14 +267,18 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           confirmLabel: t('继续上传'),
           danger: true
         })
+        if (!guard()) return
         if (!accepted) {
           targets = picks.filter((pick) => !existing.some((item) => item.token === pick.token))
         }
       }
+      if (!guard()) return
       let started = 0
       for (const pick of targets) {
+        if (!guard()) return
         try {
           const start = await sftpDiskUploadStartToken(sessionId, pick.token, true)
+          if (!guard()) return
           beginTransfer(sessionId, {
             id: start.transferId,
             name: pick.fileName,
@@ -279,12 +300,15 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
           recordAudit('sftp.disk-upload', pick.remotePath, 'success', start.resumed ? t('磁盘级上传（断点续传）') : t('磁盘级上传开始'))
           started += 1
         } catch (err) {
+          if (!guard()) return
           recordAudit('sftp.disk-upload', pick.remotePath, 'failure', t('磁盘级上传启动失败'))
           setError(asMessage(err, `${t('磁盘级上传启动失败：')}${pick.fileName}`))
         }
       }
+      if (!guard()) return
       if (started > 0) setNotice(`${t('磁盘级上传已开始 ')}${started}${t(' 个文件')}`)
     } catch (err) {
+      if (!guard()) return
       setError(asMessage(err, t('磁盘级上传失败')))
     }
   }
@@ -298,6 +322,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       const start = await sftpDiskDownloadPick(sessionId, entry.path, true)
+      if (!guard()) return
       if (!start) return
       beginTransfer(sessionId, {
         id: start.transferId,
@@ -319,6 +344,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       }
       recordAudit('sftp.disk-download', entry.path, 'success', start.resumed ? t('磁盘级下载（断点续传）') : t('磁盘级下载开始'))
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.disk-download', entry.path, 'failure', t('磁盘级下载启动失败'))
       setError(asMessage(err, t('磁盘级下载启动失败')))
     }
@@ -335,10 +361,12 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       setError(null)
       try {
         const blob = await downloadChunkedFile(sessionId, entry)
+        if (!guard()) return
         triggerDownload(blob, entry.name)
         recordAudit('sftp.download', entry.path, 'success', t('分块下载文件'))
         setNotice(`${t('已下载 ')}${entry.name}`)
       } catch (err) {
+        if (!guard()) return
         if (!isCancellation(err)) {
           recordAudit('sftp.download', entry.path, 'failure', t('分块下载失败'))
           setError(asMessage(err, t('下载失败')))
@@ -351,12 +379,14 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setNotice(null)
     try {
       const data = await sftpReadFile(sessionId, entry.path)
+      if (!guard()) return
       const buffer = new ArrayBuffer(data.byteLength)
       new Uint8Array(buffer).set(data)
       triggerDownload(new Blob([buffer]), entry.name)
       recordAudit('sftp.download', entry.path, 'success', t('下载文件'))
       setNotice(`${t('已下载 ')}${entry.name}`)
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.download', entry.path, 'failure', t('下载文件失败'))
       setError(asMessage(err, t('下载失败')))
     } finally {
@@ -377,11 +407,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       // 读取与解码分开捕获（审计 R-6）：网络/权限失败不应误报成「非 UTF-8 文件」。
       data = await sftpReadFile(sessionId, entry.path)
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.read', entry.path, 'failure', t('读取远程文件'))
       setError(asMessage(err, t('读取远程文件失败')))
       setBusy(false)
       return
     }
+    if (!guard()) return
     try {
       setEditor({ entry, text: new TextDecoder('utf-8', { fatal: true }).decode(data) })
     } catch {
@@ -397,11 +429,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       await sftpWriteFile(sessionId, editor.entry.path, new TextEncoder().encode(editor.text))
+      if (!guard()) return
       recordAudit('sftp.edit', editor.entry.path, 'success', t('编辑并回传远程文件'))
       setNotice(`${t('已保存 ')}${editor.entry.name}`)
       setEditor(null)
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.edit', editor.entry.path, 'failure', t('编辑远程文件失败'))
       setError(asMessage(err, t('保存远程文件失败')))
     } finally {
@@ -431,11 +465,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       await sftpRename(sessionId, entry.path, verdict.target)
+      if (!guard()) return
       recordAudit('sftp.move', `${entry.path} -> ${verdict.target}`, 'success', t('移动远程文件'))
       setNotice(`${t('已移动到 ')}${state.value.trim()}`)
       setNameDialog(null)
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.move', entry.path, 'failure', t('移动远程文件失败'))
       setError(asMessage(err, t('移动失败')))
     } finally {
@@ -458,17 +494,20 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       if (state.mode === 'mkdir') {
         const target = joinRemotePath(path, name)
         await sftpMkdir(sessionId, target)
+        if (!guard()) return
         recordAudit('sftp.mkdir', target, 'success', t('创建远程目录'))
         setNotice(`${t('已创建目录 ')}${name}`)
       } else if (state.target) {
         const target = joinRemotePath(parentPath(state.target.path), name)
         await sftpRename(sessionId, state.target.path, target)
+        if (!guard()) return
         recordAudit('sftp.rename', `${state.target.path} -> ${target}`, 'success', t('重命名远程文件'))
         setNotice(`${t('已重命名为 ')}${name}`)
       }
       setNameDialog(null)
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       recordAudit(
         state.mode === 'mkdir' ? 'sftp.mkdir' : 'sftp.rename',
         state.mode === 'rename' && state.target ? state.target.path : path,
@@ -493,11 +532,13 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     setError(null)
     try {
       await sftpChmod(sessionId, dialog.target.path, mode)
+      if (!guard()) return
       recordAudit('sftp.chmod', `${dialog.target.path} -> ${formatMode(mode)}`, 'success', t('修改远程文件权限'))
       setNotice(`${t('已将 ')}${dialog.target.name}${t(' 权限修改为 ')}${dialog.value.trim()}`)
       setChmodDialog(null)
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       recordAudit('sftp.chmod', dialog.target.path, 'failure', t('修改远程文件权限失败'))
       setError(asMessage(err, t('修改权限失败')))
     } finally {
@@ -516,6 +557,7 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
       confirmLabel: isDir ? t('全部删除') : t('删除'),
       danger: true
     })
+    if (!guard()) return
     if (!accepted) return
     setBusy(true)
     setError(null)
@@ -523,15 +565,18 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
     try {
       if (isDir) {
         await sftpRemoveDir(sessionId, entry.path)
+        if (!guard()) return
         recordAudit('sftp.rmdir', entry.path, 'success', t('递归删除远程目录'))
         setNotice(`${t('已删除目录 ')}${entry.name}`)
       } else {
         await sftpRemoveFile(sessionId, entry.path)
+        if (!guard()) return
         recordAudit('sftp.delete', entry.path, 'success', t('删除文件'))
         setNotice(`${t('已删除 ')}${entry.name}`)
       }
       await loadDirectory(path)
     } catch (err) {
+      if (!guard()) return
       if (isDir) {
         recordAudit('sftp.rmdir', entry.path, 'failure', t('递归删除远程目录失败'))
         setError(asMessage(err, t('递归删除目录失败')))

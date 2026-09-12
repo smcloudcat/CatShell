@@ -716,6 +716,7 @@ const en: Record<string, string> = {
   '创建保险箱': 'Create vault',
   '闲置自动锁定': 'Idle auto-lock',
   '5 分钟': '5 minutes',
+  '不自动锁定': 'Disabled',
   '15 分钟': '15 minutes',
   '30 分钟': '30 minutes',
   ' 分钟': ' minutes',
@@ -973,7 +974,22 @@ const en: Record<string, string> = {
   '删除录制': 'Delete recording',
   '回放倍速': 'Playback speed',
   '回放进度': 'Playback position',
-  '文件有 {n} 行无法解析，已跳过。': '{n} line(s) in the file could not be parsed and were skipped.'
+  '文件有 {n} 行无法解析，已跳过。': '{n} line(s) in the file could not be parsed and were skipped.',
+  '已跳过 {n} 个文件夹或空文件（拖放不支持目录上传）。':
+    'Skipped {n} folder(s) or empty file(s) — drag-and-drop cannot upload directories.',
+  // 审计动作映射（AuditPanel ACTION_LABELS，X-9）
+  '恢复会话标签': 'Restore session tabs',
+  '开始录制会话': 'Start session recording',
+  '停止录制会话': 'Stop session recording',
+  '磁盘级下载': 'Disk-level download',
+  '磁盘级上传': 'Disk-level upload',
+  '队列续传': 'Resume from queue',
+  '设置传输限速': 'Set transfer speed limit',
+  'AI 辅助': 'AI assist',
+  '修改远程权限': 'Change remote permissions',
+  '在终端中打开目录': 'Open directory in terminal',
+  '切换 known_hosts 存储': 'Switch known_hosts storage',
+  '写回 ssh config': 'Write back ssh config'
 }
 
 const dictionaries: Record<Language, Record<string, string>> = {

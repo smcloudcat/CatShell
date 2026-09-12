@@ -43,8 +43,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  /* 左侧截断：长路径最重要的是尾部当前目录名，悬停 title 可看全路径 */
+  /* 左侧截断：长路径最重要的是尾部当前目录名，悬停 title 可看全路径。
+     `direction: rtl` 会把段落方向置为 RTL，段首/段尾的中性字符（`(`、`[`、`<`）
+     可能显示乱序或镜像；`unicode-bidi: plaintext` 让每个路径仍按自身的方向推断
+     渲染，保留左截断的同时消除 bidi 副作用（审计 R-12）。 */
   direction: rtl;
+  unicode-bidi: plaintext;
   text-align: left;
 }
 
@@ -162,12 +166,21 @@
 }
 
 .sftp-entry {
-  min-height: 42px;
+  /* 行高唯一来源是 SftpEntryList.tsx 的 ROW_HEIGHT（经容器上的 --sftp-row-height 注入）；
+     这里的 42px 只是变量缺失时的防御性兜底，两边改动必须同步（审计 R-14）。 */
+  min-height: var(--sftp-row-height, 42px);
   padding: 5px 10px;
   border-radius: 8px;
   color: var(--text-muted);
   font-size: 12px;
   transition: background 0.13s ease;
+}
+
+/* 窗口化渲染：行高必须精确等于 ROW_HEIGHT，滚动偏移才不会累积。
+   由容器类切换，行组件不再写内联样式（行高双源合一，审计 R-14）。 */
+.sftp-rows-fixed .sftp-entry {
+  height: var(--sftp-row-height, 42px);
+  box-sizing: border-box;
 }
 
 .sftp-entry:hover {

@@ -10,6 +10,7 @@ import {
   normalizeHost
 } from '../utils/hostImport'
 import { logger } from '../utils/logger'
+import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
 import { recordAudit } from './audit'
 import { useVault, type CredentialRemovalResult } from './vault'
 
@@ -36,7 +37,7 @@ async function persist(hosts: HostProfile[]) {
     await store.save()
   } catch (err) {
     logger.warn('保存主机配置失败，使用本地回退存储', err)
-    localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts))
+    writeLocalFallback(HOSTS_KEY, hosts, '主机配置')
   }
 }
 
@@ -56,20 +57,13 @@ export const useHosts = create<HostsState>((set, get) => ({
     if (initializationPromise) return initializationPromise
 
     initializationPromise = (async () => {
-      let saved: unknown = null
+      let saved: unknown
       try {
         const store = await load(STORE_FILE)
         saved = await store.get<unknown>(HOSTS_KEY)
       } catch (err) {
         logger.warn('读取主机配置失败，使用本地回退存储', err)
-        const raw = localStorage.getItem(HOSTS_KEY)
-        if (raw) {
-          try {
-            saved = JSON.parse(raw)
-          } catch {
-            saved = null
-          }
-        }
+        saved = readLocalFallback<unknown>(HOSTS_KEY)
       }
 
       const hosts = Array.isArray(saved)

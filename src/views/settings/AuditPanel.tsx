@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { useAudit } from '../../store/audit'
-import { AuditEntry } from '../../types/audit'
+import { AuditAction, AuditEntry } from '../../types/audit'
 import { confirmDialog } from '../../store/ui'
 import { useT } from '../../i18n'
 
 const AUDIT_PAGE_SIZE = 100
 
-const ACTION_LABELS: Record<string, string> = {
+/** 动作键 → 展示文案（中文原文即 i18n 键，en 词条在 `src/i18n/index.ts`）。
+ *  类型约束为 `Record<AuditAction, string>`：新增动作漏配标签会直接编译失败，
+ *  不再依赖 fallback 渲染英文原始键（审计 X-9）。 */
+const ACTION_LABELS: Record<AuditAction, string> = {
   'session.connect': '连接',
   'session.status': '会话状态',
   'session.disconnect': '断开连接',
   'session.rename': '会话重命名',
+  'session.restore': '恢复会话标签',
+  'session.record-start': '开始录制会话',
+  'session.record-stop': '停止录制会话',
   'session.log-export': '导出会话日志',
   'host.create': '创建主机',
   'host.update': '更新主机',
@@ -19,16 +25,28 @@ const ACTION_LABELS: Record<string, string> = {
   'host.import': '导入主机',
   'host.export': '导出主机',
   'sftp.list': '读取目录',
+  'sftp.read': '读取远程文件',
   'sftp.upload': '上传文件',
   'sftp.batch-upload': '批量上传',
   'sftp.download': '下载文件',
+  'sftp.disk-download': '磁盘级下载',
+  'sftp.disk-upload': '磁盘级上传',
+  'sftp.queue-resume': '队列续传',
+  'sftp.transfer-cancel': '取消传输',
+  'sftp.transfer-limit': '设置传输限速',
+  'sftp.sync': '目录同步',
   'sftp.delete': '删除文件',
   'sftp.edit': '编辑文件',
   'sftp.mkdir': '创建目录',
   'sftp.rename': '重命名',
+  'sftp.move': '移动远程文件',
+  'sftp.chmod': '修改远程权限',
   'sftp.rmdir': '递归删除目录',
+  'sftp.open-in-terminal': '在终端中打开目录',
   'snippet.send': '发送片段',
   'command.bulk-send': '批量下发',
+  'command.batch-exec': '批量执行命令',
+  'ai.complete': 'AI 辅助',
   'config.export': '导出配置',
   'config.import': '还原配置',
   'forward.start': '启动转发',
@@ -38,7 +56,12 @@ const ACTION_LABELS: Record<string, string> = {
   'vault.upgrade': '升级保险箱加密',
   'vault.remove-credential': '删除保险箱凭据',
   'vault.change-password': '修改保险箱主密码',
-  'knownhosts.delete': '删除 known_hosts 条目'
+  'knownhosts.delete': '删除 known_hosts 条目',
+  'knownhosts.mode': '切换 known_hosts 存储',
+  'keys.generate': '生成密钥对',
+  'keys.copy-public': '复制公钥',
+  'keys.delete': '删除密钥对',
+  'ssh.config-write': '写回 ssh config'
 }
 
 function exportEntries(entries: AuditEntry[]) {
@@ -79,7 +102,7 @@ export function AuditPanel() {
   const visible = filtered.slice(0, visibleCount)
 
   return (
-    <div className="settings-section audit-panel">
+    <div className="settings-section">
       <div className="settings-section-title"><Icon name="monitor" size={15} /> {t('操作审计')}</div>
       <div className="snippet-heading">
         <span className="section-tip">{t('日志仅保存在本机，最多保留 5000 条，不记录密码、私钥口令或完整命令内容。')}</span>

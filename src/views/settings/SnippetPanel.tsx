@@ -47,7 +47,7 @@ export function SnippetPanel() {
   }
 
   return (
-    <div className="settings-section snippet-panel">
+    <div className="settings-section">
       <div className="settings-section-title"><Icon name="terminal" size={15} /> {t('命令片段')}</div>
       <div className="snippet-heading">
         <span className="section-tip">{t('保存常用只读检查、发布和维护命令，发送前请确认目标会话。')}</span>

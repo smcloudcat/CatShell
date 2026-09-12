@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { CSSProperties, memo } from 'react'
 import { Icon } from '../../components/Icon'
 import { useVirtualWindow } from '../../components/useVirtualWindow'
 import { SftpEntry } from '../../types/session'
@@ -18,35 +18,32 @@ export interface SftpEntryActions {
 }
 
 /**
- * 行高（px），必须与 `.sftp-entry` 的实际占位一致。
+ * 行高（px），行高的唯一来源（审计 R-14）。
  *
  * 全局 `box-sizing: border-box`（glass.css）下 `min-height: 42px` 已经把 padding
  * 与 border 都算进去了，所以实际行高就是 42，而不是「42 + 上下各 5px」（审计 P-1）。
  *
- * 窗口化要求行高固定：虚拟化时给行加显式高度，渲染结果与 `min-height` 一致
- * （内容同样被约束在 42px 内），但总高度可精确预测，不会累积滚动偏移。
+ * CSS 侧通过容器上的 `--sftp-row-height` 变量消费该值，`.sftp-entry` 里的 42px
+ * 只是变量缺失时的防御性兜底；窗口化时的精确高度由 `.sftp-rows-fixed` 类驱动，
+ * 行组件不再各自写内联样式。
  */
 const ROW_HEIGHT = 42
 /** 低于该行数时保持全量渲染：短列表不值得引入占位元素与滚动监听。 */
 const VIRTUALIZE_MIN_ROWS = 120
 
+/** 行组件不再接收 fixedHeight / 内联样式（R-14），props 只保留数据与操作。 */
 interface RowProps {
   entry: SftpEntry
   actions: SftpEntryActions
-  /** 窗口化时锁定行高；全量渲染时保持原有的 min-height 行为。 */
-  fixedHeight: boolean
 }
 
 /** 单行目录项。`memo` 生效的前提是 `actions` 引用稳定（由父组件保证）。 */
-const SftpEntryRow = memo(function SftpEntryRow({ entry, actions, fixedHeight }: RowProps) {
+const SftpEntryRow = memo(function SftpEntryRow({ entry, actions }: RowProps) {
   const t = useT()
   const kindLabel = entry.kind === 'directory' ? t('目录') : entry.kind === 'symlink' ? t('链接') : t('文件')
 
   return (
-    <div
-      className="sftp-entry"
-      style={fixedHeight ? { height: ROW_HEIGHT, boxSizing: 'border-box' } : undefined}
-    >
+    <div className="sftp-entry">
       <button
         className="sftp-name"
         onClick={() => entry.kind === 'directory' ? actions.open(entry) : actions.download(entry)}
@@ -128,7 +125,11 @@ export function SftpEntryList({ entries, totalCount, busy, actions }: Props) {
         <span>{t('大小')}</span>
         <span>{t('操作')}</span>
       </div>
-      <div className="sftp-entries" ref={containerRef}>
+      <div
+        className={`sftp-entries ${window.virtualized ? 'sftp-rows-fixed' : ''}`}
+        ref={containerRef}
+        style={{ '--sftp-row-height': `${ROW_HEIGHT}px` } as CSSProperties}
+      >
         {window.virtualized && window.paddingTop > 0 && (
           <div style={{ height: window.paddingTop }} aria-hidden="true" />
         )}
@@ -137,7 +138,6 @@ export function SftpEntryList({ entries, totalCount, busy, actions }: Props) {
             key={entry.path}
             entry={entry}
             actions={actions}
-            fixedHeight={window.virtualized}
           />
         ))}
         {window.virtualized && window.paddingBottom > 0 && (

@@ -659,6 +659,13 @@
   font-weight: 600;
 }
 
+/* 「关于」页的正文容器：与右侧操作按钮同排，必须吃掉剩余宽度并允许收缩，
+   否则长邮箱/长链接会把按钮挤出容器（审计 R-6）。 */
+.panel-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .panel-desc {
   margin-top: 4px;
   font-size: 12px;

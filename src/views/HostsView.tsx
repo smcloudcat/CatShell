@@ -169,7 +169,6 @@ export function HostsView({ onOpenSessions }: Props) {
   }
 
   const confirmImport = async (preview: ImportPreview) => {
-    setPendingImport(null)
     try {
       await importProfiles(preview.items.map((item) => item.profile))
       const overwritten = preview.items.filter((item) => item.duplicateOf).length
@@ -177,6 +176,8 @@ export function HostsView({ onOpenSessions }: Props) {
       if (overwritten) parts.push(t('更新已有 ') + overwritten + t(' 条'))
       if (preview.invalidCount) parts.push(t('跳过无效 ') + preview.invalidCount + t(' 条'))
       showToast(parts.join(t('，')), 'success')
+      // 成功才关弹窗；失败保持打开并复位 busy，用户可直接重试或取消（审计 X-8）。
+      setPendingImport(null)
     } catch (err) {
       recordAudit('host.import', 'hosts-file', 'failure', t('导入失败'))
       showToast(errorText(err, t, '导入失败'), 'error')
@@ -335,7 +336,7 @@ export function HostsView({ onOpenSessions }: Props) {
         <HostImportPreviewModal
           preview={pendingImport}
           onClose={() => setPendingImport(null)}
-          onConfirm={() => void confirmImport(pendingImport)}
+          onConfirm={() => confirmImport(pendingImport)}
         />
       )}
     </div>

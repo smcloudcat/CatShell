@@ -17,7 +17,7 @@
 
 > **复核说明（2026-09-12 同日二次核查）**：初版 42 项经逐条对码核验**全部成立，无误报**（核验过程中剔除过 1 条前提不成立的候选发现，未计入）；随后两路独立遗漏扫描新增 14 项（第六章 X-1 ~ X-14），其中 X-1 为新 P1。当前总计 56 项。
 
-> **修复进度（2026-09-12）**：批次 1（P0/P1，提交 `1523162`，含随批落地的 B-12/B-13）、批次 2（正确性与体验，提交 `128a129`）与批次 3（性能与一致性）已完成，累计 **36/56** 项已修复并落库；剩余 20 项（批次 4，卫生类）的清单见第八章。
+> **修复进度（2026-09-12）**：批次 1（P0/P1，提交 `1523162`，含随批落地的 B-12/B-13）、批次 2（正确性与体验，提交 `128a129`）、批次 3（性能与一致性，提交 `f3fce0a`）与批次 4（卫生类）已完成，**全部 56 项修复完毕并落库**；各批次清单与修法见第八章。
 
 **与首轮相比**：首轮 P0 为 0，本轮**首次出现 P0**——`~/.ssh/config` 写回路径对 `Host` 模式与 `HostName` 未做控制字符过滤，而主机档案的导入路径被明确定义为不可信来源，二者组合构成完整的注入链。数据面仍然是短板集中区：SFTP 的三条写入路径（流式上传、磁盘下载收尾、目录同步）都存在「以非原子步骤处理用户已有文件」的模式，本轮把它们全部收敛为 P1/P2。此外，**2026-09-12 的 SFTP 超时改造（`f172a2b`）引入了 2 个新问题**（超时层叠误报、覆盖不全导致的半吊子保护），详见 B-5/B-6——超时值本身的选取合理，问题出在嵌套层次与覆盖范围。
 
@@ -415,7 +415,7 @@
 
 ## 八、建议修复顺序
 
-> 状态标记：✅ 已修复并落库 · ⬜ 待修复。批次 1（提交 `1523162`）、批次 2（提交 `128a129`）、批次 3 已完成。
+> 状态标记：✅ 已修复并落库 · ⬜ 待修复。批次 1（提交 `1523162`）、批次 2（提交 `128a129`）、批次 3（提交 `f3fce0a`）、批次 4 已完成。
 
 1. **立即（安全 / 数据丢失）** — 全部完成 ✅
    - ✅ S-1 `~/.ssh/config` 写回字符白名单（唯一的 P0，且修复成本极低）
@@ -443,9 +443,26 @@
    - ✅ B-10 幽灵标签：新增 `pendingOpens` 在途计数，`updateStatus` 仅在确有 `open()`/`reconnect()` 在途时才兜底登记未知会话
    - ✅ B-11 回放主题：抽出共享 `useEffectiveMode()`（主终端与回放共用），回放终端按解析后的模式取配色，并在模式切换时同步更新
    - ✅ B-14 续传指纹：`ResumeStamp` 增加首尾各 64 KiB 的 FNV-1a 采样哈希（`sample`，`#[serde(default)]` 兼容旧指纹文件），等长同 mtime 的内容替换不再被误判为可续传
-4. **择机（卫生）** — ⬜ 待修复
-   - ⬜ R 组其余 12 项（悬空类名、拖放过滤、错误码判定、bidi、统一卸载守卫等；R-7 / R-9 已在批次 1 完成）
-   - ⬜ X-8 ~ X-14（导入 busy、审计映射、误译、录制原子写、边界校验、known_hosts 阻塞 IO、托盘快照）
+4. **择机（卫生）** — 全部完成 ✅
+   - ✅ R-1 `known_hosts` 删除改原子替换：新增 `atomic_replace`（写 `.catshell-tmp` + rename），`write_ssh_config_to` 同步复用
+   - ✅ R-2 `Host` 块识别按任意空白切分关键字（兼容 `Host\tweb`），`upsert_host_blocks` 把新块插入到首个 `Host *` / `Match` 之前（无通配块则维持文末追加）
+   - ✅ R-3 交互式认证成功分支补 `pending.lock().await.remove(&session_id)`，确认通道不再泄漏
+   - ✅ R-4 `disconnect` 先 `take()` 半写锁、在锁外 `close()`，不再跨 await 持锁
+   - ✅ R-5 `create()` 统一走 `ConnectRequest::validate()`：非空 / 长度上限 / 端口范围 / 整条跳板链逐跳校验（`ProxyConfig::validate_hop`），常量集中在 `types.rs`
+   - ✅ R-6 悬空类名：补 `.panel-copy` / `.card-desc.card-footer` / `.host-group-name` / `.modal-actions` / `.field.proxy-hop-actions` CSS，并删除 ShortcutsDialog / AuditPanel / SnippetPanel / VaultPanel 的无效类名包裹
+   - ✅ R-8 拖放上传过滤「无 MIME 类型 + 0 字节」的文件夹与空文件并 toast 提示（新增词条 `已跳过 {n} 个文件夹或空文件…`）
+   - ✅ R-10 覆盖确认改用稳定哨兵码：Rust 侧 `KEYPAIR_EXISTS` 前缀 + 前端 `startsWith` 判定（`errorText` 统一剥离前缀），不再依赖中文文案子串（同时消除「已存在的目录」误弹）
+   - ✅ R-11 补 `.host-icon-btn.danger` 基础态 `color: var(--err)`
+   - ✅ R-12 `.sftp-pathbar code` 加 `unicode-bidi: plaintext`，消除 RTL 左截断的 bidi 副作用
+   - ✅ R-13 SFTP 面板统一卸载守卫：抽 `guard()`（`!disposedRef.current`），上传 / 下载 / 删除 / 编辑 / 重命名 / 权限 / 磁盘直传的全部 await 收尾路径接入
+   - ✅ R-14 静默失败收口：前端新增 `src/utils/localFallback.ts`（`writeLocalFallback` / `readLocalFallback`），hosts / snippets / vault 的 localStorage 兜底不再裸抛；Rust 侧续传指纹读写带日志（NotFound 仍静默），传输失败/取消时清理 `-{id}` 备用半成品；`SftpEntryList` 行高双源合一（`--sftp-row-height` 变量 + `.sftp-rows-fixed` 类，行组件不再写内联样式）
+   - ✅ X-8 导入预览弹窗 `onConfirm` 返回 Promise、busy 保持到 resolve；`HostsView` 改为成功才关弹窗，失败留在弹窗内可重试
+   - ✅ X-9 AuditPanel 动作映射类型收紧为 `Record<AuditAction, string>`（新增动作漏配标签直接编译失败），全量补齐 20 个缺失动作与对应 en 词条
+   - ✅ X-10 「闲置自动锁定：关闭」改用独立键 `不自动锁定`（en: Disabled），不再命中全局 `'关闭': 'Close'`
+   - ✅ X-11 `recording_save` 先写 `.catshell-tmp` 再原子 rename
+   - ✅ X-12 `ConnectRequest::validate()` / `ProxyConfig::validate_hop()` 边界校验（port ≥ 1、host/username/name/key path 长度上限、跳板链深度上限）
+   - ✅ X-13 `known_hosts_list` / `known_hosts_remove` / `known_hosts_set_mode` / `recordings_dir_of` 挪入 `spawn_blocking`，与既有口径对齐
+   - ✅ X-14 `tray_set_quick_connects` 单锁内「写入 + 取快照」消除双锁窗口，新增 `TRAY_QUICK_CONNECT_LIMIT` 上限常量，超长截断并 `tracing::warn!`
 
-> 说明：批次 1 / 批次 2 / 批次 3 均按单批独立验证并提交（`cargo fmt --check` / `clippy` / `test` + `tsc` / `eslint` / `vitest` / `i18n:check` / `mojibake:check` / `bindings:check` 全绿）。**累计 36 项已修复，剩余 20 项待处理**（批次 4 共 20 项）。批次 3 中仅 P-8 留有已知边界（托盘菜单退出的 Rust 侧 `app.exit` 无法在 JS 侧拦截）。
+> 说明：批次 1 / 批次 2 / 批次 3 / 批次 4 均按单批独立验证并提交（`cargo fmt --check` / `clippy` / `test` + `tsc` / `eslint` / `vitest` / `i18n:check` / `mojibake:check` / `bindings:check` 全绿）。**全部 56 项已修复**：批次 1+2 共 27 项、批次 3 共 10 项、批次 4 共 19 项（R 组 12 项 + X-8 ~ X-14 共 7 项）。遗留已知边界仅两处：批次 3 的 P-8（托盘菜单退出的 Rust 侧 `app.exit` 无法在 JS 侧拦截）与批次 4 的 R-14（`writeLocalFallback` 失败仅 warn——内存态已是最新，属尽力而为的兜底）。
 

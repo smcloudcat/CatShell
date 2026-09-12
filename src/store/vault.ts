@@ -3,6 +3,7 @@ import { load } from '@tauri-apps/plugin-store'
 import { recordAudit } from './audit'
 import { useSettings } from './settings'
 import { AppError, ERROR_CODES } from '../types/errors'
+import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
 import {
   PBKDF2_ITERATIONS,
   VaultCredential,
@@ -83,13 +84,7 @@ async function readRecord(): Promise<VaultRecord | null> {
     const store = await load(STORE_FILE)
     return (await store.get<VaultRecord>(VAULT_KEY)) ?? null
   } catch {
-    const raw = localStorage.getItem(STORE_FILE)
-    if (!raw) return null
-    try {
-      return JSON.parse(raw) as VaultRecord
-    } catch {
-      return null
-    }
+    return readLocalFallback<VaultRecord>(STORE_FILE)
   }
 }
 
@@ -99,7 +94,7 @@ async function writeRecord(record: VaultRecord) {
     await store.set(VAULT_KEY, record)
     await store.save()
   } catch {
-    localStorage.setItem(STORE_FILE, JSON.stringify(record))
+    writeLocalFallback(STORE_FILE, record, '凭据保险箱')
   }
 }
 

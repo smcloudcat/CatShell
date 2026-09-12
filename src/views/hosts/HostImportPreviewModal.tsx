@@ -7,7 +7,8 @@ import { useT } from '../../i18n'
 interface Props {
   preview: ImportPreview
   onClose: () => void
-  onConfirm: () => void
+  /** 可以返回 Promise：busy 会保持到 resolve，导入期间按钮禁用真正生效（审计 X-8）。 */
+  onConfirm: () => void | Promise<void>
 }
 
 /**
@@ -20,10 +21,11 @@ export function HostImportPreviewModal({ preview, onClose, onConfirm }: Props) {
   const fresh = preview.items.filter((item) => !item.duplicateOf).length
   const overwritten = preview.items.length - fresh
 
-  const confirm = () => {
+  // 此前 onConfirm 同步返回、busy 同帧复位，快速双击可重复触发导入（审计 X-8）。
+  const confirm = async () => {
     setBusy(true)
     try {
-      onConfirm()
+      await onConfirm()
     } finally {
       setBusy(false)
     }

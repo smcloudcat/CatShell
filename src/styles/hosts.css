@@ -181,6 +181,13 @@
   transform: translateY(-1px);
 }
 
+.host-icon-btn.danger {
+  /* 危险入口（删除凭据/终止进程/删除文件）在静止态就要能与普通按钮区分，
+     只在 hover 变色时用户扫一眼列表根本认不出来（审计 R-11）。 */
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 26%, transparent);
+}
+
 .host-icon-btn.danger:hover {
   color: var(--err);
   border-color: color-mix(in srgb, var(--err) 42%, transparent);
@@ -376,5 +383,15 @@
   font-size: 11.5px;
   font-weight: 400;
   color: var(--text-muted);
+}
+
+/* 分组名可能很长（用户自定义分组）：允许收缩并省略号收尾，避免把右侧计数挤出按钮
+   （审计 R-6）。 */
+.host-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 

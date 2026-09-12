@@ -193,6 +193,15 @@
   flex: 1;
 }
 
+/* 卡片底部注脚（与 .card-desc 同时出现）：只是收尾说明，不参与弹性伸缩，
+   并略微弱化以区别于正文描述（审计 R-6）。 */
+.home-card .card-desc.card-footer {
+  flex: none;
+  margin-top: auto;
+  font-size: 11.5px;
+  opacity: 0.85;
+}
+
 .home-card .card-action {
   align-self: flex-start;
 }

@@ -17,7 +17,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
       </header>
       <div className="modal-body shortcuts-body">
         {SHORTCUT_GROUPS.map((group) => (
-          <section className="shortcut-group" key={group.titleKey}>
+          <section key={group.titleKey}>
             <h3 className="shortcut-group-title">{t(group.titleKey)}</h3>
             <ul className="shortcut-list">
               {group.items.map((item) => (

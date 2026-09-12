@@ -38,6 +38,25 @@ export function interpolateError(template: string, params?: Record<string, strin
 }
 
 /**
+ * 密钥生成时「目标已存在」的稳定哨兵码。
+ *
+ * Rust 侧以 `CODE: 文案` 的形式回传（`ssh_manager::keys::KEYPAIR_EXISTS_CODE`），
+ * 前端据此决定是否弹出「覆盖」确认——用文案匹配会误伤
+ * 「目标路径是一个已存在的目录」这类覆盖也解决不了的错误（R-10）。
+ */
+export const KEYPAIR_EXISTS_CODE = 'KEYPAIR_EXISTS'
+
+const BACKEND_ERROR_CODES: readonly string[] = [KEYPAIR_EXISTS_CODE]
+
+/** 剥离后端哨兵码前缀，返回可展示的文案；无前缀时原样返回。 */
+export function stripErrorCode(message: string): string {
+  for (const code of BACKEND_ERROR_CODES) {
+    if (message.startsWith(code)) return message.slice(code.length).replace(/^[:\s]+/, '')
+  }
+  return message
+}
+
+/**
  * 把 `AppError` 翻译为当前语言文案；非 `AppError` 或错误码未登记时返回 `null`，
  * 交由调用方走兜底逻辑。
  */
@@ -57,7 +76,7 @@ export function translateAppError(error: unknown, t: Translator): string | null 
 export function errorText(error: unknown, t: Translator, fallbackKey: string): string {
   const translated = translateAppError(error, t)
   if (translated) return translated
-  if (typeof error === 'string' && error) return error
-  if (error instanceof Error && error.message) return error.message
+  if (typeof error === 'string' && error) return stripErrorCode(error)
+  if (error instanceof Error && error.message) return stripErrorCode(error.message)
   return t(fallbackKey)
 }

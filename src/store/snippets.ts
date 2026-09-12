@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { CommandSnippet, createCommandSnippet } from '../types/snippet'
 import { AppError, ERROR_CODES } from '../types/errors'
+import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
 
 const STORE_FILE = 'command-snippets.json'
 const SNIPPETS_KEY = 'snippets'
@@ -23,7 +24,7 @@ async function persist(snippets: CommandSnippet[]) {
     await store.set(SNIPPETS_KEY, snippets)
     await store.save()
   } catch {
-    localStorage.setItem(SNIPPETS_KEY, JSON.stringify(snippets))
+    writeLocalFallback(SNIPPETS_KEY, snippets, '命令片段')
   }
 }
 
@@ -44,19 +45,12 @@ export const useSnippets = create<SnippetsState>((set, get) => ({
     if (get().ready) return
     if (initPromise) return initPromise
     initPromise = (async () => {
-      let stored: unknown = null
+      let stored: unknown
       try {
         const store = await load(STORE_FILE)
         stored = await store.get<unknown>(SNIPPETS_KEY)
       } catch {
-        const raw = localStorage.getItem(SNIPPETS_KEY)
-        if (raw) {
-          try {
-            stored = JSON.parse(raw)
-          } catch {
-            stored = null
-          }
-        }
+        stored = readLocalFallback<unknown>(SNIPPETS_KEY)
       }
       const snippets = Array.isArray(stored)
         ? stored

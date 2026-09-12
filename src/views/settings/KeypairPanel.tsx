@@ -14,7 +14,7 @@ import { useHosts } from '../../store/hosts'
 import { recordAudit } from '../../store/audit'
 import { confirmDialog, showToast } from '../../store/ui'
 import { useT } from '../../i18n'
-import { errorText } from '../../i18n/errors'
+import { errorText, KEYPAIR_EXISTS_CODE } from '../../i18n/errors'
 
 /** 生成成功后保留的提示（含指纹），切换页签或重新生成时消失。 */
 const GENERATED_TIP_TTL_MS = 12000
@@ -109,7 +109,8 @@ export function KeypairPanel() {
       await reload()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      if (!overwrite && message.includes('已存在')) {
+      // 只认后端哨兵码：文案匹配会误伤「目标路径是一个已存在的目录」等覆盖无法解决的错误。
+      if (!overwrite && message.startsWith(KEYPAIR_EXISTS_CODE)) {
         // 目标已存在：二次确认后带 overwrite 重试。
         const accepted = await confirmDialog({
           title: t('覆盖已有密钥'),
@@ -123,7 +124,7 @@ export function KeypairPanel() {
         }
         return
       }
-      recordAudit('keys.generate', savePath, 'failure', message)
+      recordAudit('keys.generate', savePath, 'failure', errorText(err, t, '生成密钥失败'))
       setError(errorText(err, t, '生成密钥失败'))
     } finally {
       setGenerating(false)
