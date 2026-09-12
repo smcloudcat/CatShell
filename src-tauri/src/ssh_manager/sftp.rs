@@ -19,6 +19,97 @@ const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
 pub(super) const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 pub(super) const DISK_PART_SUFFIX: &str = ".catshell-part";
 
+/// 提交辅助的进程内唯一后缀（进程 id + 递增序号），避免并发同名传输撞备份名。
+fn commit_seq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    ((std::process::id() as u64) << 32) | SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 把**已写完整**的远端半成品提交为正式目标（审计 H-2）。
+///
+/// 1. 优先直接覆盖 rename；
+/// 2. 服务端不允许覆盖时，把旧目标改名到唯一备份名——**绝不直接删除旧目标**；
+/// 3. 半成品 rename 为目标失败时，把备份改回原名回滚，旧文件永不丢失；
+/// 4. 成功后删除备份。
+///
+/// 所有失败路径都保留半成品供重试；错误信息只描述事实，不做"删旧重试"。
+pub(super) async fn commit_remote_part(
+    sftp: &russh_sftp::client::SftpSession,
+    part_path: &str,
+    target: &str,
+) -> Result<(), String> {
+    if sftp.rename(part_path, target).await.is_ok() {
+        return Ok(());
+    }
+    let backup = format!("{target}.catshell-bak-{}", commit_seq());
+    if let Err(error) = sftp.rename(target, &backup).await {
+        // 旧目标可能根本不存在（首次上传遇到 rename 被拒）：目标确实不存在时
+        // 再试一次直接提交，保持旧行为兼容。
+        if sftp.metadata(target).await.is_err() {
+            return sftp.rename(part_path, target).await.map_err(|retry| {
+                format!("保存远程文件失败 {target}: {retry}（半成品保留在 {part_path}）")
+            });
+        }
+        return Err(format!(
+            "保存远程文件失败：无法备份旧文件 {target}: {error}（半成品保留在 {part_path}）"
+        ));
+    }
+    if let Err(error) = sftp.rename(part_path, target).await {
+        // 回滚：旧文件原样归还；无论回滚是否成功，半成品都不删除。
+        let rolled_back = sftp.rename(&backup, target).await.is_ok();
+        return Err(format!(
+            "保存远程文件失败 {target}: {error}（{}，半成品保留在 {part_path}）",
+            if rolled_back {
+                "旧文件已回滚".to_string()
+            } else {
+                format!("旧文件保留在备份 {backup}")
+            }
+        ));
+    }
+    let _ = sftp.remove_file(&backup).await;
+    Ok(())
+}
+
+/// [`commit_remote_part`] 的本地文件版本（目录同步下载侧，审计 H-2）。
+pub(super) async fn commit_local_part(part_path: &Path, target: &Path) -> Result<(), String> {
+    if tokio::fs::rename(part_path, target).await.is_ok() {
+        return Ok(());
+    }
+    let backup = target.with_extension(format!("catshell-bak-{}", commit_seq()));
+    if let Err(error) = tokio::fs::rename(target, &backup).await {
+        if tokio::fs::metadata(target).await.is_err() {
+            return tokio::fs::rename(part_path, target).await.map_err(|retry| {
+                format!(
+                    "保存本地文件失败 {}: {retry}（半成品保留在 {}）",
+                    target.display(),
+                    part_path.display()
+                )
+            });
+        }
+        return Err(format!(
+            "保存本地文件失败：无法备份旧文件 {}: {error}（半成品保留在 {}）",
+            target.display(),
+            part_path.display()
+        ));
+    }
+    if let Err(error) = tokio::fs::rename(part_path, target).await {
+        let rolled_back = tokio::fs::rename(&backup, target).await.is_ok();
+        return Err(format!(
+            "保存本地文件失败 {}: {error}（{}，半成品保留在 {}）",
+            target.display(),
+            if rolled_back {
+                "旧文件已回滚".to_string()
+            } else {
+                format!("旧文件保留在备份 {}", backup.display())
+            },
+            part_path.display()
+        ));
+    }
+    let _ = tokio::fs::remove_file(&backup).await;
+    Ok(())
+}
+
 /// SFTP 通道协商（channel open + subsystem + 初始化握手）的超时上限。
 /// 正常服务器 2 秒内完成，海外高延迟链路 15 秒也足够；
 /// 超时说明远端没有在跑 SFTP 服务或网络已经坏掉，继续等只会挂死。
@@ -841,15 +932,11 @@ impl SshManager {
             close_sftp_quietly(&sftp).await;
             return Err(error);
         }
-        // 覆盖已存在目标：rename 失败（服务端不允许覆盖）时先删旧再重试，
-        // 此刻半成品内容完整，删旧不会造成数据损失。
-        if sftp.rename(&part_path, &path).await.is_err() {
-            let _ = sftp.remove_file(&path).await;
-            if let Err(error) = sftp.rename(&part_path, &path).await {
-                let _ = sftp.remove_file(&part_path).await;
-                close_sftp_quietly(&sftp).await;
-                return Err(format!("保存远程文件失败: {error}"));
-            }
+        // 覆盖已存在目标：统一走带备份回滚的两阶段提交（审计 H-2），
+        // 任何失败点旧目标都完好无损。
+        if let Err(error) = commit_remote_part(&sftp, &part_path, &path).await {
+            close_sftp_quietly(&sftp).await;
+            return Err(error);
         }
         close_sftp_checked(&sftp).await
     }
@@ -1253,17 +1340,12 @@ impl SshManager {
         let Some(sftp) = sftp else {
             return Ok(());
         };
-        // 半成品 rename 到目标名。目标已存在且服务端不允许覆盖时，先删旧再重试——
-        // 此刻半成品内容完整，删旧目标不会造成数据损失（审计 B-1/B-3）。
+        // 半成品 rename 到目标名：统一走带备份回滚的两阶段提交（审计 H-2），
+        // 失败时旧目标完好，半成品保留供重试。
         let part_path = transfer.path.clone();
-        if sftp.rename(&part_path, &final_path).await.is_err() {
-            let _ = sftp.remove_file(&final_path).await;
-            if let Err(error) = sftp.rename(&part_path, &final_path).await {
-                close_sftp_quietly(&sftp).await;
-                return Err(format!(
-                    "保存远程文件失败: {error}（不完整内容留在 {part_path}）"
-                ));
-            }
+        if let Err(error) = commit_remote_part(&sftp, &part_path, &final_path).await {
+            close_sftp_quietly(&sftp).await;
+            return Err(error);
         }
         close_sftp_quietly(&sftp).await;
         Ok(())
@@ -1630,49 +1712,14 @@ impl SshManager {
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
                         }
-                        // 半成品还原为目标名。SSH_FXP_RENAME 不允许覆盖时才删旧目标重试
-                        // （先确认目标存在再删，防止误删；重试失败时半成品文件仍在，
-                        //  尽力把它还原回目标名，避免「旧文件已删、新文件卡在 .part」（审计 B-3）。
-                        if sftp
-                            .rename(&part_path, &transfer.remote_path)
-                            .await
-                            .is_err()
+                        // 半成品还原为目标名：统一走带备份回滚的两阶段提交（审计 H-2），
+                        // 任何失败点旧目标完好或可回滚。
+                        if let Err(error) =
+                            commit_remote_part(&sftp, &part_path, &transfer.remote_path).await
                         {
-                            let target_exists = sftp.metadata(&transfer.remote_path).await.is_ok();
-                            if !target_exists {
-                                transfer.finish_with_error(format!(
-                                    "保存远程文件失败：无法将半成品 {} 还原为 {}（目标不存在且 rename 被拒绝）",
-                                    part_path, transfer.remote_path
-                                ));
-                                emit_disk_progress(sink.as_ref(), &transfer, true);
-                                break;
-                            }
-                            if let Err(error) = sftp.remove_file(&transfer.remote_path).await {
-                                transfer.finish_with_error(format!(
-                                    "保存远程文件失败：目标已存在且无法删除旧文件: {error}"
-                                ));
-                                emit_disk_progress(sink.as_ref(), &transfer, true);
-                                break;
-                            }
-                            if let Err(error) = sftp.rename(&part_path, &transfer.remote_path).await
-                            {
-                                // 旧目标已删、新文件还是半成品名：再试一次把它归位。
-                                let restored =
-                                    sftp.rename(&part_path, &transfer.remote_path).await.is_ok();
-                                transfer.finish_with_error(format!(
-                                    "保存远程文件失败: {error}{}",
-                                    if restored {
-                                        String::new()
-                                    } else {
-                                        format!(
-                                            "（旧目标文件已被删除，本次上传内容保留在 {}）",
-                                            part_path
-                                        )
-                                    }
-                                ));
-                                emit_disk_progress(sink.as_ref(), &transfer, true);
-                                break;
-                            }
+                            transfer.finish_with_error(error);
+                            emit_disk_progress(sink.as_ref(), &transfer, true);
+                            break;
                         }
                         close_sftp_quietly(&sftp).await;
                         clear_resume_stamp(&stamp_base).await;

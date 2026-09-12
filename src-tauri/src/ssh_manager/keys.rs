@@ -11,7 +11,7 @@ use ts_rs::TS;
 
 const PRIVATE_PEM_PREFIX: &str = "-----BEGIN";
 
-/// `~/.ssh` 目录（Windows 为 `~\ssh`，其余平台 `~/.ssh`，与 known_hosts 保持一致）。
+/// `~/.ssh` 目录（所有平台一致，与 known_hosts 保持对齐，审计 M-1）。
 pub fn ssh_dir() -> Result<PathBuf, String> {
     default_known_hosts_parent()
 }
@@ -133,16 +133,48 @@ pub fn generate_keypair(
         .to_openssh(LineEnding::LF)
         .map_err(|error| format!("序列化私钥失败: {error}"))?;
 
-    std::fs::write(&private_path, private_pem.as_bytes())
-        .map_err(|error| format!("写入私钥失败: {error}"))?;
-    std::fs::write(&public_path, format!("{public_key}\n"))
-        .map_err(|error| format!("写入公钥失败: {error}"))?;
+    // 两阶段提交（审计 M-4）：先写同目录唯一临时文件并完成权限收紧，
+    // 全部成功后才替换正式文件；任一步失败回滚，绝不留下「新私钥 + 旧公钥」
+    // 的不匹配密钥对，也不再忽略权限设置失败。
+    // 注意用「追加后缀」而不是 with_extension（后者会替换 .pub 等已有扩展名，
+    // 导致私钥/公钥临时文件同名互相覆盖）。
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let private_tmp = append_suffix(&private_path, &format!(".catshell-gen-{stamp}"));
+    let public_tmp = append_suffix(&public_path, &format!(".catshell-gen-{stamp}"));
 
-    // 类 Unix 平台收紧私钥权限为 0600（Windows 走 NTFS 默认 ACL）。
+    std::fs::write(&private_tmp, private_pem.as_bytes())
+        .map_err(|error| format!("写入私钥失败: {error}"))?;
+    // 类 Unix 平台收紧私钥权限为 0600（Windows 走 NTFS 默认 ACL）；
+    // 权限收紧失败视为生成失败，避免把宽权限私钥留在磁盘上。
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&private_path, std::fs::Permissions::from_mode(0o600));
+        std::fs::set_permissions(&private_tmp, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("设置私钥权限失败: {error}"))?;
+    }
+    let cleanup_tmps = |private_tmp: &Path, public_tmp: &Path| {
+        let _ = std::fs::remove_file(private_tmp);
+        let _ = std::fs::remove_file(public_tmp);
+    };
+    if let Err(error) = std::fs::write(&public_tmp, format!("{public_key}\n")) {
+        cleanup_tmps(&private_tmp, &public_tmp);
+        return Err(format!("写入公钥失败: {error}"));
+    }
+    if let Err(error) = replace_with_backup(&private_path, &private_tmp, stamp) {
+        cleanup_tmps(&private_tmp, &public_tmp);
+        return Err(error);
+    }
+    if let Err(error) = replace_with_backup(&public_path, &public_tmp, stamp) {
+        // 私钥已换新、公钥替换失败：回滚私钥到旧文件，保持密钥对一致。
+        let private_bak = append_suffix(&private_path, &format!(".catshell-bak-{stamp}"));
+        if private_bak.exists() {
+            let _ = std::fs::rename(&private_bak, &private_path);
+        }
+        cleanup_tmps(&private_tmp, &public_tmp);
+        return Err(error);
     }
 
     Ok(GeneratedKeypair {
@@ -152,6 +184,36 @@ pub fn generate_keypair(
         key_type: key.algorithm().to_string(),
         fingerprint: fingerprint_of(key.public_key()),
     })
+}
+
+/// 在路径字符串后追加后缀（保留原扩展名；`with_extension` 会替换已有扩展名）。
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}{}", path.to_string_lossy(), suffix))
+}
+
+/// 同步版两阶段替换（审计 M-4）：旧文件先挪到备份名（不是删除），新文件 rename
+/// 到位后再清理备份；替换失败把备份改回原名，旧文件永不丢失。
+/// `stamp` 由调用方传入并保证同一次生成的备份名可预测（供失败回滚定位）。
+fn replace_with_backup(target: &Path, source: &Path, stamp: u128) -> Result<(), String> {
+    let had_existing = target.exists();
+    let backup = append_suffix(target, &format!(".catshell-bak-{stamp}"));
+    if had_existing {
+        std::fs::rename(target, &backup)
+            .map_err(|error| format!("备份旧文件失败 {}: {error}", target.display()))?;
+    }
+    if let Err(error) = std::fs::rename(source, target) {
+        if had_existing {
+            let _ = std::fs::rename(&backup, target);
+        }
+        return Err(format!(
+            "替换文件失败 {}: {error}（旧文件已回滚）",
+            target.display()
+        ));
+    }
+    if had_existing {
+        let _ = std::fs::remove_file(&backup);
+    }
+    Ok(())
 }
 
 /// 解析公钥文件内容（一行 OpenSSH 格式）。

@@ -99,6 +99,10 @@ pub struct SyncJob {
     pub cancelled: AtomicBool,
 }
 
+/// stream_upload/stream_download 在分块边界响应取消时返回的哨兵错误；
+/// 主循环据此跳过错误记录，直接结束任务（审计 M-3）。
+const SYNC_CANCELLED_ERROR: &str = "SYNC_CANCELLED";
+
 impl SyncJob {
     fn new(session_id: u64) -> Arc<Self> {
         Arc::new(SyncJob {
@@ -629,16 +633,24 @@ async fn run_sync_job(
                 SYNC_UPLOAD => {
                     let local = local_root.join(&entry.relative_path);
                     let remote = join_remote(&remote_dir, &entry.relative_path);
-                    stream_upload(&sftp, &local, &remote).await.map(|_| ())
+                    stream_upload(&sftp, &local, &remote, &job.cancelled)
+                        .await
+                        .map(|_| ())
                 }
                 _ => {
                     let remote = join_remote(&remote_dir, &entry.relative_path);
                     let local = local_root.join(&entry.relative_path);
-                    stream_download(&sftp, &remote, &local).await.map(|_| ())
+                    stream_download(&sftp, &remote, &local, &job.cancelled)
+                        .await
+                        .map(|_| ())
                 }
             }
         };
         if let Err(error) = action_result {
+            // 分块边界的取消：直接结束任务，不记为文件错误（审计 M-3）。
+            if job.cancelled.load(Ordering::SeqCst) {
+                break;
+            }
             let mut message = error;
             if message.len() > 300 {
                 message.truncate(300);
@@ -687,6 +699,7 @@ async fn stream_upload(
     sftp: &russh_sftp::client::SftpSession,
     local: &Path,
     remote: &str,
+    cancelled: &AtomicBool,
 ) -> Result<u64, String> {
     let mut local_file = tokio::fs::File::open(local)
         .await
@@ -703,6 +716,11 @@ async fn stream_upload(
         let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
         let mut total = 0_u64;
         loop {
+            // 取消检查下沉到分块循环（审计 M-3）：大文件传输中每个数据块边界
+            // 都能响应取消，不再等整个文件写完。
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(SYNC_CANCELLED_ERROR.to_string());
+            }
             let n = local_file
                 .read(&mut buffer)
                 .await
@@ -732,15 +750,9 @@ async fn stream_upload(
             return Err(error);
         }
     };
-    // 收尾 rename 到目标名；目标已存在且服务端不允许覆盖时先删旧再重试——
-    // 此刻半成品内容完整，删旧不会造成数据损失。
-    if sftp.rename(&part_path, remote).await.is_err() {
-        let _ = sftp.remove_file(remote).await;
-        if let Err(error) = sftp.rename(&part_path, remote).await {
-            let _ = sftp.remove_file(&part_path).await;
-            return Err(format!("保存远程文件失败 {remote}: {error}"));
-        }
-    }
+    // 收尾 rename 到目标名：统一走带备份回滚的两阶段提交（审计 H-2），
+    // 任何失败点旧目标都完好无损，半成品保留供重试。
+    crate::ssh_manager::sftp::commit_remote_part(sftp, &part_path, remote).await?;
     Ok(total)
 }
 
@@ -751,6 +763,7 @@ async fn stream_download(
     sftp: &russh_sftp::client::SftpSession,
     remote: &str,
     local: &Path,
+    cancelled: &AtomicBool,
 ) -> Result<u64, String> {
     let mut remote_file = sftp
         .open(remote)
@@ -769,6 +782,10 @@ async fn stream_download(
         let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
         let mut total = 0_u64;
         loop {
+            // 取消检查下沉到分块循环（审计 M-3），同上传侧。
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(SYNC_CANCELLED_ERROR.to_string());
+            }
             // 每个数据块单独设超时：远端停摆不能让同步任务永久挂住（审计 B-6）。
             let n = tokio::time::timeout(DISK_CHUNK_TIMEOUT, remote_file.read(&mut buffer))
                 .await
@@ -797,14 +814,8 @@ async fn stream_download(
             return Err(error);
         }
     };
-    if tokio::fs::rename(&part_path, local).await.is_err() {
-        // 少数平台/文件系统不允许 rename 覆盖：删旧再重试（半成品已完整）。
-        let _ = tokio::fs::remove_file(local).await;
-        if let Err(error) = tokio::fs::rename(&part_path, local).await {
-            let _ = tokio::fs::remove_file(&part_path).await;
-            return Err(format!("保存本地文件失败 {}: {error}", local.display()));
-        }
-    }
+    // 本地收尾：统一走带备份回滚的两阶段提交（审计 H-2）。
+    crate::ssh_manager::sftp::commit_local_part(&part_path, local).await?;
     Ok(total)
 }
 

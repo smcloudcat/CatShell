@@ -4,17 +4,12 @@ use std::path::{Path, PathBuf};
 
 use super::types::{home_dir, KnownHostEntry, KnownHostsSnapshot, SshConfigEntry};
 
-/// 与 russh-keys 默认 known_hosts 路径保持一致：Windows 为 `~\ssh\known_hosts`，其余平台为 `~/.ssh/known_hosts`。
+/// 与 russh 默认 known_hosts 路径保持一致：所有平台均为 `~/.ssh/known_hosts`（审计 M-1）。
+/// Windows 不做 `~/ssh` 特判：russh 的默认实现没有 Windows 分支，连接校验始终读
+/// `~/.ssh/known_hosts`；UI 文案也承诺与 OpenSSH 命令行共享同一份文件。
 pub fn default_known_hosts_path() -> Option<PathBuf> {
     let home = home_dir()?;
-    #[cfg(target_os = "windows")]
-    {
-        Some(home.join("ssh").join("known_hosts"))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Some(home.join(".ssh").join("known_hosts"))
-    }
+    Some(home.join(".ssh").join("known_hosts"))
 }
 
 pub fn ssh_config_path() -> Option<PathBuf> {

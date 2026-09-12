@@ -186,6 +186,9 @@ struct HostKeyPayload {
     host: String,
     port: u16,
     fingerprint: String,
+    /// 发起确认的会话 id：前端据此把提示归属到具体会话，
+    /// 并发未知主机的提示按会话精确清理，不再互相覆盖（审计 M-2）。
+    session_id: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -364,6 +367,7 @@ impl client::Handler for SshHandler {
                 host: self.host.clone(),
                 port: self.port,
                 fingerprint: fingerprint.clone(),
+                session_id: self.session_id,
             })
             .unwrap_or_default(),
         );
