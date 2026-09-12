@@ -19,6 +19,47 @@ const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
 const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const DISK_PART_SUFFIX: &str = ".catshell-part";
 
+/// SFTP 通道协商（channel open + subsystem + 初始化握手）的超时上限。
+/// 正常服务器 2 秒内完成，海外高延迟链路 15 秒也足够；
+/// 超时说明远端没有在跑 SFTP 服务或网络已经坏掉，继续等只会挂死。
+const SFTP_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// 单个 SFTP 短操作（列目录/改名/删除等）的超时上限。
+const SFTP_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// SFTP 通道关闭的超时上限（关闭挂起不应拖住已完成的操作结果）。
+const SFTP_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 给 SFTP 短操作套超时。
+///
+/// russh-sftp 2.4 的会话层没有帧级超时：远端不回包时 `read_dir` 等调用的
+/// future 会永久挂起，前端表现为「SFTP 列表一直加载中」——无错误、无法恢复、
+/// 也没有任何日志。超时后必须给出明确错误，让用户可以重试而不是干等。
+async fn with_sftp_timeout<T>(
+    label: &str,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(SFTP_OP_TIMEOUT, fut).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "{label}超时（{} 秒）：网络不稳定或远端无响应，请重试",
+            SFTP_OP_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// 静默关闭 SFTP 通道：关闭失败或挂起只丢弃结果，不影响主操作。
+pub(super) async fn close_sftp_quietly(sftp: &russh_sftp::client::SftpSession) {
+    let _ = tokio::time::timeout(SFTP_CLOSE_TIMEOUT, sftp.close()).await;
+}
+
+/// 带结果检查地关闭 SFTP 通道（保留既有「关闭失败报错」的语义，只补超时）。
+async fn close_sftp_checked(sftp: &russh_sftp::client::SftpSession) -> Result<(), String> {
+    match tokio::time::timeout(SFTP_CLOSE_TIMEOUT, sftp.close()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("关闭 SFTP 通道失败: {error}")),
+        Err(_) => Err("关闭 SFTP 通道超时".to_string()),
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -494,51 +535,63 @@ pub fn validate_sftp_path(path: String) -> Result<String, String> {
 
 impl SshManager {
     pub async fn sftp_list(&self, id: u64, path: String) -> Result<Vec<SftpEntry>, String> {
-        // 空 path 兜底为当前目录；其余与其他 SFTP 方法统一走路径校验（审计 S-5）。
-        let path = if path.trim().is_empty() {
-            ".".to_string()
-        } else {
-            validate_sftp_path(path)?
-        };
-        let sftp = self.open_sftp_channel(id).await?;
-        let entries = sftp
-            .read_dir(path)
-            .await
-            .map_err(|error| format!("读取远程目录失败: {error}"))?;
-        let mut result = Vec::new();
-        for entry in entries {
-            let metadata = entry.metadata();
-            let kind = if metadata.file_type().is_dir() {
-                "directory"
-            } else if metadata.file_type().is_symlink() {
-                "symlink"
+        let started = std::time::Instant::now();
+        let result = with_sftp_timeout("读取远程目录", async move {
+            // 空 path 兜底为当前目录；其余与其他 SFTP 方法统一走路径校验（审计 S-5）。
+            let path = if path.trim().is_empty() {
+                ".".to_string()
             } else {
-                "file"
+                validate_sftp_path(path)?
             };
-            result.push(SftpEntry {
-                name: entry.file_name(),
-                path: entry.path(),
-                kind: kind.to_string(),
-                size: metadata.size.unwrap_or(0),
-                modified_at: metadata.mtime.map(|value| value as i64),
-                permissions: metadata.permissions,
-                owner: metadata
-                    .user
-                    .clone()
-                    .or_else(|| metadata.uid.map(|value| value.to_string())),
-                group: metadata
-                    .group
-                    .clone()
-                    .or_else(|| metadata.gid.map(|value| value.to_string())),
+            let sftp = self.open_sftp_channel(id).await?;
+            let entries = sftp
+                .read_dir(path)
+                .await
+                .map_err(|error| format!("读取远程目录失败: {error}"))?;
+            let mut result = Vec::new();
+            for entry in entries {
+                let metadata = entry.metadata();
+                let kind = if metadata.file_type().is_dir() {
+                    "directory"
+                } else if metadata.file_type().is_symlink() {
+                    "symlink"
+                } else {
+                    "file"
+                };
+                result.push(SftpEntry {
+                    name: entry.file_name(),
+                    path: entry.path(),
+                    kind: kind.to_string(),
+                    size: metadata.size.unwrap_or(0),
+                    modified_at: metadata.mtime.map(|value| value as i64),
+                    permissions: metadata.permissions,
+                    owner: metadata
+                        .user
+                        .clone()
+                        .or_else(|| metadata.uid.map(|value| value.to_string())),
+                    group: metadata
+                        .group
+                        .clone()
+                        .or_else(|| metadata.gid.map(|value| value.to_string())),
+                });
+            }
+            result.sort_by(|left, right| {
+                left.kind
+                    .cmp(&right.kind)
+                    .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             });
+            close_sftp_quietly(&sftp).await;
+            Ok(result)
+        })
+        .await;
+        if result.is_ok() {
+            tracing::info!(
+                session_id = id,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "SFTP 目录列表完成"
+            );
         }
-        result.sort_by(|left, right| {
-            left.kind
-                .cmp(&right.kind)
-                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-        });
-        let _ = sftp.close().await;
-        Ok(result)
+        result
     }
 
     pub async fn sftp_read_file(&self, id: u64, path: String) -> Result<Vec<u8>, String> {
@@ -546,14 +599,17 @@ impl SshManager {
         let sftp = self.open_sftp_channel(id).await?;
         // 必须先查元数据再读：`sftp.read` 会把远端文件完整读进内存，
         // 事后校验上限挡不住 10 GB 文件把内存吃满（审计 S-1）。
-        let size = sftp
-            .metadata(&path)
-            .await
-            .map_err(|error| format!("读取远程文件信息失败: {error}"))?
-            .size
-            .unwrap_or(0);
+        let size = with_sftp_timeout("读取远程文件信息", async {
+            Ok(sftp
+                .metadata(&path)
+                .await
+                .map_err(|error| format!("读取远程文件信息失败: {error}"))?
+                .size
+                .unwrap_or(0))
+        })
+        .await?;
         if size > MAX_SFTP_FILE_SIZE as u64 {
-            let _ = sftp.close().await;
+            close_sftp_quietly(&sftp).await;
             return Err("文件超过 64 MB 下载限制".to_string());
         }
         let data = sftp
@@ -561,10 +617,10 @@ impl SshManager {
             .await
             .map_err(|error| format!("读取远程文件失败: {error}"))?;
         if data.len() > MAX_SFTP_FILE_SIZE {
-            let _ = sftp.close().await;
+            close_sftp_quietly(&sftp).await;
             return Err("文件超过 64 MB 下载限制".to_string());
         }
-        let _ = sftp.close().await;
+        close_sftp_quietly(&sftp).await;
         Ok(data)
     }
 
@@ -589,31 +645,31 @@ impl SshManager {
         file.shutdown()
             .await
             .map_err(|error| format!("完成远程文件写入失败: {error}"))?;
-        sftp.close()
-            .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+        close_sftp_checked(&sftp).await
     }
 
     pub async fn sftp_remove_file(&self, id: u64, path: String) -> Result<(), String> {
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
-        sftp.remove_file(path)
-            .await
-            .map_err(|error| format!("删除远程文件失败: {error}"))?;
-        sftp.close()
-            .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+        with_sftp_timeout("删除远程文件", async {
+            sftp.remove_file(path)
+                .await
+                .map_err(|error| format!("删除远程文件失败: {error}"))
+        })
+        .await?;
+        close_sftp_checked(&sftp).await
     }
 
     pub async fn sftp_mkdir(&self, id: u64, path: String) -> Result<(), String> {
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
-        sftp.create_dir(&path)
-            .await
-            .map_err(|error| format!("创建远程目录失败: {error}"))?;
-        sftp.close()
-            .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+        with_sftp_timeout("创建远程目录", async {
+            sftp.create_dir(&path)
+                .await
+                .map_err(|error| format!("创建远程目录失败: {error}"))
+        })
+        .await?;
+        close_sftp_checked(&sftp).await
     }
 
     /// 递归删除远程目录及其全部内容。拒绝根目录，限制递归深度与条目总数，
@@ -630,21 +686,20 @@ impl SshManager {
         sftp.remove_dir(&path)
             .await
             .map_err(|error| format!("删除远程目录失败: {error}"))?;
-        sftp.close()
-            .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+        close_sftp_checked(&sftp).await
     }
 
     pub async fn sftp_rename(&self, id: u64, from: String, to: String) -> Result<(), String> {
         let from = validate_sftp_path(from)?;
         let to = validate_sftp_path(to)?;
         let sftp = self.open_sftp_channel(id).await?;
-        sftp.rename(&from, &to)
-            .await
-            .map_err(|error| format!("重命名远程文件失败: {error}"))?;
-        sftp.close()
-            .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+        with_sftp_timeout("重命名远程文件", async {
+            sftp.rename(&from, &to)
+                .await
+                .map_err(|error| format!("重命名远程文件失败: {error}"))
+        })
+        .await?;
+        close_sftp_checked(&sftp).await
     }
 
     /// 修改远程文件/目录权限（八进制 mode，例如 0o644）。只传 permissions，
@@ -655,18 +710,19 @@ impl SshManager {
             return Err("权限值无效（应为 3~4 位八进制，例如 644）".to_string());
         }
         let sftp = self.open_sftp_channel(id).await?;
-        sftp.set_metadata(
-            &path,
-            russh_sftp::protocol::FileAttributes {
-                permissions: Some(mode),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|error| format!("修改远程权限失败: {error}"))?;
-        sftp.close()
+        with_sftp_timeout("修改远程权限", async {
+            sftp.set_metadata(
+                &path,
+                russh_sftp::protocol::FileAttributes {
+                    permissions: Some(mode),
+                    ..Default::default()
+                },
+            )
             .await
-            .map_err(|error| format!("关闭 SFTP 通道失败: {error}"))
+            .map_err(|error| format!("修改远程权限失败: {error}"))
+        })
+        .await?;
+        close_sftp_checked(&sftp).await
     }
 
     /// 打开独立的 SFTP 子系统通道。连接锁仅在通道协商期间持有（见
@@ -675,14 +731,39 @@ impl SshManager {
         &self,
         id: u64,
     ) -> Result<russh_sftp::client::SftpSession, String> {
-        let channel = self.open_session_channel(id).await?;
-        channel
-            .request_subsystem(true, "sftp")
+        let started = std::time::Instant::now();
+        // 三步各带超时（SFTP_OPEN_TIMEOUT）：远端不回包时这些 future 会永久挂起，
+        // 超时后 future 被 drop，tokio Mutex 的连接锁随之释放，会话不受污染。
+        let channel = tokio::time::timeout(SFTP_OPEN_TIMEOUT, self.open_session_channel(id))
             .await
+            .map_err(|_| {
+                format!(
+                    "打开 SFTP 通道超时（{} 秒）：远端无响应",
+                    SFTP_OPEN_TIMEOUT.as_secs()
+                )
+            })??;
+        tokio::time::timeout(SFTP_OPEN_TIMEOUT, channel.request_subsystem(true, "sftp"))
+            .await
+            .map_err(|_| {
+                format!(
+                    "请求 SFTP 子系统超时（{} 秒）：远端可能未提供 SFTP 服务",
+                    SFTP_OPEN_TIMEOUT.as_secs()
+                )
+            })?
             .map_err(|error| format!("请求 SFTP 子系统失败: {error}"))?;
-        russh_sftp::client::SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|error| format!("初始化 SFTP 失败: {error}"))
+        let sftp = tokio::time::timeout(
+            SFTP_OPEN_TIMEOUT,
+            russh_sftp::client::SftpSession::new(channel.into_stream()),
+        )
+        .await
+        .map_err(|_| format!("初始化 SFTP 超时（{} 秒）", SFTP_OPEN_TIMEOUT.as_secs()))?
+        .map_err(|error| format!("初始化 SFTP 失败: {error}"))?;
+        tracing::info!(
+            session_id = id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "SFTP 通道就绪"
+        );
+        Ok(sftp)
     }
 
     /// 基准半成品路径是否已被另一条进行中的磁盘传输占用（P2-9）。
@@ -715,7 +796,7 @@ impl SshManager {
             if remove_partial {
                 let _ = sftp.remove_file(&transfer.path).await;
             }
-            let _ = sftp.close().await;
+            close_sftp_quietly(&sftp).await;
         }
     }
 
@@ -766,9 +847,9 @@ impl SshManager {
         let mut chunk = vec![0_u8; SFTP_CHUNK_SIZE];
         let mut filled = 0_usize;
         while filled < chunk.len() {
-            let n = file
-                .read(&mut chunk[filled..])
+            let n = tokio::time::timeout(DISK_CHUNK_TIMEOUT, file.read(&mut chunk[filled..]))
                 .await
+                .map_err(|_| "读取远程数据超时：网络不稳定，请取消后重试".to_string())?
                 .map_err(|error| format!("读取远程文件失败: {error}"))?;
             if n == 0 {
                 break;
@@ -846,8 +927,9 @@ impl SshManager {
         let file = file_guard
             .as_mut()
             .ok_or_else(|| "传输已结束".to_string())?;
-        file.write_all(&data)
+        tokio::time::timeout(DISK_CHUNK_TIMEOUT, file.write_all(&data))
             .await
+            .map_err(|_| "写入远程数据超时：网络不稳定，请取消后重试".to_string())?
             .map_err(|error| format!("写入远程文件失败: {error}"))?;
         drop(file_guard);
         transfer
@@ -913,7 +995,7 @@ impl SshManager {
         }
         let sftp = transfer.sftp.lock().await.take();
         if let Some(sftp) = sftp {
-            let _ = sftp.close().await;
+            close_sftp_quietly(&sftp).await;
         }
         Ok(())
     }
@@ -1071,7 +1153,7 @@ impl SshManager {
                         }
                         drop(local_file);
                         drop(remote_file);
-                        let _ = sftp.close().await;
+                        close_sftp_quietly(&sftp).await;
                         // Windows 跨卷 rename 可能阻塞较久，收尾 IO 统一走 tokio 阻塞池。
                         if tokio::fs::metadata(&transfer.local_path).await.is_ok() {
                             let _ = tokio::fs::remove_file(&transfer.local_path).await;
@@ -1290,7 +1372,7 @@ impl SshManager {
                                 break;
                             }
                         }
-                        let _ = sftp.close().await;
+                        close_sftp_quietly(&sftp).await;
                         clear_resume_stamp(&stamp_base).await;
                         transfer.done.store(true, Ordering::SeqCst);
                         emit_disk_progress(sink.as_ref(), &transfer, true);

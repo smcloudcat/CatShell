@@ -407,7 +407,7 @@ impl SshManager {
                 let mut remote_map = BTreeMap::new();
                 let mut budget = SYNC_MAX_ENTRIES;
                 let scan = scan_remote_dir(&sftp, &remote_dir, &mut remote_map, &mut budget).await;
-                let _ = sftp.close().await;
+                super::sftp::close_sftp_quietly(&sftp).await;
                 scan?;
                 (local_map, remote_map)
             }
@@ -416,7 +416,7 @@ impl SshManager {
                 let mut remote_map = BTreeMap::new();
                 let mut budget = SYNC_MAX_ENTRIES;
                 let scan = scan_remote_dir(&sftp, &remote_dir, &mut remote_map, &mut budget).await;
-                let _ = sftp.close().await;
+                super::sftp::close_sftp_quietly(&sftp).await;
                 scan?;
                 let local_map = scan_local_dir_blocking(local_path).await?;
                 (remote_map, local_map)
@@ -675,7 +675,7 @@ async fn run_sync_job(
         &mut last_emit,
     );
     manager.sync_jobs.lock().await.remove(&session_id);
-    let _ = sftp.close().await;
+    super::sftp::close_sftp_quietly(&sftp).await;
 }
 
 /// 上传单个文件：本地读 → 远程写，返回传输字节数。
