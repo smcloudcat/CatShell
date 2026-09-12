@@ -34,7 +34,7 @@ interface Props {
   actions: SftpToolbarActions
 }
 
-/** SFTP 面板顶部三栏：操作按钮、当前路径、排序与筛选。 */
+/** SFTP 面板顶部两栏：操作按钮、路径与筛选（合并行）。 */
 export function SftpToolbar({ state, actions }: Props) {
   const t = useT()
   const { path, busy, sortKey, sortAsc, showHidden, nameFilter } = state
@@ -84,6 +84,7 @@ export function SftpToolbar({ state, actions }: Props) {
           <Icon name="sync" size={15} />
         </button>
       </div>
+      {/* 路径 + 筛选合并为一行（宽面板单行紧凑，窄面板自动换行） */}
       <div className="sftp-pathbar">
         <button
           className="host-icon-btn"
@@ -93,7 +94,7 @@ export function SftpToolbar({ state, actions }: Props) {
         >
           <Icon name="chevron-down" size={15} />
         </button>
-        <code>{path}</code>
+        <code title={path}>{path}</code>
         <button
           className="host-icon-btn"
           onClick={actions.openInTerminal}
@@ -101,8 +102,6 @@ export function SftpToolbar({ state, actions }: Props) {
         >
           <Icon name="terminal" size={15} />
         </button>
-      </div>
-      <div className="sftp-filterbar">
         <select
           className="glass-input sftp-sort-select"
           value={sortKey}

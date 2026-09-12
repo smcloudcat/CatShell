@@ -25,36 +25,33 @@
   max-width: 520px;
 }
 
+/* 路径 + 筛选合并行：宽面板单行紧凑，窄面板自动换行成两段。 */
 .sftp-pathbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   padding: 8px 0;
   border-top: 1px solid var(--soft-bg);
-  border-bottom: 1px solid var(--soft-bg);
 }
 
 .sftp-pathbar code {
+  flex: 1 1 110px;
+  min-width: 56px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-}
-
-.sftp-pathbar .host-icon-btn {
-  margin-left: auto;
+  /* 左侧截断：长路径最重要的是尾部当前目录名，悬停 title 可看全路径 */
+  direction: rtl;
+  text-align: left;
 }
 
 .chmod-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.sftp-filterbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
 }
 
 .sftp-sort-select {
@@ -65,8 +62,8 @@
 }
 
 .sftp-filter-input {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 140px;
+  min-width: 88px;
   max-width: 220px;
   padding: 5px 10px;
   font-size: 12px;

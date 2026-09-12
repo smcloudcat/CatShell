@@ -53,10 +53,10 @@
 
 .monitor-card,
 .monitor-panel {
-  padding: 16px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
 }
 
 .monitor-card {
@@ -64,7 +64,7 @@
 }
 
 .monitor-card strong {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
@@ -128,7 +128,7 @@
 
 .network-values strong {
   color: var(--text-main);
-  font-size: 14px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 

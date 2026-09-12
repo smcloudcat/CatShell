@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { check, Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { useSettings, LANGUAGE_OPTIONS } from '../store/settings'
+import { normalizeBackgroundImagePath } from '../types/theme'
 import { ThemeParams } from './settings/ThemeParams'
 import { Appearance } from './settings/Appearance'
 import { Icon, IconName } from '../components/Icon'
@@ -13,11 +15,12 @@ import { SnippetPanel } from './settings/SnippetPanel'
 import { AuditPanel } from './settings/AuditPanel'
 import { BackupPanel } from './settings/BackupPanel'
 import { MonitorThresholdPanel } from './settings/MonitorThresholdPanel'
+import { AboutPanel } from './settings/AboutPanel'
 import { showToast } from '../store/ui'
 import { useT } from '../i18n'
 import { errorText } from '../i18n/errors'
 
-type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'ai' | 'backup' | 'update'
+type SettingsTab = 'appearance' | 'monitor' | 'snippets' | 'security' | 'ai' | 'backup' | 'update' | 'about'
 
 const TABS: { id: SettingsTab; labelKey: string; hintKey: string; icon: IconName }[] = [
   { id: 'appearance', labelKey: '外观', hintKey: '主题与质感', icon: 'palette' },
@@ -26,7 +29,8 @@ const TABS: { id: SettingsTab; labelKey: string; hintKey: string; icon: IconName
   { id: 'security', labelKey: '安全与审计', hintKey: '保险箱与日志', icon: 'key' },
   { id: 'ai', labelKey: 'AI 助手', hintKey: '命令生成 · 日志诊断 · 接口配置', icon: 'sparkles' },
   { id: 'backup', labelKey: '备份与还原', hintKey: '导入导出配置', icon: 'database' },
-  { id: 'update', labelKey: '应用更新', hintKey: '语言与自动更新', icon: 'refresh' }
+  { id: 'update', labelKey: '应用更新', hintKey: '语言与自动更新', icon: 'refresh' },
+  { id: 'about', labelKey: '关于', hintKey: '版本 · 联系方式 · 使用协议', icon: 'info' }
 ]
 
 export function SettingsView() {
@@ -82,8 +86,10 @@ export function SettingsView() {
   const previewStyle: React.CSSProperties = (() => {
     if (theme.backgroundType === 'solid') return { background: theme.solidColor }
     if (theme.backgroundType === 'image' && theme.backgroundImage) {
+      // 与主界面一致走 asset 协议（本地裸路径在 webview 里加载不出来）。
+      const imagePath = normalizeBackgroundImagePath(theme.backgroundImage)
       return {
-        backgroundImage: `url("${theme.backgroundImage}")`,
+        backgroundImage: `url("${convertFileSrc(imagePath)}")`,
         backgroundSize: 'cover',
         backgroundPosition: 'center'
       }
@@ -185,6 +191,7 @@ export function SettingsView() {
               </>
             )}
             {tab === 'backup' && <BackupPanel />}
+            {tab === 'about' && <AboutPanel />}
             {tab === 'update' && (
               <>
                 <div className="panel-row">

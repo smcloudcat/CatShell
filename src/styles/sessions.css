@@ -171,8 +171,8 @@
 }
 
 .session-monitor-panel {
-  flex: 0 0 320px;
-  width: 320px;
+  flex: 0 0 280px;
+  width: 280px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -206,9 +206,9 @@
 }
 
 .session-sftp-panel {
-  flex: 0 0 280px;
-  height: 280px;
-  min-height: 180px;
+  flex: 0 0 340px;
+  height: 340px;
+  min-height: 200px;
   margin: 0 10px 10px;
   overflow: hidden;
   border: 1px solid var(--hairline);
@@ -547,12 +547,29 @@
   height: 100%;
   border: 1px solid var(--hairline);
   border-radius: 11px;
-  background: rgba(6, 10, 20, 0.72);
+  /* 垫底色跟随主题：xterm 画布按整行/整列取整，画布未铺到的边缘与滚动条
+     轨道会透出这里。硬编码深色在浅色模式下会显形为底边黑缝与右侧灰缝。 */
+  background: rgb(var(--glass-bg) / 0.72);
   overflow: hidden;
 }
 
 .terminal-host .xterm {
   height: 100%;
+}
+
+/* xterm 6 会把 theme.background（未配置时默认黑）以不透明 inline 样式写到
+   .xterm-viewport 上，而 WebGL 画布不透明且按整行取整——画布外的底部余量与
+   滚动条轨道露出 viewport 的深色背景，浅色模式下显形为底边黑缝与右侧粗灰缝。
+   inline 样式优先级高于普通 CSS，必须 !important 覆盖为与画布一致的实体色
+   （theme.background 去掉 alpha 后的值：深 #020617 / 浅 #ffffff）。 */
+.terminal-host .xterm-viewport,
+.recording-terminal .xterm-viewport {
+  background: #020617 !important;
+}
+
+:root[data-mode='light'] .terminal-host .xterm-viewport,
+:root[data-mode='light'] .recording-terminal .xterm-viewport {
+  background: #ffffff !important;
 }
 
 /* ============ 面板折叠与会话细节 ============ */

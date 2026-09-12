@@ -8,7 +8,7 @@ const SIZE_KEYS: Record<ResizeTarget, string> = {
   sftp: 'session-sftp-height'
 }
 
-const SIZE_FALLBACK: Record<ResizeTarget, number> = { monitor: 320, sftp: 280 }
+const SIZE_FALLBACK: Record<ResizeTarget, number> = { monitor: 280, sftp: 340 }
 const MONITOR_MIN = 240
 const MONITOR_MAX = 560
 const SFTP_MIN = 180
