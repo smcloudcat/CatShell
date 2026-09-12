@@ -349,15 +349,86 @@ fn part_file_path(local_path: &str) -> String {
     format!("{local_path}{DISK_PART_SUFFIX}")
 }
 
-/// 断点续传的「源文件指纹」：长度 + 修改时间。
+/// 断点续传的「源文件指纹」：长度 + 修改时间 + 首尾分块内容哈希。
 ///
 /// 只比对半成品长度是不安全的（P2-8）：源文件被替换后长度可能恰好不短于半成品，
 /// 续传就会把新内容接到旧偏移之后，产出静默损坏的文件。因此首次写入半成品时把源文件
 /// 指纹落盘，续传前必须完全一致，否则从 0 重传。
+///
+/// 单靠「长度 + mtime」仍有漏洞（审计 B-14）：同秒内被换成等长内容（或 `touch -r`
+/// 把 mtime 改回原值）时指纹不变，续传照样把新内容接到旧偏移。`sample` 对首尾分块
+/// 做快速哈希补上这一层；解析不到的旧指纹文件（无该字段）会因指纹不等而从 0 重传，
+/// 符合「宁可重传，不可续错」。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ResumeStamp {
     total: u64,
     mtime: Option<i64>,
+    /// 内容采样哈希（见 `sample_stream`）；旧版指纹文件缺该字段时反序列化为 `None`。
+    #[serde(default)]
+    sample: Option<u64>,
+}
+
+/// 内容采样窗口：首、尾各取 64 KiB 参与哈希。
+const RESUME_SAMPLE_WINDOW: usize = 64 * 1024;
+
+/// FNV-1a 64 位。
+///
+/// 只用于识别「长度与 mtime 都没变但内容已被替换」的源文件，不承担安全职责
+/// （不是防篡改手段），因此不引入密码学哈希依赖。
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a64(bytes: &[u8], seed: u64) -> u64 {
+    let mut hash = seed;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// 尽量填满 `buf`（单次 `read` 可能只返回部分数据），返回实际读到的字节数。
+async fn read_upto<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> Option<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        let read = reader.read(&mut buf[filled..]).await.ok()?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Some(filled)
+}
+
+/// 采样流的首尾分块并哈希。`total` 一并入哈希，长度变化必然导致指纹不同。
+///
+/// 读取会在流内前后 seek，调用方需自行把游标复位（下载方向随后会 seek 到续传偏移）。
+async fn sample_stream<R>(reader: &mut R, total: u64) -> Option<u64>
+where
+    R: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin,
+{
+    let mut hash = fnv1a64(&total.to_le_bytes(), FNV_OFFSET_BASIS);
+    if total == 0 {
+        return Some(hash);
+    }
+    let mut buf = vec![0u8; RESUME_SAMPLE_WINDOW.min(total as usize)];
+    reader.seek(std::io::SeekFrom::Start(0)).await.ok()?;
+    let head = read_upto(reader, &mut buf).await?;
+    hash = fnv1a64(&buf[..head], hash);
+    // 文件不超过一个窗口时头部已覆盖全文，尾块不再重复读。
+    let tail_start = total.saturating_sub(RESUME_SAMPLE_WINDOW as u64);
+    if tail_start > 0 && tail_start >= head as u64 {
+        reader
+            .seek(std::io::SeekFrom::Start(tail_start))
+            .await
+            .ok()?;
+        let tail = read_upto(reader, &mut buf).await?;
+        hash = fnv1a64(&buf[..tail], hash);
+    }
+    Some(hash)
 }
 
 const RESUME_STAMP_SUFFIX: &str = ".meta";
@@ -388,14 +459,21 @@ async fn clear_resume_stamp(stamp_base: &str) {
 
 /// 本地源文件的指纹（上传方向用）。
 async fn local_file_stamp(path: &str, total: u64) -> ResumeStamp {
+    let mtime = tokio::fs::metadata(path)
+        .await
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64);
+    // 内容采样（审计 B-14）；打不开源文件则留空，指纹不等时按「不可续传」处理。
+    let sample = match tokio::fs::File::open(path).await {
+        Ok(mut file) => sample_stream(&mut file, total).await,
+        Err(_) => None,
+    };
     ResumeStamp {
         total,
-        mtime: tokio::fs::metadata(path)
-            .await
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_millis() as i64),
+        mtime,
+        sample,
     }
 }
 
@@ -403,6 +481,7 @@ async fn local_file_stamp(path: &str, total: u64) -> ResumeStamp {
 ///
 /// 返回 `Some(offset)` 当且仅当半成品非空、短于源文件，且指纹与首次写入时一致；
 /// 指纹缺失（旧版本残留半成品）或不一致时返回 `None`，由调用方从 0 重新开始。
+/// 指纹含长度、mtime 与首尾内容采样，任一不同都不续传（审计 B-14）。
 /// 原则是「宁可重传，不可续错」。
 fn resume_offset(
     part_len: u64,
@@ -1216,9 +1295,15 @@ impl SshManager {
         let occupied = part_claim.is_none();
 
         // 源文件指纹：续传前必须与原文件完全一致，否则从 0 重传（P2-8）。
+        // 先把远端文件打开做首尾采样（审计 B-14），再算续传偏移。
+        let mut remote_file = sftp
+            .open(&remote_path)
+            .await
+            .map_err(|error| format!("打开远程文件失败: {error}"))?;
         let source_stamp = ResumeStamp {
             total,
             mtime: metadata.mtime.map(i64::from),
+            sample: sample_stream(&mut remote_file, total).await,
         };
         let mut start_offset: u64 = 0;
         let mut resumed = false;
@@ -1234,10 +1319,6 @@ impl SshManager {
             }
         }
 
-        let mut remote_file = sftp
-            .open(&remote_path)
-            .await
-            .map_err(|error| format!("打开远程文件失败: {error}"))?;
         if start_offset > 0 {
             remote_file
                 .seek(std::io::SeekFrom::Start(start_offset))
@@ -1740,13 +1821,114 @@ mod tests {
     }
 
     fn stamp(total: u64, mtime: Option<i64>) -> ResumeStamp {
-        ResumeStamp { total, mtime }
+        ResumeStamp {
+            total,
+            mtime,
+            sample: None,
+        }
+    }
+
+    fn stamped(total: u64, mtime: Option<i64>, sample: u64) -> ResumeStamp {
+        ResumeStamp {
+            total,
+            mtime,
+            sample: Some(sample),
+        }
     }
 
     #[test]
     fn resumes_only_when_the_source_fingerprint_matches() {
         let source = stamp(1000, Some(42));
         assert_eq!(resume_offset(400, Some(&source), &source), Some(400));
+    }
+
+    #[test]
+    fn refuses_to_resume_when_the_content_sample_differs() {
+        // 等长、同 mtime，仅内容不同（`touch -r` 或同秒替换）：必须拒绝续传（审计 B-14）
+        let source = stamped(1000, Some(42), 0xdead_beef);
+        let replaced = stamped(1000, Some(42), 0xfeed_face);
+        assert_eq!(resume_offset(400, Some(&replaced), &source), None);
+    }
+
+    #[test]
+    fn refuses_to_resume_against_a_legacy_stamp_without_a_sample() {
+        // 旧版本指纹文件没有 sample 字段 → 解析为 None → 与当前指纹不等 → 从 0 重传
+        let source = stamped(1000, Some(42), 0x1234_5678);
+        let legacy = stamp(1000, Some(42));
+        assert_eq!(resume_offset(400, Some(&legacy), &source), None);
+    }
+
+    #[test]
+    fn fnv1a64_changes_with_content_and_seed() {
+        assert_ne!(
+            fnv1a64(b"abc", FNV_OFFSET_BASIS),
+            fnv1a64(b"abd", FNV_OFFSET_BASIS)
+        );
+        assert_ne!(fnv1a64(b"abc", FNV_OFFSET_BASIS), fnv1a64(b"abc", 1));
+    }
+
+    /// 写一个临时固件文件，返回路径（测试结束由调用方删除）。
+    fn write_temp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("catshell-sample-{name}-{}", std::process::id()));
+        std::fs::write(&path, bytes).expect("写入临时固件");
+        path
+    }
+
+    #[tokio::test]
+    async fn sample_stream_covers_both_ends_and_is_stable() {
+        let mut bytes = vec![0u8; RESUME_SAMPLE_WINDOW * 2];
+        bytes[..4].copy_from_slice(b"HEAD");
+        let tail_at = bytes.len() - 4;
+        bytes[tail_at..].copy_from_slice(b"TAIL");
+
+        let base = write_temp("base", &bytes);
+        let source = local_file_stamp(base.to_str().unwrap(), bytes.len() as u64).await;
+        assert!(source.sample.is_some(), "首尾采样应当成功");
+        // 内容相同 → 采样哈希稳定
+        let again = local_file_stamp(base.to_str().unwrap(), bytes.len() as u64).await;
+        assert_eq!(source.sample, again.sample);
+
+        let mut tail_changed = bytes.clone();
+        tail_changed[tail_at..].copy_from_slice(b"T2IL");
+        let tail_path = write_temp("tail", &tail_changed);
+        let tail_stamp =
+            local_file_stamp(tail_path.to_str().unwrap(), tail_changed.len() as u64).await;
+        assert_ne!(
+            source.sample, tail_stamp.sample,
+            "尾部内容变化必须反映到指纹"
+        );
+
+        let mut head_changed = bytes.clone();
+        head_changed[..4].copy_from_slice(b"H2AD");
+        let head_path = write_temp("head", &head_changed);
+        let head_stamp =
+            local_file_stamp(head_path.to_str().unwrap(), head_changed.len() as u64).await;
+        assert_ne!(
+            source.sample, head_stamp.sample,
+            "头部内容变化必须反映到指纹"
+        );
+
+        for path in [base, tail_path, head_path] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn sample_stream_handles_empty_and_sub_window_files() {
+        let empty = write_temp("empty", b"");
+        let empty_stamp = local_file_stamp(empty.to_str().unwrap(), 0).await;
+        assert!(empty_stamp.sample.is_some());
+
+        let small = write_temp("small", b"hello world");
+        let small_stamp = local_file_stamp(small.to_str().unwrap(), 11).await;
+        let other = write_temp("small-other", b"hello worlD");
+        let other_stamp = local_file_stamp(other.to_str().unwrap(), 11).await;
+        assert_ne!(small_stamp.sample, other_stamp.sample);
+
+        for path in [empty, small, other] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

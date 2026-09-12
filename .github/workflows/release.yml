@@ -8,13 +8,19 @@ jobs:
   build-windows:
     name: Build Windows installer
     runs-on: windows-latest
-    env:
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    # 本 job 要用 `gh release create/upload` 写 Release，因此必须有 contents: write；
+    # GITHUB_TOKEN 的作用域仅限本仓库，属于该流程的真实需求。
+    # 真正敏感的是下面的 TAURI_SIGNING_PRIVATE_KEY——它只在需要签名的 step 注入，
+    # 不再作为 job 级 env 暴露给 `npm ci` 等所有 step（审计 S-3）。
+    permissions:
+      contents: write
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify updater signing is configured
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
             throw 'TAURI_SIGNING_PRIVATE_KEY secret is not configured; refusing to build a release without updater signing.'
@@ -23,16 +29,23 @@ jobs:
           if ($conf.plugins.updater.pubkey -like 'REPLACE_WITH*') {
             throw 'tauri.conf.json still contains the placeholder updater pubkey; commit the real signing public key before tagging a release.'
           }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # --ignore-scripts 阻断依赖的 install/postinstall 生命周期脚本；锁文件里只有
+      # macOS 专用的 fsevents 带安装脚本，Windows runner 不受影响（审计 S-3）。
+      - run: npm ci --ignore-scripts
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri
-      - run: npm run tauri build
+      # 唯一需要签名私钥的业务步骤：tauri CLI 从环境变量读取它来签名更新产物。
+      - name: Build signed bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
       - name: Generate updater manifest (latest.json)
         shell: pwsh
         run: |
@@ -59,14 +72,14 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 6 | Set-Content -Path latest.json -Encoding utf8
           Write-Output "::notice::latest.json generated for $version"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CatShell-windows-installers
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CatShell-updater
           path: |

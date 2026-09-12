@@ -10,6 +10,7 @@ import { getSessionLog, useSessions } from '../../store/sessions'
 import { TerminalSettings, useSettings } from '../../store/settings'
 import { TerminalLineGuard, type GuardDecision } from '../../utils/lineGuard'
 import { TerminalAiPopover } from './TerminalAiPopover'
+import { useEffectiveMode } from './useEffectiveMode'
 import { useT } from '../../i18n'
 import { DARK_TERM_THEME, LIGHT_TERM_THEME } from './terminalTheme'
 
@@ -25,21 +26,6 @@ const BASE_OPTIONS = {
   lineHeight: 1.25,
   convertEol: false,
   allowProposedApi: false
-}
-
-function useEffectiveMode(): 'light' | 'dark' {
-  const mode = useSettings((state) => state.theme.mode)
-  const [systemLight, setSystemLight] = useState(
-    () => window.matchMedia('(prefers-color-scheme: light)').matches
-  )
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: light)')
-    const listener = () => setSystemLight(media.matches)
-    media.addEventListener('change', listener)
-    return () => media.removeEventListener('change', listener)
-  }, [])
-  if (mode === 'auto') return systemLight ? 'light' : 'dark'
-  return mode
 }
 
 export function TerminalPane({ id, active, splitRole = 'none' }: Props) {

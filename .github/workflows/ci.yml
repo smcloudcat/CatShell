@@ -5,17 +5,28 @@ on:
     branches: [main]
   pull_request:
 
+# 第三方 action 一律固定到 commit SHA（审计 X-5 / S-3）：@v4 这类浮动标签
+# 随时可能被上游改写，一旦上游被投毒，工作流会在无感知的情况下执行新代码。
+# 注释里保留可读的原始 ref，升级时用 `git ls-remote <repo> refs/tags/<ref>` 取新 SHA。
 jobs:
   frontend:
     name: Frontend (lint / test / build)
     runs-on: windows-latest
+    # 显式声明最小权限：默认 token 权限过宽，被投毒的依赖或 action 可直接滥用。
+    permissions:
+      contents: read
+    # 默认单 job 上限 360 分钟，卡死的 job 会长期占用 runner。
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # --ignore-scripts 阻断依赖的 install/postinstall 生命周期脚本。
+      # 本项目 package-lock.json 中只有 macOS 专用的 fsevents 带安装脚本，
+      # Windows runner 上不会被安装，因此禁用脚本不影响构建。
+      - run: npm ci --ignore-scripts
       - name: Audit dependencies (high and above)
         run: npm audit --audit-level=high
       - run: npm run lint
@@ -29,12 +40,15 @@ jobs:
   rust:
     name: Rust (fmt / clippy / check / test)
     runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri
       - run: cargo fmt --check
@@ -57,12 +71,13 @@ jobs:
     permissions:
       contents: read
       checks: write
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # 只扫描 Cargo.lock，不编译，因此用 ubuntu 跑更快。
       # 该仓库没有浮动的 v2 标签，必须固定到具体版本。
       # 忽略项与 src-tauri/.cargo/audit.toml 保持一致（该文件含完整理由）。
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: src-tauri

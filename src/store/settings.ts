@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { ThemeConfig, DEFAULT_THEME, withModeBackgrounds } from '../types/theme'
+import { sanitizeMonitorThresholds, sanitizeTheme } from '../utils/settingsSchema'
 import { logger } from '../utils/logger'
 import { aiKeyLoad, aiKeySave } from '../api/ai'
 
@@ -23,6 +24,36 @@ export const VAULT_AUTO_LOCK_OPTIONS = [0, 5, 15, 30]
 export const DEFAULT_VAULT_AUTO_LOCK_MINUTES = 15
 
 let initializationPromise: Promise<void> | null = null
+
+/**
+ * `app-settings.json` 的写入串行化（审计 P-3）。
+ *
+ * `load → set → save` 不是原子操作：并发调用时，后一次 `load` 可能读到前一次尚未
+ * `save` 的旧快照，于是把对方的改动整体覆盖回去。外观模式按钮原本每次点击都立即落盘，
+ * 快速连点会让最终写入顺序不确定（最终值未必是最后一次点击的那个）。
+ *
+ * 所有对该文件的写入共用一条 Promise 链，保证「最后一次调用的值 = 最终落盘值」。
+ * 链上的任务自行吞掉异常，避免一次失败让后续写入全部短路。
+ */
+let storeWriteChain: Promise<void> = Promise.resolve()
+
+function writeSetting<T>(key: string, value: T): Promise<void> {
+  storeWriteChain = storeWriteChain.then(async () => {
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(key, value)
+      await store.save()
+    } catch (err) {
+      logger.warn(`保存设置 ${key} 失败（非 Tauri 环境），回退到 localStorage`, err)
+      try {
+        localStorage.setItem(key, JSON.stringify(value))
+      } catch {
+        /* 本地存储也不可用时放弃：只影响下次启动的默认值 */
+      }
+    }
+  })
+  return storeWriteChain
+}
 
 export interface MonitorThresholds {
   enabled: boolean
@@ -178,14 +209,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   saveAi: async () => {
     const ai = get().ai
     // apiKey 只进系统凭据管理器（审计 S-2），app-settings.json / localStorage 一律写空。
-    const persistable = { ...ai, apiKey: '' }
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(AI_KEY, persistable)
-      await store.save()
-    } catch {
-      localStorage.setItem(AI_KEY, JSON.stringify(persistable))
-    }
+    await writeSetting(AI_KEY, { ...ai, apiKey: '' })
     try {
       await aiKeySave(ai.apiKey)
     } catch (err) {
@@ -197,15 +221,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set((state) => ({ theme: withModeBackgrounds({ ...state.theme, mode }, mode) })),
   resetTheme: () => set({ theme: { ...DEFAULT_THEME, gradient: { ...DEFAULT_THEME.gradient } } }),
   saveTheme: async () => {
-    const { theme } = get()
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(THEME_KEY, theme)
-      await store.save()
-    } catch (err) {
-      logger.warn('保存主题设置失败（非 Tauri 环境）', err)
-      localStorage.setItem(THEME_KEY, JSON.stringify(theme))
-    }
+    // 串行化写入（审计 P-3）：快速连点外观模式时，最终落盘值必为最后一次点击。
+    await writeSetting(THEME_KEY, get().theme)
   },
   replaceTheme: (theme) => set({ theme: { ...theme, gradient: { ...theme.gradient } } }),
   setMonitorThresholds: (patch) =>
@@ -219,133 +236,53 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
     })),
   saveMonitorThresholds: async () => {
-    const thresholds = get().monitorThresholds
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(MONITOR_THRESHOLDS_KEY, thresholds)
-      await store.save()
-    } catch {
-      localStorage.setItem(MONITOR_THRESHOLDS_KEY, JSON.stringify(thresholds))
-    }
+    await writeSetting(MONITOR_THRESHOLDS_KEY, get().monitorThresholds)
   },
   toggleSidebar: () => {
     const next = !get().sidebarCollapsed
     set({ sidebarCollapsed: next })
-    void (async () => {
-      try {
-        const store = await load(STORE_FILE)
-        await store.set(SIDEBAR_COLLAPSED_KEY, next)
-        await store.save()
-      } catch {
-        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify(next))
-      }
-    })()
+    void writeSetting(SIDEBAR_COLLAPSED_KEY, next)
   },
   setVaultAutoLockMinutes: (minutes) =>
     set({ vaultAutoLockMinutes: VAULT_AUTO_LOCK_OPTIONS.includes(minutes) ? minutes : DEFAULT_VAULT_AUTO_LOCK_MINUTES }),
   saveVaultAutoLockMinutes: async () => {
-    const minutes = get().vaultAutoLockMinutes
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(VAULT_AUTO_LOCK_KEY, minutes)
-      await store.save()
-    } catch {
-      localStorage.setItem(VAULT_AUTO_LOCK_KEY, JSON.stringify(minutes))
-    }
+    await writeSetting(VAULT_AUTO_LOCK_KEY, get().vaultAutoLockMinutes)
   },
   setVaultBlurLock: (enabled) => set({ vaultBlurLock: enabled }),
   saveVaultBlurLock: async () => {
-    const enabled = get().vaultBlurLock
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(VAULT_BLUR_LOCK_KEY, enabled)
-      await store.save()
-    } catch {
-      localStorage.setItem(VAULT_BLUR_LOCK_KEY, JSON.stringify(enabled))
-    }
+    await writeSetting(VAULT_BLUR_LOCK_KEY, get().vaultBlurLock)
   },
   setKnownHostsMode: (mode) => set({ knownHostsMode: mode === 'appdata' ? 'appdata' : 'openssh' }),
   saveKnownHostsMode: async () => {
-    const mode = get().knownHostsMode
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(KNOWN_HOSTS_MODE_KEY, mode)
-      await store.save()
-    } catch {
-      localStorage.setItem(KNOWN_HOSTS_MODE_KEY, JSON.stringify(mode))
-    }
+    await writeSetting(KNOWN_HOSTS_MODE_KEY, get().knownHostsMode)
   },
   setTerminal: (patch) =>
     set((state) => ({ terminal: normalizeTerminalSettings({ ...state.terminal, ...patch }) })),
   saveTerminal: async () => {
-    const terminal = get().terminal
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(TERMINAL_KEY, terminal)
-      await store.save()
-    } catch {
-      localStorage.setItem(TERMINAL_KEY, JSON.stringify(terminal))
-    }
+    await writeSetting(TERMINAL_KEY, get().terminal)
   },
   setMonitorIntervalSeconds: (seconds) =>
     set({ monitorIntervalSeconds: MONITOR_INTERVAL_OPTIONS.includes(seconds) ? seconds : DEFAULT_MONITOR_INTERVAL_SECONDS }),
   saveMonitorIntervalSeconds: async () => {
-    const seconds = get().monitorIntervalSeconds
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(MONITOR_INTERVAL_KEY, seconds)
-      await store.save()
-    } catch {
-      localStorage.setItem(MONITOR_INTERVAL_KEY, JSON.stringify(seconds))
-    }
+    await writeSetting(MONITOR_INTERVAL_KEY, get().monitorIntervalSeconds)
   },
   setSessionPanelCollapsed: (panel, collapsed) => {
     const current = get().sessionPanels
     const next: SessionPanelState = { ...current, [`${panel}Collapsed`]: collapsed }
     set({ sessionPanels: next })
-    return (async () => {
-      try {
-        const store = await load(STORE_FILE)
-        await store.set(SESSION_PANELS_KEY, next)
-        await store.save()
-      } catch {
-        localStorage.setItem(SESSION_PANELS_KEY, JSON.stringify(next))
-      }
-    })()
+    return writeSetting(SESSION_PANELS_KEY, next)
   },
   setLastView: (view) => {
     set({ lastView: view })
-    void (async () => {
-      try {
-        const store = await load(STORE_FILE)
-        await store.set(LAST_VIEW_KEY, view)
-        await store.save()
-      } catch {
-        localStorage.setItem(LAST_VIEW_KEY, JSON.stringify(view))
-      }
-    })()
+    void writeSetting(LAST_VIEW_KEY, view)
   },
   setCloseToTray: (enabled) => set({ closeToTray: enabled }),
   saveCloseToTray: async () => {
-    const enabled = get().closeToTray
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(CLOSE_TO_TRAY_KEY, enabled)
-      await store.save()
-    } catch {
-      localStorage.setItem(CLOSE_TO_TRAY_KEY, JSON.stringify(enabled))
-    }
+    await writeSetting(CLOSE_TO_TRAY_KEY, get().closeToTray)
   },
   setLanguage: (language) => set({ language: LANGUAGE_OPTIONS.includes(language) ? language : DEFAULT_LANGUAGE }),
   saveLanguage: async () => {
-    const language = get().language
-    try {
-      const store = await load(STORE_FILE)
-      await store.set(LANGUAGE_KEY, language)
-      await store.save()
-    } catch {
-      localStorage.setItem(LANGUAGE_KEY, JSON.stringify(language))
-    }
+    await writeSetting(LANGUAGE_KEY, get().language)
   },
   init: async () => {
     if (get().ready) return
@@ -371,10 +308,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const savedLanguage = await store.get<Language>(LANGUAGE_KEY)
       const savedAi = await store.get<Partial<AiSettings>>(AI_KEY)
       if (saved && !isLegacyTheme(saved)) {
-        set({ theme: { ...get().theme, ...saved, gradient: { ...get().theme.gradient, ...saved.gradient } } })
+        // 启动加载用宽松修复（审计 S-4）：磁盘文件被写坏/篡改时逐字段回落默认，
+        // 避免 NaN / Infinity 注入进样式与阈值比较逻辑。
+        set({ theme: sanitizeTheme(saved, get().theme) })
       }
       if (thresholds) {
-        set({ monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS, ...thresholds } })
+        set({ monitorThresholds: sanitizeMonitorThresholds(thresholds, DEFAULT_MONITOR_THRESHOLDS) })
       }
       if (typeof sidebarCollapsed === 'boolean') {
         set({ sidebarCollapsed })
@@ -422,14 +361,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         try {
           const parsed: unknown = JSON.parse(saved)
           if (!isLegacyTheme(parsed)) {
-            const legacy = parsed as ThemeConfig
-            set({
-              theme: {
-                ...get().theme,
-                ...legacy,
-                gradient: { ...get().theme.gradient, ...(legacy.gradient ?? {}) }
-              }
-            })
+            set({ theme: sanitizeTheme(parsed, get().theme) })
           }
         } catch {
           /* ignore corrupt stored theme */
@@ -437,9 +369,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }
       if (savedThresholds) {
         try {
-          // JSON.parse 返回 any，断言成 Partial 后展开；备份恢复路径另有 isMonitorThresholds 校验
-          const parsed = JSON.parse(savedThresholds) as Partial<MonitorThresholds>
-          set({ monitorThresholds: { ...DEFAULT_MONITOR_THRESHOLDS, ...parsed } })
+          const parsed: unknown = JSON.parse(savedThresholds)
+          set({ monitorThresholds: sanitizeMonitorThresholds(parsed, DEFAULT_MONITOR_THRESHOLDS) })
         } catch {
           /* ignore corrupt stored thresholds */
         }
@@ -514,12 +445,24 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
       const savedCloseToTrayRaw = localStorage.getItem(CLOSE_TO_TRAY_KEY)
-      if (savedCloseToTrayRaw === 'true' || savedCloseToTrayRaw === 'false') {
-        set({ closeToTray: savedCloseToTrayRaw === 'true' })
+      if (savedCloseToTrayRaw !== null) {
+        try {
+          const parsed: unknown = JSON.parse(savedCloseToTrayRaw)
+          if (typeof parsed === 'boolean') set({ closeToTray: parsed })
+        } catch {
+          /* ignore corrupt stored close-to-tray flag */
+        }
       }
+      // 写入统一走 JSON.stringify（writeSetting），读回也必须 JSON.parse：
+      // 原先直接比对裸 'zh-CN' 永远匹配不上带引号的 `"zh-CN"`，语言回落形同虚设。
       const savedLanguageRaw = localStorage.getItem(LANGUAGE_KEY)
-      if (savedLanguageRaw === 'zh-CN' || savedLanguageRaw === 'en-US') {
-        set({ language: savedLanguageRaw })
+      if (savedLanguageRaw !== null) {
+        try {
+          const parsed: unknown = JSON.parse(savedLanguageRaw)
+          if (parsed === 'zh-CN' || parsed === 'en-US') set({ language: parsed })
+        } catch {
+          /* ignore corrupt stored language */
+        }
       }
       // AI 设置兜底读回（审计 R-5）：saveAi 在非 Tauri 环境只写 localStorage，
       // 此前 init 没读它，导致浏览器预览模式下 AI 配置每次启动丢失。

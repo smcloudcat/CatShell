@@ -61,8 +61,14 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-/** 读取面板尺寸偏好；非法或缺失时回退到默认值。 */
-export function readSessionSize(key: string, fallback: number): number {
-  const value = Number(localStorage.getItem(key))
-  return Number.isFinite(value) && value > 0 ? value : fallback
+/**
+ * 读取面板尺寸偏好；非法或缺失时回退到默认值，并**按当前窗口夹紧**（审计 P-2）。
+ *
+ * 早期只校验 `> 0`：在大屏拖出的大尺寸存盘后，换到小窗口/分屏时会直接沿用过大的
+ * 历史值，把终端区域挤没。这里读取即收敛到 [min, max]。
+ */
+export function readSessionSize(key: string, fallback: number, min: number, max: number): number {
+  const stored = Number(localStorage.getItem(key))
+  const base = Number.isFinite(stored) && stored > 0 ? stored : fallback
+  return clamp(base, min, max)
 }

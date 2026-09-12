@@ -119,15 +119,27 @@ describe('readSessionSize', () => {
     vi.stubGlobal('localStorage', { getItem: () => value })
   }
 
-  it('returns the stored value when it is a positive finite number', () => {
+  it('returns the stored value when it is a positive finite number within bounds', () => {
     withStorage('420')
-    expect(readSessionSize('k', 320)).toBe(420)
+    expect(readSessionSize('k', 320, 200, 600)).toBe(420)
   })
 
   it('falls back for missing, non-numeric, zero and negative values', () => {
     for (const value of [null, 'abc', '0', '-10', '']) {
       withStorage(value)
-      expect(readSessionSize('k', 320)).toBe(320)
+      expect(readSessionSize('k', 320, 200, 600)).toBe(320)
     }
+  })
+
+  it('clamps oversized and undersized stored values to the window bounds', () => {
+    withStorage('9000')
+    expect(readSessionSize('k', 320, 200, 600)).toBe(600)
+    withStorage('10')
+    expect(readSessionSize('k', 320, 200, 600)).toBe(200)
+  })
+
+  it('clamps the fallback itself into bounds', () => {
+    withStorage(null)
+    expect(readSessionSize('k', 9000, 200, 600)).toBe(600)
   })
 })

@@ -2,7 +2,8 @@ import { ChangeEvent } from 'react'
 import { Icon } from '../../components/Icon'
 import { HostProfile } from '../../types/host'
 import { CommandSnippet } from '../../types/snippet'
-import { isSafeBackgroundImage, normalizeBackgroundImagePath, ThemeConfig } from '../../types/theme'
+import { ThemeConfig } from '../../types/theme'
+import { isMonitorThresholds, normalizeTheme } from '../../utils/settingsSchema'
 import { AppError, ERROR_CODES } from '../../types/errors'
 import { useHosts } from '../../store/hosts'
 import { useSnippets } from '../../store/snippets'
@@ -21,62 +22,8 @@ interface BackupFile {
   monitorThresholds: MonitorThresholds
 }
 
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
-
-/** 校验并归一化主题：兼容旧版（modeAuto + 字面量 mode）与新版（auto/light/dark）结构。
- *  旧版 modeAuto 的语义是按背景亮度推导出的字面量 mode，保留该字面量即可还原当时的实际外观。 */
-function normalizeTheme(value: unknown): ThemeConfig | null {
-  if (!value || typeof value !== 'object') return null
-  const theme = value as Partial<ThemeConfig>
-  // 旧备份里可能存着反斜杠的 Windows 路径：先规范化再校验，导入后才可用。
-  const backgroundImage =
-    typeof theme.backgroundImage === 'string'
-      ? normalizeBackgroundImagePath(theme.backgroundImage)
-      : theme.backgroundImage ?? null
-  if (
-    typeof theme.bgOpacity !== 'number' || !Number.isFinite(theme.bgOpacity) ||
-    typeof theme.blurRadius !== 'number' || !Number.isFinite(theme.blurRadius) ||
-    typeof theme.borderRadius !== 'number' || !Number.isFinite(theme.borderRadius) ||
-    typeof theme.borderOpacity !== 'number' || !Number.isFinite(theme.borderOpacity) ||
-    (theme.backgroundType !== 'gradient' && theme.backgroundType !== 'solid' && theme.backgroundType !== 'image') ||
-    typeof theme.solidColor !== 'string' || !HEX_COLOR.test(theme.solidColor) ||
-    !theme.gradient ||
-    typeof theme.gradient.from !== 'string' || !HEX_COLOR.test(theme.gradient.from) ||
-    typeof theme.gradient.to !== 'string' || !HEX_COLOR.test(theme.gradient.to) ||
-    typeof theme.gradient.angle !== 'number' || !Number.isFinite(theme.gradient.angle) ||
-    (backgroundImage !== null && (typeof backgroundImage !== 'string' || !isSafeBackgroundImage(backgroundImage))) ||
-    typeof theme.accentColor !== 'string' || !HEX_COLOR.test(theme.accentColor) ||
-    (theme.mode !== 'auto' && theme.mode !== 'light' && theme.mode !== 'dark')
-  ) {
-    return null
-  }
-  return {
-    mode: theme.mode,
-    accentColor: theme.accentColor,
-    backgroundType: theme.backgroundType,
-    solidColor: theme.solidColor,
-    gradient: {
-      from: theme.gradient.from,
-      to: theme.gradient.to,
-      angle: Math.min(360, Math.max(0, theme.gradient.angle))
-    },
-    backgroundImage,
-    bgOpacity: Math.min(1, Math.max(0.1, theme.bgOpacity)),
-    blurRadius: Math.round(Math.min(20, Math.max(2, theme.blurRadius))),
-    borderRadius: Math.round(Math.min(24, Math.max(0, theme.borderRadius))),
-    borderOpacity: Math.min(0.4, Math.max(0.05, theme.borderOpacity))
-  }
-}
-
-function isMonitorThresholds(value: unknown): value is MonitorThresholds {
-  if (!value || typeof value !== 'object') return false
-  const thresholds = value as Partial<MonitorThresholds>
-  return typeof thresholds.enabled === 'boolean' &&
-    typeof thresholds.cpuPercent === 'number' && thresholds.cpuPercent >= 1 && thresholds.cpuPercent <= 100 &&
-    typeof thresholds.memoryPercent === 'number' && thresholds.memoryPercent >= 1 && thresholds.memoryPercent <= 100 &&
-    typeof thresholds.diskPercent === 'number' && thresholds.diskPercent >= 1 && thresholds.diskPercent <= 100
-}
-
+// 主题与阈值的校验/归一化统一收敛在 utils/settingsSchema（审计 S-4），
+// 备份导入沿用其中的**严格**版 normalizeTheme / isMonitorThresholds。
 export function BackupPanel() {
   const t = useT()
   const hosts = useHosts((state) => state.hosts)

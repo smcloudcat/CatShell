@@ -128,6 +128,16 @@ function bytesFromChannel(data: unknown): Uint8Array {
 // so SSH events are subscribed exactly once.
 let initializationPromise: Promise<void> | null = null
 
+/**
+ * 进行中的 `sshConnect` 计数（审计 B-10）。
+ *
+ * `updateStatus` 对「本地不存在的会话」需要兜底登记，用来覆盖「Rust 侧先推
+ * `connecting`、`sshConnect` 的 Promise 后返回」这个窄竞争窗口。窗口之外的事件
+ * （例如刚 closeTab 后迟到的 `connecting`）一律不能登记，否则会凭空造出没有
+ * name/host/连接参数的幽灵标签，虚高会话计数且无法重连收敛。
+ */
+let pendingOpens = 0
+
 /** 为单个会话建立终端输出 IPC Channel（原始字节）。
  *  sshConnect 的 Promise resolve 之前 Rust 侧就可能开始推流（banner/MOTD），
  *  此时真实 id 未知：字节先缓冲在闭包队列，id 回填后 flush（审计 P-5），
@@ -220,8 +230,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (!info) {
       // 本地已删除的会话（如刚被 closeTab）迟到的状态事件不能复活成幽灵标签：
       // 那样的标签没有 name/host，requests 里也没有连接参数，点「重新连接」
-      // 只会报「缺少可复用的连接参数」。只有连接过程中的事件（open() 尚未
-      // 登记时的竞争窗口）才需要兜底登记，断开/关闭事件一律忽略。
+      // 只会报「缺少可复用的连接参数」。
+      //
+      // 兜底登记只为覆盖一个很窄的竞争窗口：Rust 侧可能在 `sshConnect` 的 Promise
+      // 返回前就推送 `connecting`/`connected`（见 createOutputChannel 的说明），
+      // 此时本地还没有该会话。因此除「确有 open()/reconnect() 在途」外一律不登记
+      // （审计 B-10）——否则迟到的 `connecting` 照样能凭空造出幽灵标签。
+      if (pendingOpens === 0) return
       if (event.status !== 'connecting' && event.status !== 'connected') return
       set((s) => ({
         sessions: {
@@ -287,11 +302,14 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const idBox: { id: number } = { id: 0 }
     const output = createOutputChannel(idBox)
     let id: number
+    pendingOpens += 1
     try {
       id = await sshConnect(request, output.channel)
     } catch (error) {
       recordAudit('session.connect', `${request.host}:${request.port}`, 'failure', '连接请求失败')
       throw error
+    } finally {
+      pendingOpens -= 1
     }
     idBox.id = id
     output.flush()
@@ -326,7 +344,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (!request || !info) throw new AppError(ERROR_CODES.SESSION_MISSING_CONNECTION_PARAMS)
     const idBox: { id: number } = { id: 0 }
     const output = createOutputChannel(idBox)
-    const newId = await sshConnect(request, output.channel)
+    let newId: number
+    pendingOpens += 1
+    try {
+      newId = await sshConnect(request, output.channel)
+    } finally {
+      pendingOpens -= 1
+    }
     idBox.id = newId
     output.flush()
     recordAudit('session.connect', `${info.name} (${info.host}:${info.port})`, 'info', '从已断开标签重新连接')

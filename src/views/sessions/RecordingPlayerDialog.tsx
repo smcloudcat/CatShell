@@ -10,6 +10,7 @@ import {
   playbackTimeline
 } from '../../utils/asciicast'
 import { DARK_TERM_THEME, LIGHT_TERM_THEME } from './terminalTheme'
+import { useEffectiveMode } from './useEffectiveMode'
 
 interface Props {
   fileName: string
@@ -25,7 +26,9 @@ const SPEEDS = [1, 2, 4] as const
  */
 export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
   const t = useT()
-  const themeMode = useSettings((state) => state.theme.mode)
+  // 复用主终端的口径解析 `auto`（审计 B-11）：直接用原始 mode 时，跟随系统 +
+  // 浅色系统会拿到深色终端配色，而 CSS 已按 data-mode=light 把背景刷白，几乎读不了。
+  const effectiveMode = useEffectiveMode()
   const fontFamily = useSettings((state) => state.terminal.fontFamily)
   const fontSize = useSettings((state) => state.terminal.fontSize)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -60,7 +63,7 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
       scrollback: 5000,
       fontFamily,
       fontSize,
-      theme: themeMode === 'light' ? LIGHT_TERM_THEME : DARK_TERM_THEME
+      theme: effectiveMode === 'light' ? LIGHT_TERM_THEME : DARK_TERM_THEME
     })
     term.open(container)
     termRef.current = term
@@ -75,6 +78,12 @@ export function RecordingPlayerDialog({ fileName, doc, onClose }: Props) {
     }
     // 字体/主题等设置项变更时不重建终端，保持与主终端一致的行为由主面板负责
   }, [])
+
+  // 弹窗打开期间切换深浅模式时同步终端配色（不重建实例，保留当前回放进度）。
+  useEffect(() => {
+    const term = termRef.current
+    if (term) term.options.theme = effectiveMode === 'light' ? LIGHT_TERM_THEME : DARK_TERM_THEME
+  }, [effectiveMode])
 
   const clearAndReplay = (upToIndex: number, withDelay: boolean) => {
     const term = termRef.current

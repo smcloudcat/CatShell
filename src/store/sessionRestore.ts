@@ -64,20 +64,12 @@ export const useSessionRestore = create<SessionRestoreState>((set, get) => ({
 
     // 跟踪会话标签变化并持久化轮廓（hostId + 名称，无凭据）。
     // 这里用 subscribe 而不是让 sessions store 反向调用，保持 store 间单向依赖。
-    useSessions.subscribe((state, prev) => {
-      if (
-        state.order === prev.order &&
-        state.sessions === prev.sessions &&
-        state.hostIds === prev.hostIds
-      ) {
-        return
-      }
-      const tabs: RestorableTab[] = []
-      for (const id of state.order) {
-        const hostId = state.hostIds[id]
-        if (!hostId) continue
-        tabs.push({ hostId, name: state.sessions[id]?.name ?? '' })
-      }
+    //
+    // 判重按**派生出的 tabs 内容**而非 store 引用（审计 P-7）：每次状态事件都会新建
+    // `sessions` 对象，按引用比较会让纯状态更新（连接/断开/重连）也触发一次落盘。
+    useSessions.subscribe((state) => {
+      const tabs = deriveTabs(state)
+      if (sameTabs(tabs, get().lastTabs)) return
       set({ lastTabs: tabs })
       void persistTabs(tabs)
     })
@@ -135,6 +127,31 @@ export const useSessionRestore = create<SessionRestoreState>((set, get) => ({
     await persistTabs([])
   }
 }))
+
+/** 从会话 store 快照派生可恢复的标签轮廓（跳过没有 hostId 的临时会话）。 */
+function deriveTabs(state: {
+  order: number[]
+  hostIds: Record<number, string>
+  sessions: Record<number, { name?: string } | undefined>
+}): RestorableTab[] {
+  const tabs: RestorableTab[] = []
+  for (const id of state.order) {
+    const hostId = state.hostIds[id]
+    if (!hostId) continue
+    tabs.push({ hostId, name: state.sessions[id]?.name ?? '' })
+  }
+  return tabs
+}
+
+/** 内容比较：hostId 与显示名都相同才算没变（审计 P-7）。 */
+function sameTabs(a: RestorableTab[], b: RestorableTab[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((tab, index) => {
+    const other = b[index]
+    if (!other) return false
+    return tab.hostId === other.hostId && tab.name === other.name
+  })
+}
 
 async function persistTabs(tabs: RestorableTab[]) {
   try {

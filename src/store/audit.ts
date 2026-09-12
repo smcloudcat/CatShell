@@ -101,3 +101,14 @@ export const useAudit = create<AuditState>((set, get) => ({
 export function recordAudit(action: AuditAction, target: string, result: AuditEntry['result'], detail: string) {
   void useAudit.getState().record(action, target, result, detail)
 }
+
+/**
+ * 立即落盘（取消去抖），供退出/关闭窗口前调用（审计 P-8）。
+ *
+ * 去抖窗口（1s）内的记录原本会随进程退出一起丢失，而其中恰恰包含「断开」「关闭」
+ * 这类最需要留痕的动作。退出路径 `await flushAudit()` 即可确保写入完成。
+ */
+export function flushAudit(): Promise<void> {
+  cancelPersist()
+  return persist(useAudit.getState().entries)
+}

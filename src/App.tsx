@@ -20,7 +20,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { PaletteCommand } from './utils/commandPalette'
 import { useVault } from './store/vault'
 import { useSnippets } from './store/snippets'
-import { useAudit } from './store/audit'
+import { flushAudit, useAudit } from './store/audit'
 import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
 import { useT } from './i18n'
 import {
@@ -209,6 +209,7 @@ function App() {
     void appWindow
       .onCloseRequested(async (event) => {
         if (useSettings.getState().closeToTray) {
+          // 隐藏到托盘：进程仍在，审计去抖定时器会照常落盘，无需干预。
           event.preventDefault()
           await appWindow.hide()
           return
@@ -217,7 +218,13 @@ function App() {
         const activeCount = Object.values(sessions).filter(
           (session) => session.status === 'connected' || session.status === 'connecting' || session.status === 'reconnecting'
         ).length
-        if (!activeCount) return
+        if (!activeCount) {
+          // 真正退出：先 flush 待写的审计记录（审计 P-8），再放行关闭。
+          event.preventDefault()
+          await flushAudit()
+          await appWindow.destroy()
+          return
+        }
         event.preventDefault()
         const accepted = await confirmDialog({
           title: t('退出 CatShell'),
@@ -225,7 +232,10 @@ function App() {
           confirmLabel: t('退出并断开'),
           danger: true
         })
-        if (accepted) await appWindow.destroy()
+        if (accepted) {
+          await flushAudit()
+          await appWindow.destroy()
+        }
       })
       .then((dispose) => {
         if (disposed) dispose()
