@@ -963,6 +963,22 @@ async fn recording_delete(app: AppHandle, name: String) -> Result<(), String> {
         .map_err(|error| format!("删除任务异常: {error}"))?
 }
 
+/// 只对用户明确选择的本地文件放行 asset 协议读取（自定义背景图）。
+///
+/// `tauri.conf.json` 的 assetProtocol scope 保持为空：webview 只读得到显式授权过的
+/// 单个文件，而不是整块磁盘（审计 S-2）。前端在选图后、以及启动时恢复已保存背景图
+/// 前调用本命令。
+#[tauri::command]
+fn allow_asset_file(app: AppHandle, path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("路径为空".to_string());
+    }
+    app.asset_protocol_scope()
+        .allow_file(trimmed)
+        .map_err(|error| format!("授权背景图片读取失败: {error}"))
+}
+
 #[tauri::command]
 async fn ssh_config_parse() -> Result<Vec<SshConfigEntry>, String> {
     let path = ssh_manager::ssh_config_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
@@ -1105,6 +1121,7 @@ pub fn run() {
             recording_list,
             recording_read,
             recording_delete,
+            allow_asset_file,
             ssh_config_parse,
             keypair_generate,
             keypair_list,

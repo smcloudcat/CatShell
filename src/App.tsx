@@ -10,7 +10,7 @@ import { useSessions } from './store/sessions'
 import { useHosts } from './store/hosts'
 import { useSessionRestore } from './store/sessionRestore'
 import { useLaunchIntent } from './store/launchIntent'
-import { subscribeTrayQuickConnect, traySetQuickConnects } from './api/ssh'
+import { subscribeTrayQuickConnect, traySetQuickConnects, allowAssetFile } from './api/ssh'
 import { findProfileByName } from './utils/launchIntent'
 import { errorText } from './i18n/errors'
 import { useTransferQueue } from './store/transferQueue'
@@ -464,6 +464,8 @@ function App() {
         if (imagePath && isSafeBackgroundImage(imagePath)) {
           // 本地路径必须走 Tauri asset 协议（tauri.conf.json 已启用 assetProtocol），
           // 裸路径放进 url() 会被 webview 当相对地址而加载失败。
+          // scope 为空、只按文件动态授权，且授权是运行时状态，每次启动都要重新申请（审计 S-2）。
+          void allowAssetFile(imagePath).catch(() => undefined)
           bg.style.setProperty('--app-bg-image', `url("${convertFileSrc(imagePath)}")`)
         } else {
           bg.style.removeProperty('--app-bg-image')

@@ -314,6 +314,21 @@ pub fn upsert_host_blocks(content: &str, drafts: &[HostConfigDraft]) -> (String,
     (result, removed)
 }
 
+/// SSH config 字段必须是**不含控制字符的单行文本**。
+///
+/// `Host` 模式、`HostName`、`User`、`IdentityFile` 都会被原样拼进 `~/.ssh/config`，
+/// 一旦含 `\n` / `\t` 就能注入新的指令行（例如 `Host *\n  ProxyCommand ...`），
+/// 把「写回主机配置」升级为任意命令执行。主机档案可以从不可信文件导入，因此
+/// 这里必须显式拒绝（审计 S-1）。
+fn assert_plain_config_value(label: &str, value: &str) -> Result<(), String> {
+    if value.chars().any(char::is_control) {
+        return Err(format!(
+            "{label}包含非法字符（不允许换行、制表符等控制字符）"
+        ));
+    }
+    Ok(())
+}
+
 /// 把主机草稿写回 `~/.ssh/config`：先备份到 `.catshell-bak`，经 `.tmp` 临时文件
 /// 原子替换（避免写一半崩溃留下残缺配置）。返回 (替换块数, 写入块数)。
 pub fn write_ssh_config(drafts: &[HostConfigDraft]) -> Result<(usize, usize), String> {
@@ -336,6 +351,13 @@ fn write_ssh_config_to(path: &Path, drafts: &[HostConfigDraft]) -> Result<(usize
         }
         if draft.hostname.trim().is_empty() {
             return Err(format!("主机「{}」缺少地址", draft.name));
+        }
+        // 控制字符注入面（审计 S-1）：四个字段都会原样进 config，逐一校验。
+        assert_plain_config_value("主机名", name)?;
+        assert_plain_config_value("主机地址", draft.hostname.trim())?;
+        assert_plain_config_value("用户名", draft.user.trim())?;
+        if let Some(identity) = draft.identity_file.as_deref() {
+            assert_plain_config_value("私钥路径", identity.trim())?;
         }
     }
     let original = if path.exists() {

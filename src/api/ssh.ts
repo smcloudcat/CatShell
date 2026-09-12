@@ -163,6 +163,16 @@ export function recordingDelete(name: string): Promise<void> {
   return invoke<void>('recording_delete', { name })
 }
 
+/**
+ * 只对用户明确选择的本地文件放行 asset 协议读取（自定义背景图）。
+ *
+ * assetProtocol 的静态 scope 保持为空，webview 因此读不到整块磁盘（审计 S-2）；
+ * 授权是运行时状态，选图后与每次启动恢复背景图前都要调用一次。
+ */
+export function allowAssetFile(path: string): Promise<void> {
+  return invoke<void>('allow_asset_file', { path })
+}
+
 export async function sshNetworkDiagnostic(id: number, kind: 'ping' | 'trace', target: string): Promise<NetworkDiagnostic> {
   return invoke<NetworkDiagnostic>('ssh_network_diagnostic', { id, kind, target })
 }

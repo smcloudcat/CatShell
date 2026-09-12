@@ -1,6 +1,8 @@
 import { ThemeConfig, normalizeBackgroundImagePath } from '../../types/theme'
 import { ColorRow, SegRow, SliderRow } from './ThemeControls'
 import { useT } from '../../i18n'
+import { allowAssetFile } from '../../api/ssh'
+import { showToast } from '../../store/ui'
 
 interface Props {
   theme: ThemeConfig
@@ -88,7 +90,7 @@ export function ThemeParams({ theme, setTheme }: Props) {
       {theme.backgroundType === 'image' && (
         <div className="section-tip">
           {t('自定义图片：')}
-          <button className="seg-btn" onClick={() => void pickImage(setTheme)}>
+          <button className="seg-btn" onClick={() => void pickImage(setTheme, t)}>
             {t('选择图片…')}
           </button>
           {theme.backgroundImage && (
@@ -102,14 +104,26 @@ export function ThemeParams({ theme, setTheme }: Props) {
   )
 }
 
-async function pickImage(setTheme: Props['setTheme']) {
-  const { open } = await import('@tauri-apps/plugin-dialog')
-  const file = await open({
-    multiple: false,
-    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]
-  })
-  if (typeof file === 'string') {
-    // 反斜杠路径过不了 CSS/校验（见 normalizeBackgroundImagePath），存储前统一转正斜杠。
-    setTheme({ backgroundImage: normalizeBackgroundImagePath(file) })
+async function pickImage(setTheme: Props['setTheme'], t: ReturnType<typeof useT>) {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const file = await open({
+      multiple: false,
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]
+    })
+    if (typeof file === 'string') {
+      // 反斜杠路径过不了 CSS/校验（见 normalizeBackgroundImagePath），存储前统一转正斜杠。
+      const imagePath = normalizeBackgroundImagePath(file)
+      // assetProtocol scope 为空：这张图需要单独授权，否则预览与主界面都加载不出来（审计 S-2）。
+      try {
+        await allowAssetFile(imagePath)
+      } catch {
+        showToast(t('背景图片授权失败，可能无法显示'), 'error')
+      }
+      setTheme({ backgroundImage: imagePath })
+    }
+  } catch {
+    // 非 Tauri 环境或文件选择器不可用时给出明确反馈，而不是未处理的 Promise（审计 R-9）。
+    showToast(t('无法打开文件选择器'), 'error')
   }
 }

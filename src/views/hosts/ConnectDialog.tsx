@@ -101,7 +101,22 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
           { name: t('所有文件'), extensions: ['*'] }
         ]
       })
-      if (typeof file === 'string') set({ [target]: file })
+      if (typeof file === 'string') {
+        // 第 2 跳及以后的目标形如 `proxyHopKeyPath:<index>`：必须写回
+        // proxyNextHops[index].keyPath，直接 set 只会写进一个没人读的死字段（审计 X-1）。
+        const hopMatch = /^proxyHopKeyPath:(\d+)$/.exec(target)
+        if (hopMatch) {
+          const hopIndex = Number(hopMatch[1])
+          setForm((current) => ({
+            ...current,
+            proxyNextHops: current.proxyNextHops.map((hop, index) =>
+              index === hopIndex ? { ...hop, keyPath: file } : hop
+            )
+          }))
+        } else {
+          set({ [target]: file })
+        }
+      }
     } catch {
       setError(t('无法打开文件选择器'))
     }

@@ -420,7 +420,11 @@ const TRANSFER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 pub struct SftpTransfer {
     pub id: u64,
     pub session_id: u64,
+    /// 本传输实际读写的远端路径：上传指向半成品 `{target}.catshell-part`，
+    /// 下载指向源文件。最终目标路径另存于 `final_path`（审计 B-1）。
     pub path: String,
+    /// 上传的最终目标路径，收尾由半成品 rename 至此；下载为 None。
+    pub final_path: Option<String>,
     pub direction: &'static str,
     pub total: u64,
     pub transferred: AtomicU64,
@@ -441,11 +445,13 @@ impl SftpTransfer {
         total: u64,
         file: russh_sftp::client::fs::File,
         sftp: russh_sftp::client::SftpSession,
+        final_path: Option<String>,
     ) -> Self {
         SftpTransfer {
             id,
             session_id,
             path,
+            final_path,
             direction,
             total,
             transferred: AtomicU64::new(0),
@@ -635,16 +641,37 @@ impl SshManager {
             return Err("文件超过 64 MB 上传限制".to_string());
         }
         let sftp = self.open_sftp_channel(id).await?;
+        // 与流式上传同口径（审计 B-1）：直接 create(目标) 会在写入中途失败时把
+        // 既有远端文件截断，改为先写半成品、成功后再 rename 覆盖。
+        let part_path = format!("{path}{DISK_PART_SUFFIX}");
         let mut file = sftp
-            .create(&path)
+            .create(&part_path)
             .await
             .map_err(|error| format!("创建远程文件失败: {error}"))?;
-        file.write_all(&data)
-            .await
-            .map_err(|error| format!("写入远程文件失败: {error}"))?;
-        file.shutdown()
-            .await
-            .map_err(|error| format!("完成远程文件写入失败: {error}"))?;
+        if let Err(error) = async {
+            file.write_all(&data)
+                .await
+                .map_err(|error| format!("写入远程文件失败: {error}"))?;
+            file.shutdown()
+                .await
+                .map_err(|error| format!("完成远程文件写入失败: {error}"))
+        }
+        .await
+        {
+            let _ = sftp.remove_file(&part_path).await;
+            close_sftp_quietly(&sftp).await;
+            return Err(error);
+        }
+        // 覆盖已存在目标：rename 失败（服务端不允许覆盖）时先删旧再重试，
+        // 此刻半成品内容完整，删旧不会造成数据损失。
+        if sftp.rename(&part_path, &path).await.is_err() {
+            let _ = sftp.remove_file(&path).await;
+            if let Err(error) = sftp.rename(&part_path, &path).await {
+                let _ = sftp.remove_file(&part_path).await;
+                close_sftp_quietly(&sftp).await;
+                return Err(format!("保存远程文件失败: {error}"));
+            }
+        }
         close_sftp_checked(&sftp).await
     }
 
@@ -676,6 +703,14 @@ impl SshManager {
     /// 防止在超大目录树上失控；调用方必须先经过强确认流程。
     pub async fn sftp_remove_dir(&self, id: u64, path: String) -> Result<(), String> {
         let path = validate_sftp_path(path)?;
+        // `.` / `..` 段会让递归删除作用到当前目录之外（`..` 即清空上级目录），
+        // 必须在准入阶段拒绝（审计 B-3）。
+        if path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        {
+            return Err("拒绝删除含 . 或 .. 的路径".to_string());
+        }
         let normalized = path.trim_end_matches('/');
         if normalized.is_empty() || segments_are_empty(normalized) {
             return Err("拒绝删除根目录".to_string());
@@ -827,6 +862,7 @@ impl SshManager {
             total,
             file,
             sftp,
+            None,
         ));
         self.sftp_transfers
             .lock()
@@ -886,19 +922,23 @@ impl SshManager {
         self.reap_idle_transfers(TRANSFER_IDLE_TIMEOUT).await;
         let path = validate_sftp_path(path)?;
         let sftp = self.open_sftp_channel(id).await?;
+        // 先写半成品、收尾再 rename 到目标名：直接 `create(目标)` 会在 begin 阶段就
+        // 截断既有远端文件，中途取消/空闲回收再删除它，旧内容便无副本可恢复（审计 B-1）。
+        let part_path = format!("{path}{DISK_PART_SUFFIX}");
         let file = sftp
-            .create(&path)
+            .create(&part_path)
             .await
             .map_err(|error| format!("创建远程文件失败: {error}"))?;
         let transfer_id = self.next_transfer_id.fetch_add(1, Ordering::SeqCst);
         let transfer = Arc::new(SftpTransfer::new(
             transfer_id,
             id,
-            path,
+            part_path,
             "upload",
             total,
             file,
             sftp,
+            Some(path),
         ));
         self.sftp_transfers
             .lock()
@@ -927,10 +967,16 @@ impl SshManager {
         let file = file_guard
             .as_mut()
             .ok_or_else(|| "传输已结束".to_string())?;
-        tokio::time::timeout(DISK_CHUNK_TIMEOUT, file.write_all(&data))
-            .await
-            .map_err(|_| "写入远程数据超时：网络不稳定，请取消后重试".to_string())?
-            .map_err(|error| format!("写入远程文件失败: {error}"))?;
+        match tokio::time::timeout(DISK_CHUNK_TIMEOUT, file.write_all(&data)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("写入远程文件失败: {error}")),
+            Err(_) => {
+                // 超时后远端写入位置不可知，禁止在同一句柄上按原偏移重试：那会把数据
+                // 写到已推进的位置，产出重复字节或空洞（审计 B-13）。
+                transfer.cancelled.store(true, Ordering::SeqCst);
+                return Err("写入远程数据超时：传输已终止，请取消后重新上传".to_string());
+            }
+        }
         drop(file_guard);
         transfer
             .transferred
@@ -961,7 +1007,8 @@ impl SshManager {
         }
         let mut reaped = 0;
         for transfer in stale {
-            // 与显式取消保持一致：上传的中途文件是真实目标文件，需要清理，避免留下半截内容。
+            // 与显式取消保持一致：上传清理的是半成品 `{target}.catshell-part`（B-1 后
+            // 不再是真实目标文件），下载保留半成品以便续传。
             transfer.cancelled.store(true, Ordering::SeqCst);
             self.close_transfer(&transfer, transfer.direction == "upload")
                 .await;
@@ -987,16 +1034,43 @@ impl SshManager {
             self.close_transfer(&transfer, true).await;
             return Err("传输已取消".to_string());
         }
+        // 前端漏发/少发分片时必须以失败结束，否则远端留下截断文件却被判定成功（审计 B-12）。
+        let transferred = transfer.transferred.load(Ordering::SeqCst);
+        if transferred != transfer.total {
+            self.close_transfer(&transfer, true).await;
+            return Err(format!(
+                "上传数据不完整（已接收 {transferred}/{} 字节），不完整内容已清理",
+                transfer.total
+            ));
+        }
         let file = transfer.file.lock().await.take();
         if let Some(mut file) = file {
-            file.shutdown()
-                .await
-                .map_err(|error| format!("完成远程文件写入失败: {error}"))?;
+            if let Err(error) = file.shutdown().await {
+                self.close_transfer(&transfer, true).await;
+                return Err(format!("完成远程文件写入失败: {error}"));
+            }
         }
+        let Some(final_path) = transfer.final_path.clone() else {
+            self.close_transfer(&transfer, true).await;
+            return Err("上传任务缺少目标路径".to_string());
+        };
         let sftp = transfer.sftp.lock().await.take();
-        if let Some(sftp) = sftp {
-            close_sftp_quietly(&sftp).await;
+        let Some(sftp) = sftp else {
+            return Ok(());
+        };
+        // 半成品 rename 到目标名。目标已存在且服务端不允许覆盖时，先删旧再重试——
+        // 此刻半成品内容完整，删旧目标不会造成数据损失（审计 B-1/B-3）。
+        let part_path = transfer.path.clone();
+        if sftp.rename(&part_path, &final_path).await.is_err() {
+            let _ = sftp.remove_file(&final_path).await;
+            if let Err(error) = sftp.rename(&part_path, &final_path).await {
+                close_sftp_quietly(&sftp).await;
+                return Err(format!(
+                    "保存远程文件失败: {error}（不完整内容留在 {part_path}）"
+                ));
+            }
         }
+        close_sftp_quietly(&sftp).await;
         Ok(())
     }
 
@@ -1154,16 +1228,34 @@ impl SshManager {
                         drop(local_file);
                         drop(remote_file);
                         close_sftp_quietly(&sftp).await;
-                        // Windows 跨卷 rename 可能阻塞较久，收尾 IO 统一走 tokio 阻塞池。
-                        if tokio::fs::metadata(&transfer.local_path).await.is_ok() {
-                            let _ = tokio::fs::remove_file(&transfer.local_path).await;
+                        // 收尾不直接删旧文件，而是先改名为备份、rename 成功后再删：
+                        // 先删再 rename 时，rename 失败会让用户原有文件永久丢失（审计 B-2）。
+                        let backup_path = format!("{}.catshell-bak", transfer.local_path);
+                        let had_existing = tokio::fs::metadata(&transfer.local_path).await.is_ok();
+                        if had_existing {
+                            let _ = tokio::fs::remove_file(&backup_path).await;
+                            if let Err(error) =
+                                tokio::fs::rename(&transfer.local_path, &backup_path).await
+                            {
+                                transfer
+                                    .finish_with_error(format!("备份已有本地文件失败: {error}"));
+                                emit_disk_progress(sink.as_ref(), &transfer, true);
+                                break;
+                            }
                         }
                         if let Err(error) =
                             tokio::fs::rename(&part_path, &transfer.local_path).await
                         {
+                            // 回滚：把备份改回原名；半成品保留，供下次续传。
+                            if had_existing {
+                                let _ = tokio::fs::rename(&backup_path, &transfer.local_path).await;
+                            }
                             transfer.finish_with_error(format!("保存本地文件失败: {error}"));
                             emit_disk_progress(sink.as_ref(), &transfer, true);
                             break;
+                        }
+                        if had_existing {
+                            let _ = tokio::fs::remove_file(&backup_path).await;
                         }
                         clear_resume_stamp(&part_path).await;
                         transfer.done.store(true, Ordering::SeqCst);
