@@ -505,46 +505,59 @@ export interface SshEventHandlers {
 
 export async function subscribeSshEvents(handlers: SshEventHandlers): Promise<() => void> {
   const unlisteners: UnlistenFn[] = []
-  unlisteners.push(
-    await listen<SessionStatusEvent>(
-      'session-status',
-      versioned<SessionStatusEvent>('session-status', handlers.onStatus)
-    )
-  )
-  unlisteners.push(
-    await listen<SessionOutputEvent>(
-      'session-output',
-      versioned<SessionOutputEvent>('session-output', (payload) => {
-        handlers.onOutput(payload.id, base64ToBytes(payload.data))
-      })
-    )
-  )
-  if (handlers.onHostKeyPrompt) {
-    const onHostKeyPrompt = handlers.onHostKeyPrompt
+  try {
     unlisteners.push(
-      await listen<HostKeyPrompt>(
-        'host-key-prompt',
-        versioned<HostKeyPrompt>('host-key-prompt', (payload) => onHostKeyPrompt(payload))
+      await listen<SessionStatusEvent>(
+        'session-status',
+        versioned<SessionStatusEvent>('session-status', handlers.onStatus)
       )
     )
-  }
-  if (handlers.onHostKeyWarning) {
-    const onHostKeyWarning = handlers.onHostKeyWarning
     unlisteners.push(
-      await listen<HostKeyWarning>(
-        'host-key-warning',
-        versioned<HostKeyWarning>('host-key-warning', (payload) => onHostKeyWarning(payload))
+      await listen<SessionOutputEvent>(
+        'session-output',
+        versioned<SessionOutputEvent>('session-output', (payload) => {
+          handlers.onOutput(payload.id, base64ToBytes(payload.data))
+        })
       )
     )
-  }
-  if (handlers.onKbiPrompt) {
-    const onKbiPrompt = handlers.onKbiPrompt
-    unlisteners.push(
-      await listen<KbiPromptEvent>(
-        'kbi-prompt',
-        versioned<KbiPromptEvent>('kbi-prompt', (payload) => onKbiPrompt(payload))
+    if (handlers.onHostKeyPrompt) {
+      const onHostKeyPrompt = handlers.onHostKeyPrompt
+      unlisteners.push(
+        await listen<HostKeyPrompt>(
+          'host-key-prompt',
+          versioned<HostKeyPrompt>('host-key-prompt', (payload) => onHostKeyPrompt(payload))
+        )
       )
-    )
+    }
+    if (handlers.onHostKeyWarning) {
+      const onHostKeyWarning = handlers.onHostKeyWarning
+      unlisteners.push(
+        await listen<HostKeyWarning>(
+          'host-key-warning',
+          versioned<HostKeyWarning>('host-key-warning', (payload) => onHostKeyWarning(payload))
+        )
+      )
+    }
+    if (handlers.onKbiPrompt) {
+      const onKbiPrompt = handlers.onKbiPrompt
+      unlisteners.push(
+        await listen<KbiPromptEvent>(
+          'kbi-prompt',
+          versioned<KbiPromptEvent>('kbi-prompt', (payload) => onKbiPrompt(payload))
+        )
+      )
+    }
+  } catch (err) {
+    // 中途注册失败：先回滚已成功的监听再抛出（审计 L-1），
+    // 避免应用停留在「部分事件可用」且无法重试的半订阅状态。
+    for (const unlisten of unlisteners) {
+      try {
+        unlisten()
+      } catch {
+        /* already removed */
+      }
+    }
+    throw err
   }
   return () => {
     for (const unlisten of unlisteners) {

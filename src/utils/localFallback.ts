@@ -18,6 +18,23 @@ export function writeLocalFallback(key: string, value: unknown, label: string): 
   }
 }
 
+/**
+ * 严格版兜底写入：成功返回 true，失败返回 false（不抛异常）。
+ *
+ * 供凭据保险箱等**数据安全边界**使用（审计 M-5）：主存储失败后回退，
+ * 回退也失败时调用方必须感知并向上抛错，绝不允许「内存已改、磁盘没落」
+ * 的假成功。一般设置的 best-effort 语义请继续用 [`writeLocalFallback`]。
+ */
+export function tryWriteLocalFallback(key: string, value: unknown, label: string): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch (err) {
+    logger.warn(`${label} 的本地回退存储写入失败`, err)
+    return false
+  }
+}
+
 /** 读取 localStorage 兜底值并解析 JSON；缺失、损坏或 Storage 不可用时一律返回 null。 */
 export function readLocalFallback<T>(key: string): T | null {
   try {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { logger } from '../utils/logger'
+import { createPersistChain } from '../utils/persistChain'
 import { useHosts } from './hosts'
 import {
   applyFinalize,
@@ -68,7 +69,9 @@ export const useTransferQueue = create<TransferQueueState>((set, get) => ({
     }
     let entries = sanitizeLoaded(saved)
     // 主机档案已删除的队列项永远无法续传，启动时静默清理。
-    const knownHostIds = new Set(Object.keys(useHosts.getState().hosts))
+    // hosts 是 HostProfile[]：必须按 id 提取集合，不能用 Object.keys（那是数组下标，
+    // 会把所有合法队列项误判为孤儿并连同持久化一起删掉，审计 H-1）。
+    const knownHostIds = new Set(useHosts.getState().hosts.map((host) => host.id))
     const pruned = entries.length
     entries = pruneMissingHosts(entries, knownHostIds)
     if (entries.length !== pruned) {
@@ -167,17 +170,23 @@ function scheduleProgressFlush() {
   }, PROGRESS_FLUSH_MS)
 }
 
+// 对 transfer-queue.json 的所有写（登记/进度 flush/终态/丢弃）共用一条
+// Promise 链（审计 M-6）：保证最终落盘值必为最后一次状态。
+const persistChain = createPersistChain()
+
 async function persistNow(entries: QueuedTransfer[]) {
-  try {
-    const store = await load(STORE_FILE)
-    await store.set(ENTRIES_KEY, entries)
-    await store.save()
-  } catch (err) {
-    logger.warn('保存传输队列失败，使用本地回退存储', err)
+  return persistChain(async () => {
     try {
-      localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries))
-    } catch {
-      /* 存储不可用时放弃，仅影响下次续传 */
+      const store = await load(STORE_FILE)
+      await store.set(ENTRIES_KEY, entries)
+      await store.save()
+    } catch (err) {
+      logger.warn('保存传输队列失败，使用本地回退存储', err)
+      try {
+        localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries))
+      } catch {
+        /* 存储不可用时放弃，仅影响下次续传 */
+      }
     }
-  }
+  })
 }

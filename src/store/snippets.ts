@@ -3,6 +3,7 @@ import { load } from '@tauri-apps/plugin-store'
 import { CommandSnippet, createCommandSnippet } from '../types/snippet'
 import { AppError, ERROR_CODES } from '../types/errors'
 import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
+import { createPersistChain } from '../utils/persistChain'
 
 const STORE_FILE = 'command-snippets.json'
 const SNIPPETS_KEY = 'snippets'
@@ -18,14 +19,19 @@ interface SnippetsState {
 
 let initPromise: Promise<void> | null = null
 
+// 对 command-snippets.json 的所有写共用一条 Promise 链（审计 M-6）。
+const persistChain = createPersistChain()
+
 async function persist(snippets: CommandSnippet[]) {
-  try {
-    const store = await load(STORE_FILE)
-    await store.set(SNIPPETS_KEY, snippets)
-    await store.save()
-  } catch {
-    writeLocalFallback(SNIPPETS_KEY, snippets, '命令片段')
-  }
+  return persistChain(async () => {
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(SNIPPETS_KEY, snippets)
+      await store.save()
+    } catch {
+      writeLocalFallback(SNIPPETS_KEY, snippets, '命令片段')
+    }
+  })
 }
 
 function normalize(value: Partial<CommandSnippet>): CommandSnippet {

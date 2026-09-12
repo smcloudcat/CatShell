@@ -3,7 +3,7 @@ import { load } from '@tauri-apps/plugin-store'
 import { recordAudit } from './audit'
 import { useSettings } from './settings'
 import { AppError, ERROR_CODES } from '../types/errors'
-import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
+import { readLocalFallback, tryWriteLocalFallback } from '../utils/localFallback'
 import {
   PBKDF2_ITERATIONS,
   VaultCredential,
@@ -94,7 +94,11 @@ async function writeRecord(record: VaultRecord) {
     await store.set(VAULT_KEY, record)
     await store.save()
   } catch {
-    writeLocalFallback(STORE_FILE, record, '凭据保险箱')
+    // 主存储失败时回退 localStorage；回退也失败必须抛错（审计 M-5）：
+    // 凭据保险箱绝不产生「内存已改、磁盘没落」的假成功。
+    if (!tryWriteLocalFallback(STORE_FILE, record, '凭据保险箱')) {
+      throw new AppError(ERROR_CODES.VAULT_WRITE_FAILED)
+    }
   }
 }
 
@@ -117,18 +121,21 @@ function readPendingRemovals(): string[] {
   }
 }
 
-function writePendingRemovals(ids: string[]) {
+/** 返回是否成功落盘（审计 L-2）：失败时调用方必须感知，不能假装已排队。 */
+function writePendingRemovals(ids: string[]): boolean {
   try {
     if (ids.length === 0) localStorage.removeItem(PENDING_REMOVALS_KEY)
     else localStorage.setItem(PENDING_REMOVALS_KEY, JSON.stringify(ids))
+    return true
   } catch {
-    // 存储不可用时无法排队；调用方仍会拿到 queued，但本次删除确实没落盘。
+    return false
   }
 }
 
-function enqueuePendingRemoval(id: string) {
+function enqueuePendingRemoval(id: string): boolean {
   const pending = readPendingRemovals()
-  if (!pending.includes(id)) writePendingRemovals([...pending, id])
+  if (pending.includes(id)) return true
+  return writePendingRemovals([...pending, id])
 }
 
 function clearPendingRemoval(id: string) {
@@ -269,7 +276,16 @@ export const useVault = create<VaultState>((set, get) => ({
     if (!get().unlocked || !vaultRecord || !sessionKey) {
       // 锁定态：排队，等下次解锁回放（审计 B-15）。此处不能静默返回——
       // 主机记录已经被删掉，静默跳过等于把凭据永久锁死在保险箱里。
-      enqueuePendingRemoval(id)
+      // 排队落盘失败时明确报错（审计 L-2）：假装 queued 会让凭据永远留在保险箱。
+      if (!enqueuePendingRemoval(id)) {
+        recordAudit(
+          'vault.remove-credential',
+          '凭据保险箱',
+          'failure',
+          '保险箱锁定且本地存储不可用，凭据删除排队失败'
+        )
+        throw new AppError(ERROR_CODES.VAULT_WRITE_FAILED)
+      }
       recordAudit(
         'vault.remove-credential',
         '凭据保险箱',

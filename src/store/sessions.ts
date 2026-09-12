@@ -43,7 +43,8 @@ interface SessionsState {
   /** 会话 → 主机配置 id 的关联，用于「恢复上次会话」定位主机与凭据 */
   hostIds: Record<number, string>
   connectedAt: Record<number, number>
-  hostKeyPrompt: HostKeyPrompt | null
+  /** Host Key 确认弹窗队列：多个会话同时首次遇到未知主机时逐个应答（审计 M-2）。 */
+  hostKeyPrompts: HostKeyPrompt[]
   hostKeyWarning: HostKeyWarning | null
   /** 交互式认证弹窗队列：多个会话同时追问时逐个应答，避免覆盖丢失。 */
   kbiPrompts: KbiPromptEvent[]
@@ -180,7 +181,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   requests: {},
   hostIds: {},
   connectedAt: {},
-  hostKeyPrompt: null,
+  hostKeyPrompts: [],
   hostKeyWarning: null,
   kbiPrompts: [],
   broadcastEnabled: false,
@@ -212,13 +213,22 @@ export const useSessions = create<SessionsState>((set, get) => ({
             const term = get().terminals[id]
             if (term) term.write(data)
           },
-          onHostKeyPrompt: (event) => set({ hostKeyPrompt: event })
+          onHostKeyPrompt: (event) =>
+            set((s) => ({
+              // 按 token 去重入队：同一会话的重试不会堆积重复弹窗（审计 M-2）。
+              hostKeyPrompts: s.hostKeyPrompts.some((item) => item.token === event.token)
+                ? s.hostKeyPrompts
+                : [...s.hostKeyPrompts, event]
+            }))
           ,onHostKeyWarning: (event) => set({ hostKeyWarning: event })
           ,onKbiPrompt: (event) => set((s) => ({ kbiPrompts: [...s.kbiPrompts, event] }))
         })
       } catch (err) {
-        // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级
+        // 非 Tauri 环境（npm run dev 浏览器预览）无法订阅 SSH 事件，属于预期降级。
+        // 回退 ready 标记（审计 L-1）：失败时已回滚全部监听器，
+        // 保留可重试性——下次调用 init 重新走完整订阅流程。
         logger.warn('SSH 事件订阅不可用，当前仅浏览器预览模式', err)
+        set({ ready: false })
       }
     })()
 
@@ -264,14 +274,17 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (event.status === 'connected') connectedAt[event.id] = Date.now()
     if (event.status === 'disconnected' || event.status === 'closed') delete connectedAt[event.id]
     set({ sessions: { ...sessions, [event.id]: updated }, connectedAt })
-    const prompt = get().hostKeyPrompt
-    if (
-      (event.status === 'disconnected' || event.status === 'closed') &&
-      prompt &&
-      prompt.host === info.host &&
-      prompt.port === info.port
-    ) {
-      set({ hostKeyPrompt: null })
+    // 会话断开/关闭时，只清掉**该会话**的 Host Key 提示（按 sessionId 精确匹配，
+    // 同目标的其它并发会话提示不受影响，审计 M-2）。
+    const remainingPrompts = get().hostKeyPrompts.filter(
+      (item) =>
+        !(
+          (event.status === 'disconnected' || event.status === 'closed') &&
+          item.sessionId === event.id
+        )
+    )
+    if (remainingPrompts.length !== get().hostKeyPrompts.length) {
+      set({ hostKeyPrompts: remainingPrompts })
     }
     if (info && (event.status === 'connected' || event.status === 'disconnected' || event.status === 'closed')) {
       recordAudit('session.status', `${info.name} (${info.host}:${info.port})`, event.status === 'connected' ? 'success' : 'info', event.reason ?? event.status)
@@ -290,12 +303,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
     }
   },
   confirmHostKey: async (accepted) => {
-    const prompt = get().hostKeyPrompt
+    const prompt = get().hostKeyPrompts[0]
     if (!prompt) return
     try {
       await sshConfirmHostKey(prompt.token, accepted)
     } finally {
-      set({ hostKeyPrompt: null })
+      // 只移除刚应答的队首，剩余提示按队列顺序继续展示（审计 M-2）。
+      set((s) => ({ hostKeyPrompts: s.hostKeyPrompts.filter((item) => item.token !== prompt.token) }))
     }
   },
   open: async (request: ConnectRequest, hostId?: string) => {

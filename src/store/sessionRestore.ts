@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { load } from '@tauri-apps/plugin-store'
 import { logger } from '../utils/logger'
+import { createPersistChain } from '../utils/persistChain'
 import { planSessionRestore, ProfileCredential, RestorableTab } from '../utils/sessionRestore'
 import { recordAudit } from './audit'
 import { useHosts } from './hosts'
@@ -153,17 +154,23 @@ function sameTabs(a: RestorableTab[], b: RestorableTab[]): boolean {
   })
 }
 
+// 对 session-restore.json 的所有写共用一条 Promise 链（审计 M-6）：
+// 标签连续变化时 fire-and-forget 写入完成顺序不可控，旧快照可能覆盖新快照。
+const persistChain = createPersistChain()
+
 async function persistTabs(tabs: RestorableTab[]) {
-  try {
-    const store = await load(STORE_FILE)
-    await store.set(TABS_KEY, tabs)
-    await store.save()
-  } catch (err) {
-    logger.warn('保存会话恢复记录失败，使用本地回退存储', err)
+  return persistChain(async () => {
     try {
-      localStorage.setItem(TABS_KEY, JSON.stringify(tabs))
-    } catch {
-      /* 存储不可用时放弃，仅影响下次恢复 */
+      const store = await load(STORE_FILE)
+      await store.set(TABS_KEY, tabs)
+      await store.save()
+    } catch (err) {
+      logger.warn('保存会话恢复记录失败，使用本地回退存储', err)
+      try {
+        localStorage.setItem(TABS_KEY, JSON.stringify(tabs))
+      } catch {
+        /* 存储不可用时放弃，仅影响下次恢复 */
+      }
     }
-  }
+  })
 }

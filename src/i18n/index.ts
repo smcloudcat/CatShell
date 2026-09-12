@@ -884,6 +884,8 @@ const en: Record<string, string> = {
   '请先解锁凭据保险箱': 'Unlock the credential vault first',
   '主密码至少需要 {min} 个字符': 'The master password must be at least {min} characters',
   '保险箱数据格式无效': 'Invalid vault data format',
+  '凭据保存失败：本地存储均不可用，请检查磁盘空间后重试':
+    'Failed to save credentials: local storage is unavailable, check disk space and retry',
   '格式不支持': 'Unsupported format',
   '内容不完整': 'Incomplete content',
   '告警设置无效': 'Invalid alert settings',

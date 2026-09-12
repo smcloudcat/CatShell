@@ -48,6 +48,8 @@ export interface HostKeyPrompt extends VersionedEvent {
   host: string
   port: number
   fingerprint: string
+  /** 发起确认的会话 id：并发未知主机的提示按会话精确清理（审计 M-2）。 */
+  sessionId: number
 }
 
 export interface HostKeyWarning extends VersionedEvent {

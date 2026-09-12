@@ -11,6 +11,7 @@ import {
 } from '../utils/hostImport'
 import { logger } from '../utils/logger'
 import { readLocalFallback, writeLocalFallback } from '../utils/localFallback'
+import { createPersistChain } from '../utils/persistChain'
 import { recordAudit } from './audit'
 import { useVault, type CredentialRemovalResult } from './vault'
 
@@ -30,15 +31,21 @@ export type { ImportPreview, ImportPreviewItem } from '../utils/hostImport'
 
 let initializationPromise: Promise<void> | null = null
 
+// 对 hosts.json 的所有写共用一条 Promise 链（审计 M-6）：快速连续
+// 新增/编辑/删除时，最终落盘值必为最后一次调用，旧快照不会晚到覆盖新快照。
+const persistChain = createPersistChain()
+
 async function persist(hosts: HostProfile[]) {
-  try {
-    const store = await load(STORE_FILE)
-    await store.set(HOSTS_KEY, hosts)
-    await store.save()
-  } catch (err) {
-    logger.warn('保存主机配置失败，使用本地回退存储', err)
-    writeLocalFallback(HOSTS_KEY, hosts, '主机配置')
-  }
+  return persistChain(async () => {
+    try {
+      const store = await load(STORE_FILE)
+      await store.set(HOSTS_KEY, hosts)
+      await store.save()
+    } catch (err) {
+      logger.warn('保存主机配置失败，使用本地回退存储', err)
+      writeLocalFallback(HOSTS_KEY, hosts, '主机配置')
+    }
+  })
 }
 
 /** 解析待导入的主机配置并标记与现有配置的冲突，导入前供预览弹窗使用 */
@@ -95,7 +102,18 @@ export const useHosts = create<HostsState>((set, get) => ({
     set({ hosts })
     await persist(hosts)
     // 保险箱锁定时凭据删除会排队到下次解锁清理，把结果回传给调用方决定是否提示（审计 B-15）。
-    const credential = await useVault.getState().removeCredential(id)
+    let credential: CredentialRemovalResult
+    try {
+      credential = await useVault.getState().removeCredential(id)
+    } catch (err) {
+      // 凭据删除排队失败（本地存储不可用，审计 L-2）：回滚主机删除，
+      // 保持 UI、主机存储与凭据状态一致，让用户重试或先解锁保险箱。
+      if (removed) {
+        set((s) => ({ hosts: [removed, ...s.hosts] }))
+        await persist(get().hosts)
+      }
+      throw err
+    }
     recordAudit('host.delete', removed ? `${removed.name} (${removed.host}:${removed.port})` : id, 'success', '删除主机配置')
     return credential
   },

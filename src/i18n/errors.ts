@@ -23,6 +23,7 @@ export const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   VAULT_LOCKED: '请先解锁凭据保险箱',
   VAULT_PASSWORD_TOO_SHORT: '主密码至少需要 {min} 个字符',
   VAULT_DATA_INVALID: '保险箱数据格式无效',
+  VAULT_WRITE_FAILED: '凭据保存失败：本地存储均不可用，请检查磁盘空间后重试',
   BACKUP_UNSUPPORTED_FORMAT: '格式不支持',
   BACKUP_INCOMPLETE: '内容不完整',
   BACKUP_INVALID_THRESHOLDS: '告警设置无效',

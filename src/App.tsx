@@ -79,7 +79,8 @@ function App() {
       return status === 'connected' || status === 'connecting' || status === 'reconnecting'
     }).length
   )
-  const hostKeyPrompt = useSessions((s) => s.hostKeyPrompt)
+  // 队列模式（审计 M-2）：弹窗只展示队首，应答后自动轮到下一个。
+  const hostKeyPrompt = useSessions((s) => s.hostKeyPrompts[0] ?? null)
   const confirmHostKey = useSessions((s) => s.confirmHostKey)
   const hostKeyWarning = useSessions((s) => s.hostKeyWarning)
   const clearHostKeyWarning = () => useSessions.setState({ hostKeyWarning: null })

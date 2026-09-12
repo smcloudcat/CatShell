@@ -35,6 +35,8 @@ export const ERROR_CODES = {
   VAULT_PASSWORD_TOO_SHORT: 'VAULT_PASSWORD_TOO_SHORT',
   /** 保险箱密文解密后不是预期结构。 */
   VAULT_DATA_INVALID: 'VAULT_DATA_INVALID',
+  /** 保险箱持久化失败：主存储与本地回退均不可用（审计 M-5，绝不假成功）。 */
+  VAULT_WRITE_FAILED: 'VAULT_WRITE_FAILED',
   /** 备份文件的版本号不受支持。 */
   BACKUP_UNSUPPORTED_FORMAT: 'BACKUP_UNSUPPORTED_FORMAT',
   /** 备份文件缺少必要字段。 */
