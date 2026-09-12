@@ -3,6 +3,7 @@ import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { useT } from '../../i18n'
 import { recordingDelete, RecordingMeta, recordingList, recordingRead } from '../../api/ssh'
+import { confirmDialog } from '../../store/ui'
 import { parseAsciicast } from '../../utils/asciicast'
 import { RecordingPlayerDialog } from './RecordingPlayerDialog'
 
@@ -36,7 +37,18 @@ export function RecordingLibraryDialog({ onClose }: Props) {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
   }
 
+  /**
+   * 删除录制前二次确认（审计 P-4）：录制文件一旦删除无法恢复，
+   * 而列表里「回放」与「删除」两个按钮紧邻，误点概率不低。
+   */
   const removeRecording = async (meta: RecordingMeta) => {
+    const accepted = await confirmDialog({
+      title: t('删除录制'),
+      message: t('确定删除录制「') + meta.name.replace(/\.cast$/, '') + t('」吗？该操作不可恢复。'),
+      confirmLabel: t('删除'),
+      danger: true
+    })
+    if (!accepted) return
     try {
       await recordingDelete(meta.name)
       refresh()

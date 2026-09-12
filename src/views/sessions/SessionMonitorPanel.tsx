@@ -61,10 +61,11 @@ export function SessionMonitorPanel({ sessionId, onCollapse }: Props) {
   const [refreshKey, setRefreshKey] = useState(0)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // 繁忙服务器进程数百条，每行含按钮/图标：>50 行启用窗口化渲染（审计 P-3），
-  // 行高恒定 36px+border，与 monitor.css 的 .process-row 保持一致。
+  // 行高必须与 .process-row 实际占位一致：全局 `box-sizing: border-box`（glass.css）
+  // 下 border-bottom 计入 min-height，所以是 36 而不是 36+1（审计 P-1）。
   const { containerRef: processListRef, window: vwin } = useVirtualWindow({
     itemCount: processes.length,
-    itemHeight: 37,
+    itemHeight: 36,
     enabled: processes.length > 50
   })
   const [processBusy, setProcessBusy] = useState(false)

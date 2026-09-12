@@ -18,6 +18,11 @@ import {
 const STORE_FILE = 'credential-vault.json'
 const VAULT_KEY = 'vault'
 const AUTO_LOCK_CHECK_INTERVAL_MS = 30_000
+/** 锁定态下删除凭据的待办列表键（审计 B-15）。只存主机 id，不含任何凭据内容。 */
+const PENDING_REMOVALS_KEY = 'catshell.vault.pendingRemovals'
+
+/** 凭据删除的结果：`removed` 已立即删除；`queued` 保险箱锁定，已排队待解锁后清理。 */
+export type CredentialRemovalResult = 'removed' | 'queued'
 
 export type { VaultCredential } from '../utils/vaultCrypto'
 
@@ -33,7 +38,7 @@ interface VaultState {
   changeMasterPassword: (oldPassword: string, newPassword: string) => Promise<void>
   saveCredential: (id: string, credential: VaultCredential) => Promise<void>
   getCredential: (id: string) => VaultCredential | null
-  removeCredential: (id: string) => Promise<void>
+  removeCredential: (id: string) => Promise<CredentialRemovalResult>
 }
 
 let initPromise: Promise<void> | null = null
@@ -98,6 +103,83 @@ async function writeRecord(record: VaultRecord) {
   }
 }
 
+/**
+ * 读取锁定期间排队的凭据删除（审计 B-15）。
+ *
+ * 保险箱锁定时内存里既没有 `entries` 也没有会话密钥，删除只能静默跳过；而调用方
+ * （`hosts.remove`）此时已经把主机记录删掉，入口随之消失，凭据就永久残留在保险箱里
+ * 且再也没有任何 UI 能清理它。这里把待删主机 id 明文落盘（只是 id，不含凭据内容），
+ * 由下次解锁回放，保证「删主机」在凭据侧最终一致。
+ */
+function readPendingRemovals(): string[] {
+  try {
+    const raw = localStorage.getItem(PENDING_REMOVALS_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function writePendingRemovals(ids: string[]) {
+  try {
+    if (ids.length === 0) localStorage.removeItem(PENDING_REMOVALS_KEY)
+    else localStorage.setItem(PENDING_REMOVALS_KEY, JSON.stringify(ids))
+  } catch {
+    // 存储不可用时无法排队；调用方仍会拿到 queued，但本次删除确实没落盘。
+  }
+}
+
+function enqueuePendingRemoval(id: string) {
+  const pending = readPendingRemovals()
+  if (!pending.includes(id)) writePendingRemovals([...pending, id])
+}
+
+function clearPendingRemoval(id: string) {
+  const pending = readPendingRemovals()
+  if (pending.includes(id)) writePendingRemovals(pending.filter((item) => item !== id))
+}
+
+/**
+ * 解锁后回放排队中的凭据删除。落盘失败时保留待办，留待下次解锁重试，
+ * 避免出现「主机已删、凭据永远留下」的窗口。
+ */
+async function flushPendingRemovals(
+  entries: Record<string, VaultCredential>
+): Promise<Record<string, VaultCredential>> {
+  const pending = readPendingRemovals()
+  if (pending.length === 0) return entries
+  const next = { ...entries }
+  let changed = false
+  for (const id of pending) {
+    if (id in next) {
+      delete next[id]
+      changed = true
+    }
+  }
+  if (!changed || !vaultRecord || !sessionKey) {
+    // 没有实际可删的条目（id 本就不存在）：待办直接作废。
+    writePendingRemovals([])
+    return next
+  }
+  try {
+    const record = await encryptEntriesWithKey(sessionKey, base64ToBytes(vaultRecord.salt), next)
+    await writeRecord(record)
+    vaultRecord = record
+    writePendingRemovals([])
+    recordAudit(
+      'vault.remove-credential',
+      '凭据保险箱',
+      'success',
+      `解锁后清理 ${pending.length} 条锁定期间待删除的凭据`
+    )
+    return next
+  } catch {
+    return entries
+  }
+}
+
 export const useVault = create<VaultState>((set, get) => ({
   ready: false,
   configured: false,
@@ -146,7 +228,7 @@ export const useVault = create<VaultState>((set, get) => ({
     } else {
       sessionKey = await deriveKey(password, base64ToBytes(vaultRecord.salt), vaultRecord.iterations)
     }
-    set({ unlocked: true, entries })
+    set({ unlocked: true, entries: await flushPendingRemovals(entries) })
     startAutoLockTimer()
     recordAudit('vault.unlock', '凭据保险箱', 'success', '解锁保险箱')
   },
@@ -158,13 +240,13 @@ export const useVault = create<VaultState>((set, get) => ({
   },
   changeMasterPassword: async (oldPassword, newPassword) => {
     validatePassword(newPassword)
-    if (!vaultRecord) throw new Error('请先设置保险箱主密码')
+    if (!vaultRecord) throw new AppError(ERROR_CODES.VAULT_NOT_CONFIGURED)
     touchVaultActivity()
     let entries: Record<string, VaultCredential>
     try {
       entries = await decryptEntries(oldPassword, vaultRecord)
     } catch {
-      throw new Error('原主密码不正确')
+      throw new AppError(ERROR_CODES.VAULT_OLD_PASSWORD_WRONG)
     }
     const record = await encryptEntries(newPassword, entries)
     await writeRecord(record)
@@ -181,13 +263,26 @@ export const useVault = create<VaultState>((set, get) => ({
     await writeRecord(record)
     vaultRecord = record
     set({ entries })
+    // 该主机曾排队待删，现在又写入了新凭据：撤销排队，否则下次解锁会把新凭据删掉。
+    clearPendingRemoval(id)
   },
   getCredential: (id) => {
     if (get().unlocked) touchVaultActivity()
     return get().entries[id] ?? null
   },
   removeCredential: async (id) => {
-    if (!get().unlocked || !vaultRecord || !sessionKey) return
+    if (!get().unlocked || !vaultRecord || !sessionKey) {
+      // 锁定态：排队，等下次解锁回放（审计 B-15）。此处不能静默返回——
+      // 主机记录已经被删掉，静默跳过等于把凭据永久锁死在保险箱里。
+      enqueuePendingRemoval(id)
+      recordAudit(
+        'vault.remove-credential',
+        '凭据保险箱',
+        'success',
+        '保险箱锁定，凭据删除已排队，将在下次解锁时清理'
+      )
+      return 'queued'
+    }
     touchVaultActivity()
     const entries = { ...get().entries }
     delete entries[id]
@@ -195,6 +290,8 @@ export const useVault = create<VaultState>((set, get) => ({
     await writeRecord(record)
     vaultRecord = record
     set({ entries })
+    clearPendingRemoval(id)
     recordAudit('vault.remove-credential', '凭据保险箱', 'success', '删除主机凭据')
+    return 'removed'
   }
 }))

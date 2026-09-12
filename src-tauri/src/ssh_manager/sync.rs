@@ -19,7 +19,7 @@ use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use ts_rs::TS;
 
-use super::sftp::SFTP_CHUNK_SIZE;
+use super::sftp::{DISK_CHUNK_TIMEOUT, DISK_PART_SUFFIX, SFTP_CHUNK_SIZE};
 use super::{EventSink, SshManager};
 
 /// 同步方向：上传（本地 → 远程）。
@@ -679,6 +679,10 @@ async fn run_sync_job(
 }
 
 /// 上传单个文件：本地读 → 远程写，返回传输字节数。
+///
+/// 先写远程半成品 `{remote}.catshell-part`，全部写完再 rename 成目标名。
+/// 直接 `TRUNCATE` 直写目标时，更新一个**已存在**的文件一旦中途断网/取消/超时，
+/// 目标就被截成半截且原内容已销毁，在下一次同步修复它之前读到的都是坏文件（审计 B-7）。
 async fn stream_upload(
     sftp: &russh_sftp::client::SftpSession,
     local: &Path,
@@ -687,37 +691,62 @@ async fn stream_upload(
     let mut local_file = tokio::fs::File::open(local)
         .await
         .map_err(|error| format!("打开本地文件失败 {}: {error}", local.display()))?;
+    let part_path = format!("{remote}{DISK_PART_SUFFIX}");
     let mut remote_file = sftp
         .open_with_flags(
-            remote,
+            &part_path,
             OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE,
         )
         .await
-        .map_err(|error| format!("创建远程文件失败 {remote}: {error}"))?;
-    let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
-    let mut total = 0_u64;
-    loop {
-        let n = local_file
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("读取本地文件失败 {}: {error}", local.display()))?;
-        if n == 0 {
-            break;
+        .map_err(|error| format!("创建远程文件失败 {part_path}: {error}"))?;
+    let copied: Result<u64, String> = async {
+        let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
+        let mut total = 0_u64;
+        loop {
+            let n = local_file
+                .read(&mut buffer)
+                .await
+                .map_err(|error| format!("读取本地文件失败 {}: {error}", local.display()))?;
+            if n == 0 {
+                break;
+            }
+            // 每个数据块单独设超时：远端收下请求后停摆会让同步任务永久挂住（审计 B-6）。
+            tokio::time::timeout(DISK_CHUNK_TIMEOUT, remote_file.write_all(&buffer[..n]))
+                .await
+                .map_err(|_| format!("写入远程文件超时 {part_path}"))?
+                .map_err(|error| format!("写入远程文件失败 {part_path}: {error}"))?;
+            total += n as u64;
         }
-        remote_file
-            .write_all(&buffer[..n])
+        tokio::time::timeout(DISK_CHUNK_TIMEOUT, remote_file.shutdown())
             .await
-            .map_err(|error| format!("写入远程文件失败 {remote}: {error}"))?;
-        total += n as u64;
+            .map_err(|_| format!("收尾远程文件超时 {part_path}"))?
+            .map_err(|error| format!("收尾远程文件失败 {part_path}: {error}"))?;
+        Ok(total)
     }
-    remote_file
-        .shutdown()
-        .await
-        .map_err(|error| format!("收尾远程文件失败 {remote}: {error}"))?;
+    .await;
+    let total = match copied {
+        Ok(total) => total,
+        Err(error) => {
+            // 半成品不完整，直接清掉，别让它冒充可用的临时文件。
+            let _ = sftp.remove_file(&part_path).await;
+            return Err(error);
+        }
+    };
+    // 收尾 rename 到目标名；目标已存在且服务端不允许覆盖时先删旧再重试——
+    // 此刻半成品内容完整，删旧不会造成数据损失。
+    if sftp.rename(&part_path, remote).await.is_err() {
+        let _ = sftp.remove_file(remote).await;
+        if let Err(error) = sftp.rename(&part_path, remote).await {
+            let _ = sftp.remove_file(&part_path).await;
+            return Err(format!("保存远程文件失败 {remote}: {error}"));
+        }
+    }
     Ok(total)
 }
 
 /// 下载单个文件：远程读 → 本地写，返回传输字节数。
+///
+/// 同上传侧：先写本地半成品再 rename，避免中途中断把**已存在**的本地文件截断（审计 B-7）。
 async fn stream_download(
     sftp: &russh_sftp::client::SftpSession,
     remote: &str,
@@ -732,29 +761,50 @@ async fn stream_download(
             .await
             .map_err(|error| format!("创建本地目录失败 {}: {error}", parent.display()))?;
     }
-    let mut local_file = tokio::fs::File::create(local)
+    let part_path = PathBuf::from(format!("{}{DISK_PART_SUFFIX}", local.display()));
+    let mut local_file = tokio::fs::File::create(&part_path)
         .await
-        .map_err(|error| format!("创建本地文件失败 {}: {error}", local.display()))?;
-    let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
-    let mut total = 0_u64;
-    loop {
-        let n = remote_file
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("读取远程文件失败 {remote}: {error}"))?;
-        if n == 0 {
-            break;
+        .map_err(|error| format!("创建本地文件失败 {}: {error}", part_path.display()))?;
+    let copied: Result<u64, String> = async {
+        let mut buffer = vec![0_u8; SFTP_CHUNK_SIZE];
+        let mut total = 0_u64;
+        loop {
+            // 每个数据块单独设超时：远端停摆不能让同步任务永久挂住（审计 B-6）。
+            let n = tokio::time::timeout(DISK_CHUNK_TIMEOUT, remote_file.read(&mut buffer))
+                .await
+                .map_err(|_| format!("读取远程文件超时 {remote}"))?
+                .map_err(|error| format!("读取远程文件失败 {remote}: {error}"))?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buffer[..n])
+                .await
+                .map_err(|error| format!("写入本地文件失败 {}: {error}", part_path.display()))?;
+            total += n as u64;
         }
-        local_file
-            .write_all(&buffer[..n])
+        tokio::time::timeout(DISK_CHUNK_TIMEOUT, local_file.flush())
             .await
-            .map_err(|error| format!("写入本地文件失败 {}: {error}", local.display()))?;
-        total += n as u64;
+            .map_err(|_| format!("收尾本地文件超时 {}", part_path.display()))?
+            .map_err(|error| format!("收尾本地文件失败 {}: {error}", part_path.display()))?;
+        Ok(total)
     }
-    local_file
-        .flush()
-        .await
-        .map_err(|error| format!("收尾本地文件失败 {}: {error}", local.display()))?;
+    .await;
+    let total = match copied {
+        Ok(total) => total,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(error);
+        }
+    };
+    if tokio::fs::rename(&part_path, local).await.is_err() {
+        // 少数平台/文件系统不允许 rename 覆盖：删旧再重试（半成品已完整）。
+        let _ = tokio::fs::remove_file(local).await;
+        if let Err(error) = tokio::fs::rename(&part_path, local).await {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(format!("保存本地文件失败 {}: {error}", local.display()));
+        }
+    }
     Ok(total)
 }
 

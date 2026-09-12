@@ -20,7 +20,7 @@ import { sendSystemNotification } from '../utils/notify'
 import { t } from '../i18n'
 import { recordAudit } from './audit'
 import { showToast } from './ui'
-import { recordOutput } from './recording'
+import { recordOutput, discardRecording } from './recording'
 
 export interface TerminalRef {
   id: number
@@ -344,6 +344,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       delete connectedAt[id]
       // 旧会话的输出日志缓冲一并释放，频繁重连不再累积（审计 P-4）。
       clearSessionLog(id)
+      // 重连会换会话 id，旧 id 的录制缓冲与「录制中」标记必须一并丢弃（审计 P-6）。
+      discardRecording(id)
       sessions[newId] = {
         id: newId,
         name: info.name,
@@ -387,6 +389,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
   closeTab: async (id: number) => {
     await sshRemove(id)
     clearSessionLog(id)
+    // 关标签同时清理录制态，否则录制指示灯卡在「录制中」且条目无法再操作（审计 P-6）。
+    discardRecording(id)
     set((s) => {
       const sessions = { ...s.sessions }
       const requests = { ...s.requests }

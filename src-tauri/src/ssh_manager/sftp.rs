@@ -16,8 +16,8 @@ const MAX_SFTP_FILE_SIZE: usize = 64 * 1024 * 1024;
 pub(super) const SFTP_CHUNK_SIZE: usize = 256 * 1024;
 const REMOTE_DELETE_MAX_DEPTH: usize = 16;
 const REMOTE_DELETE_ENTRY_BUDGET: usize = 20_000;
-const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-const DISK_PART_SUFFIX: &str = ".catshell-part";
+pub(super) const DISK_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+pub(super) const DISK_PART_SUFFIX: &str = ".catshell-part";
 
 /// SFTP 通道协商（channel open + subsystem + 初始化握手）的超时上限。
 /// 正常服务器 2 秒内完成，海外高延迟链路 15 秒也足够；
@@ -25,6 +25,9 @@ const DISK_PART_SUFFIX: &str = ".catshell-part";
 const SFTP_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 /// 单个 SFTP 短操作（列目录/改名/删除等）的超时上限。
 const SFTP_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// 整文件读写（单次最多 64 MB）的超时上限：慢链路下 64 MB 远超 20 秒，
+/// 但仍有硬上限，避免远端收下请求后停摆导致永久挂起（审计 B-6）。
+const SFTP_BULK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 /// SFTP 通道关闭的超时上限（关闭挂起不应拖住已完成的操作结果）。
 const SFTP_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -37,11 +40,27 @@ async fn with_sftp_timeout<T>(
     label: &str,
     fut: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
-    match tokio::time::timeout(SFTP_OP_TIMEOUT, fut).await {
+    with_sftp_budget(label, SFTP_OP_TIMEOUT, fut).await
+}
+
+/// 整文件读写的超时包装：预算比短操作宽得多，但同样是硬上限（审计 B-6）。
+async fn with_sftp_bulk_timeout<T>(
+    label: &str,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    with_sftp_budget(label, SFTP_BULK_TIMEOUT, fut).await
+}
+
+async fn with_sftp_budget<T>(
+    label: &str,
+    budget: std::time::Duration,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(budget, fut).await {
         Ok(result) => result,
         Err(_) => Err(format!(
             "{label}超时（{} 秒）：网络不稳定或远端无响应，请重试",
-            SFTP_OP_TIMEOUT.as_secs()
+            budget.as_secs()
         )),
     }
 }
@@ -412,6 +431,39 @@ fn part_path_for(base: &str, transfer_id: u64, occupied: bool) -> String {
     }
 }
 
+/// 半成品**基准**路径的占坑集合（审计 B-4）。
+///
+/// 只做极短的纯内存增删、从不 await，因此用 std 锁足够；中毒也不该让释放失败，
+/// 统一通过 [`lock_part_claims`] 取回内部数据继续。
+pub(super) type PartPathClaims = Arc<StdMutex<std::collections::HashSet<String>>>;
+
+pub(super) fn new_part_path_claims() -> PartPathClaims {
+    Arc::new(StdMutex::new(std::collections::HashSet::new()))
+}
+
+fn lock_part_claims(
+    claims: &StdMutex<std::collections::HashSet<String>>,
+) -> std::sync::MutexGuard<'_, std::collections::HashSet<String>> {
+    claims
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 基准半成品路径的占坑守卫：Drop 时归还。
+///
+/// 传输真正插入 `sftp_disk_transfers` 之前还有若干 await（打开通道、读元数据……），
+/// 中途任何一步失败都会提前返回，所以释放必须挂在 Drop 上，而不是只写在任务收尾。
+pub(super) struct PartPathGuard {
+    claims: PartPathClaims,
+    base: String,
+}
+
+impl Drop for PartPathGuard {
+    fn drop(&mut self) {
+        lock_part_claims(&self.claims).remove(&self.base);
+    }
+}
+
 /// 传输闲置回收阈值：超过该时长既未拉取分片、也未收到取消的传输会被回收并释放 SFTP 通道。
 const TRANSFER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
@@ -495,10 +547,12 @@ async fn remove_remote_dir_recursive(
     if *budget == 0 {
         return Err("目录条目数超过限制（20000），已中止删除".to_string());
     }
-    let entries = sftp
-        .read_dir(path)
-        .await
-        .map_err(|error| format!("读取远程目录失败: {error}"))?;
+    let entries = with_sftp_timeout("读取远程目录", async {
+        sftp.read_dir(path)
+            .await
+            .map_err(|error| format!("读取远程目录失败: {error}"))
+    })
+    .await?;
     let mut names: Vec<(String, bool)> = Vec::new();
     for entry in entries {
         if *budget == 0 {
@@ -516,13 +570,19 @@ async fn remove_remote_dir_recursive(
                 budget,
             ))
             .await?;
-            sftp.remove_dir(&child_path)
-                .await
-                .map_err(|error| format!("删除远程目录失败: {error}"))?;
+            with_sftp_timeout("删除远程目录", async {
+                sftp.remove_dir(&child_path)
+                    .await
+                    .map_err(|error| format!("删除远程目录失败: {error}"))
+            })
+            .await?;
         } else {
-            sftp.remove_file(&child_path)
-                .await
-                .map_err(|error| format!("删除远程文件失败: {error}"))?;
+            with_sftp_timeout("删除远程文件", async {
+                sftp.remove_file(&child_path)
+                    .await
+                    .map_err(|error| format!("删除远程文件失败: {error}"))
+            })
+            .await?;
         }
     }
     Ok(())
@@ -542,14 +602,16 @@ pub fn validate_sftp_path(path: String) -> Result<String, String> {
 impl SshManager {
     pub async fn sftp_list(&self, id: u64, path: String) -> Result<Vec<SftpEntry>, String> {
         let started = std::time::Instant::now();
-        let result = with_sftp_timeout("读取远程目录", async move {
-            // 空 path 兜底为当前目录；其余与其他 SFTP 方法统一走路径校验（审计 S-5）。
-            let path = if path.trim().is_empty() {
-                ".".to_string()
-            } else {
-                validate_sftp_path(path)?
-            };
-            let sftp = self.open_sftp_channel(id).await?;
+        // 空 path 兜底为当前目录；其余与其他 SFTP 方法统一走路径校验（审计 S-5）。
+        let path = if path.trim().is_empty() {
+            ".".to_string()
+        } else {
+            validate_sftp_path(path)?
+        };
+        // 通道协商内部自带 3 × 15 秒预算，必须留在外层超时之外：否则慢链路（每步各 8 秒
+        // 仍属正常）会被外层 20 秒先行打断，既误报超时又白白丢弃一次可用连接（审计 B-5）。
+        let sftp = self.open_sftp_channel(id).await?;
+        let result = with_sftp_timeout("读取远程目录", async {
             let entries = sftp
                 .read_dir(path)
                 .await
@@ -586,10 +648,10 @@ impl SshManager {
                     .cmp(&right.kind)
                     .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             });
-            close_sftp_quietly(&sftp).await;
             Ok(result)
         })
         .await;
+        close_sftp_quietly(&sftp).await;
         if result.is_ok() {
             tracing::info!(
                 session_id = id,
@@ -618,10 +680,19 @@ impl SshManager {
             close_sftp_quietly(&sftp).await;
             return Err("文件超过 64 MB 下载限制".to_string());
         }
-        let data = sftp
-            .read(path)
-            .await
-            .map_err(|error| format!("读取远程文件失败: {error}"))?;
+        let data = match with_sftp_bulk_timeout("读取远程文件", async {
+            sftp.read(path)
+                .await
+                .map_err(|error| format!("读取远程文件失败: {error}"))
+        })
+        .await
+        {
+            Ok(data) => data,
+            Err(error) => {
+                close_sftp_quietly(&sftp).await;
+                return Err(error);
+            }
+        };
         if data.len() > MAX_SFTP_FILE_SIZE {
             close_sftp_quietly(&sftp).await;
             return Err("文件超过 64 MB 下载限制".to_string());
@@ -648,16 +719,16 @@ impl SshManager {
             .create(&part_path)
             .await
             .map_err(|error| format!("创建远程文件失败: {error}"))?;
-        if let Err(error) = async {
+        let written = with_sftp_bulk_timeout("写入远程文件", async {
             file.write_all(&data)
                 .await
                 .map_err(|error| format!("写入远程文件失败: {error}"))?;
             file.shutdown()
                 .await
                 .map_err(|error| format!("完成远程文件写入失败: {error}"))
-        }
-        .await
-        {
+        })
+        .await;
+        if let Err(error) = written {
             let _ = sftp.remove_file(&part_path).await;
             close_sftp_quietly(&sftp).await;
             return Err(error);
@@ -718,9 +789,12 @@ impl SshManager {
         let sftp = self.open_sftp_channel(id).await?;
         let mut budget = REMOTE_DELETE_ENTRY_BUDGET;
         remove_remote_dir_recursive(&sftp, &path, 0, &mut budget).await?;
-        sftp.remove_dir(&path)
-            .await
-            .map_err(|error| format!("删除远程目录失败: {error}"))?;
+        with_sftp_timeout("删除远程目录", async {
+            sftp.remove_dir(&path)
+                .await
+                .map_err(|error| format!("删除远程目录失败: {error}"))
+        })
+        .await?;
         close_sftp_checked(&sftp).await
     }
 
@@ -801,15 +875,28 @@ impl SshManager {
         Ok(sftp)
     }
 
-    /// 基准半成品路径是否已被另一条进行中的磁盘传输占用（P2-9）。
-    async fn part_path_claimed(&self, part_path: &str) -> bool {
-        self.sftp_disk_transfers
-            .lock()
-            .await
-            .values()
-            .any(|transfer| {
-                transfer.part_path == part_path && !transfer.done.load(Ordering::SeqCst)
-            })
+    /// 原子占用半成品**基准**路径（审计 B-4）。
+    ///
+    /// 旧实现「先查占用、再建传输」之间隔着 open_sftp_channel / metadata / open 等多个
+    /// await：两个并发同名传输都会读到「未占用」，拿到同一个 `{target}.catshell-part`
+    /// 交错写入，收尾各自 rename 成目标名，产出静默损坏的内容。
+    ///
+    /// 现在「检查 + 占坑」在同一把锁内一次完成：抢到基准路径的传输才支持断点续传，
+    /// 没抢到的改用带传输号的一次性路径（天然不冲突）。返回的第二项是占坑守卫，
+    /// 调用方需持有到传输结束；中途提前返回时由 Drop 自动归还。
+    fn claim_part_path(&self, base: &str, transfer_id: u64) -> (String, Option<PartPathGuard>) {
+        let mut claims = lock_part_claims(&self.claimed_part_paths);
+        if claims.insert(base.to_string()) {
+            (
+                base.to_string(),
+                Some(PartPathGuard {
+                    claims: self.claimed_part_paths.clone(),
+                    base: base.to_string(),
+                }),
+            )
+        } else {
+            (part_path_for(base, transfer_id, true), None)
+        }
     }
 
     pub(super) async fn transfer_ref(&self, transfer_id: u64) -> Result<Arc<SftpTransfer>, String> {
@@ -1116,15 +1203,17 @@ impl SshManager {
         }
 
         let sftp = self.open_sftp_channel(id).await?;
-        let metadata = sftp
-            .metadata(&remote_path)
-            .await
-            .map_err(|error| format!("读取远程文件信息失败: {error}"))?;
+        let metadata = with_sftp_timeout("读取远程文件信息", async {
+            sftp.metadata(&remote_path)
+                .await
+                .map_err(|error| format!("读取远程文件信息失败: {error}"))
+        })
+        .await?;
         let total = metadata.size.unwrap_or(0);
         let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
         let part_base = part_file_path(&local_path);
-        let occupied = self.part_path_claimed(&part_base).await;
-        let part_path = part_path_for(&part_base, transfer_id, occupied);
+        let (part_path, part_claim) = self.claim_part_path(&part_base, transfer_id);
+        let occupied = part_claim.is_none();
 
         // 源文件指纹：续传前必须与原文件完全一致，否则从 0 重传（P2-8）。
         let source_stamp = ResumeStamp {
@@ -1280,6 +1369,8 @@ impl SshManager {
                 .lock()
                 .await
                 .remove(&transfer_id);
+            // 传输结束后才归还半成品基准路径的占坑（审计 B-4）。
+            drop(part_claim);
         });
         Ok(SftpDiskTransferStart {
             transfer_id,
@@ -1317,8 +1408,8 @@ impl SshManager {
             .ok_or_else(|| "本地路径无效".to_string())?;
         let part_base = format!("{remote_path}{DISK_PART_SUFFIX}");
         let transfer_id = self.next_disk_transfer_id.fetch_add(1, Ordering::SeqCst);
-        let occupied = self.part_path_claimed(&part_base).await;
-        let part_path = part_path_for(&part_base, transfer_id, occupied);
+        let (part_path, part_claim) = self.claim_part_path(&part_base, transfer_id);
+        let occupied = part_claim.is_none();
         // 上传方向的指纹跟随本地源文件落盘（半成品在远端）。
         let stamp_base = format!("{local_path}{DISK_PART_SUFFIX}");
         let source_stamp = local_file_stamp(&local_path, total).await;
@@ -1329,11 +1420,14 @@ impl SshManager {
         if resume && !occupied {
             let recorded = read_resume_stamp(&stamp_base).await;
             let part_len = match recorded {
-                Some(_) => sftp
-                    .metadata(&part_path)
-                    .await
-                    .map(|meta| meta.size.unwrap_or(0))
-                    .unwrap_or(0),
+                Some(_) => with_sftp_timeout("读取远程半成品信息", async {
+                    sftp.metadata(&part_path)
+                        .await
+                        .map_err(|error| format!("读取远程半成品信息失败: {error}"))
+                })
+                .await
+                .map(|meta| meta.size.unwrap_or(0))
+                .unwrap_or(0),
                 None => 0,
             };
             if let Some(offset) = resume_offset(part_len, recorded.as_ref(), &source_stamp) {
@@ -1502,6 +1596,8 @@ impl SshManager {
                 .lock()
                 .await
                 .remove(&transfer_id);
+            // 传输结束后才归还半成品基准路径的占坑（审计 B-4）。
+            drop(part_claim);
         });
         Ok(SftpDiskTransferStart {
             transfer_id,

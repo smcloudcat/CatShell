@@ -4,6 +4,7 @@ import { useSnippets } from '../../store/snippets'
 import { CommandSnippet, createCommandSnippet, getSnippetParameters } from '../../types/snippet'
 import { useT } from '../../i18n'
 import { errorText } from '../../i18n/errors'
+import { confirmDialog } from '../../store/ui'
 
 export function SnippetPanel() {
   const t = useT()
@@ -30,6 +31,21 @@ export function SnippetPanel() {
     }
   }
 
+  /**
+   * 删除片段前必须二次确认（审计 P-4）：删除按钮与「编辑」同排同尺寸，
+   * 误点即永久丢失且没有撤销途径，与主机/密钥/凭据的删除策略也不一致。
+   */
+  const removeSnippet = async (snippet: CommandSnippet) => {
+    const accepted = await confirmDialog({
+      title: t('删除命令片段'),
+      message: t('确定删除命令片段「') + snippet.name + t('」吗？该操作不可恢复。'),
+      confirmLabel: t('删除'),
+      danger: true
+    })
+    if (!accepted) return
+    await remove(snippet.id)
+  }
+
   return (
     <div className="settings-section snippet-panel">
       <div className="settings-section-title"><Icon name="terminal" size={15} /> {t('命令片段')}</div>
@@ -53,7 +69,7 @@ export function SnippetPanel() {
             </div>
             <div className="snippet-item-actions">
               <button className="host-icon-btn" onClick={() => setEditing(snippet)} title={t('编辑')}><Icon name="settings" size={14} /></button>
-              <button className="host-icon-btn danger" onClick={() => void remove(snippet.id)} title={t('删除')}><Icon name="trash" size={14} /></button>
+              <button className="host-icon-btn danger" onClick={() => void removeSnippet(snippet)} title={t('删除')}><Icon name="trash" size={14} /></button>
             </div>
           </div>
         ))}

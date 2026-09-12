@@ -156,6 +156,11 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
     let passphrase = form.passphrase
     let proxyPassword = form.proxyPassword
     let proxyPassphrase = form.proxyPassphrase
+    // 跳板凭据要能直接参与本次校验与组链（审计 X-2）：旧实现只经 setForm 写进 state，
+    // 而 React 的 state 更新是异步的，紧随其后的 validateForConnect / validateProxyInput /
+    // buildConnectRequest 读到的仍是闭包里的旧 form（各跳密码为空），多跳认证必然失败，
+    // 只有取消弹窗重连一次才正常。这里改为用局部快照传递。
+    let hops = form.proxyNextHops
 
     const needUnlock = shouldLoadSavedCredentials(form, {
       hasProfile: Boolean(profile),
@@ -170,36 +175,39 @@ export function ConnectDialog({ open: visible, onClose, onConnected, profile }: 
       passphrase ||= credential?.passphrase ?? ''
       proxyPassword ||= proxyCredential?.password ?? ''
       proxyPassphrase ||= proxyCredential?.passphrase ?? ''
-      const hopCredentials = form.proxyNextHops.map((hop, index) => {
+      hops = form.proxyNextHops.map((hop, index) => {
         const saved = getCredential(`proxy:${profile.id}:${index}`)
         return saved ? { ...hop, password: hop.password || saved.password || '', passphrase: hop.passphrase || saved.passphrase || '' } : hop
       })
-      setForm((current) => ({ ...current, password, passphrase, proxyPassword, proxyPassphrase, proxyNextHops: hopCredentials }))
+      setForm((current) => ({ ...current, password, passphrase, proxyPassword, proxyPassphrase, proxyNextHops: hops }))
     }
 
-    const validation = validateForConnect(form, password, form.keyPath)
+    // 校验与组链统一用「已解析凭据」的快照，不再依赖异步 state。
+    const resolved = { ...form, proxyNextHops: hops }
+
+    const validation = validateForConnect(resolved, password, resolved.keyPath)
     if (!validation.ok) {
       setError(t(ERROR_TEXT[validation.reason]))
       return
     }
-    const proxy = validateProxyInput(form, proxyPassword, proxyPassphrase)
+    const proxy = validateProxyInput(resolved, proxyPassword, proxyPassphrase)
     if (!proxy.ok) {
       setError(t(ERROR_TEXT[proxy.reason]))
       return
     }
 
     const request = buildConnectRequest({
-      name: form.name,
-      host: form.host.trim(),
-      port: Number(form.port),
-      username: form.username,
-      authMethod: form.authMethod,
+      name: resolved.name,
+      host: resolved.host.trim(),
+      port: Number(resolved.port),
+      username: resolved.username,
+      authMethod: resolved.authMethod,
       password,
-      keyPath: form.keyPath,
+      keyPath: resolved.keyPath,
       passphrase,
-      otpSecret: form.otpSecret,
-      keepalive: form.keepalive,
-      autoReconnect: form.autoReconnect,
+      otpSecret: resolved.otpSecret,
+      keepalive: resolved.keepalive,
+      autoReconnect: resolved.autoReconnect,
       proxy: proxy.proxy
     })
     // 请求里带了凭据但保险箱还锁着 —— 现在解锁，否则本次连接无法自动保存凭据。

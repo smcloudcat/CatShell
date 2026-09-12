@@ -11,7 +11,7 @@ import {
 } from '../utils/hostImport'
 import { logger } from '../utils/logger'
 import { recordAudit } from './audit'
-import { useVault } from './vault'
+import { useVault, type CredentialRemovalResult } from './vault'
 
 const STORE_FILE = 'hosts.json'
 const HOSTS_KEY = 'hosts'
@@ -21,7 +21,7 @@ interface HostsState {
   hosts: HostProfile[]
   init: () => Promise<void>
   upsert: (profile: HostProfile) => Promise<void>
-  remove: (id: string) => Promise<void>
+  remove: (id: string) => Promise<CredentialRemovalResult>
   importProfiles: (profiles: Partial<HostProfile>[]) => Promise<void>
 }
 
@@ -86,7 +86,7 @@ export const useHosts = create<HostsState>((set, get) => ({
   },
   upsert: async (profile) => {
     const next = normalizeHost(profile)
-    if (!isValidHost(next)) throw new Error('主机地址、用户名或端口无效')
+    if (!isValidHost(next)) throw new AppError(ERROR_CODES.HOST_INVALID)
     const existed = get().hosts.some((item) => item.id === next.id)
     const hosts = existed
       ? get().hosts.map((item) => (item.id === next.id ? next : item))
@@ -100,8 +100,10 @@ export const useHosts = create<HostsState>((set, get) => ({
     const hosts = get().hosts.filter((item) => item.id !== id)
     set({ hosts })
     await persist(hosts)
-    await useVault.getState().removeCredential(id)
+    // 保险箱锁定时凭据删除会排队到下次解锁清理，把结果回传给调用方决定是否提示（审计 B-15）。
+    const credential = await useVault.getState().removeCredential(id)
     recordAudit('host.delete', removed ? `${removed.name} (${removed.host}:${removed.port})` : id, 'success', '删除主机配置')
+    return credential
   },
   importProfiles: async (profiles) => {
     if (profiles.length > MAX_IMPORT_PROFILES) {

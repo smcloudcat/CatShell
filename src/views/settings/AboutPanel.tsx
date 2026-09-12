@@ -3,6 +3,8 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '../../components/Icon'
 import { useT } from '../../i18n'
+import { errorText } from '../../i18n/errors'
+import { showToast } from '../../store/ui'
 
 const BLOG_URL = 'https://lwcat.cn'
 const CONTACT_EMAIL = 'yuncat@email.lwcat.cn'
@@ -18,8 +20,14 @@ export function AboutPanel() {
       .catch(() => setVersion(null))
   }, [])
 
+  /**
+   * 打开外链 / 写邮件。失败不能静默吞掉（审计 P-5）：系统未注册 `mailto:`、
+   * opener 权限被拒或外部浏览器不可用时，用户点了「毫无反应」根本无从排查。
+   */
   const open = (url: string) => {
-    void openUrl(url).catch(() => undefined)
+    openUrl(url).catch((err: unknown) => {
+      showToast(errorText(err, t, '打开链接失败'), 'error')
+    })
   }
 
   return (

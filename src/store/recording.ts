@@ -20,7 +20,21 @@ interface RecordingSession {
   chunks: RecordingChunk[]
   /** 连续 UTF-8 流解码器：多字节字符可能跨块。 */
   decoder: TextDecoder
+  /** 已累积文本的字符数，用于封顶（审计 P-6）。 */
+  bufferedLength: number
+  /** 达到上限后置位：此后只丢弃输出，不再增长缓冲。 */
+  truncated: boolean
 }
+
+/**
+ * 录制缓冲上限（字符数，约 2 MB 量级，与会话输出日志对齐）。
+ *
+ * 录制缓冲按输出字节无限增长；长时间高频输出的会话（例如 `tail -f`、
+ * 反复刷新的构建日志）足以把渲染进程内存撑爆（审计 P-6）。
+ */
+const MAX_RECORDING_LENGTH = 2 * 1024 * 1024
+/** 截断时写进录制内容本身，回放时一眼能看出后段未被记录。 */
+const TRUNCATION_NOTICE = '\r\n[CatShell] 录制缓冲已达上限（约 2 MB），后续输出未记录\r\n'
 
 const sessions = new Map<number, RecordingSession>()
 
@@ -45,7 +59,9 @@ export function startRecording(sessionId: number, meta: { title: string; cols: n
     rows: meta.rows,
     title: meta.title,
     chunks: [],
-    decoder: new TextDecoder('utf-8')
+    decoder: new TextDecoder('utf-8'),
+    bufferedLength: 0,
+    truncated: false
   })
   useRecordingStore.setState((state) => ({ active: { ...state.active, [sessionId]: true } }))
 }
@@ -74,11 +90,37 @@ export function stopRecording(sessionId: number): string | null {
 /** 输出入口：把一段原始终端输出（UTF-8 字节）追加进录制缓冲。 */
 export function recordOutput(sessionId: number, bytes: Uint8Array): void {
   const session = sessions.get(sessionId)
-  if (!session || bytes.length === 0) return
+  if (!session || bytes.length === 0 || session.truncated) return
   // stream: true 保证跨块的多字节字符不会被打碎
   const text = session.decoder.decode(bytes, { stream: true })
   if (!text) return
+  if (session.bufferedLength + text.length > MAX_RECORDING_LENGTH) {
+    // 封顶（审计 P-6）：截断点在缓冲区里留一条提示，回放时能看出后段缺失。
+    session.chunks.push({
+      offsetMs: performance.now() - session.monotonicStart,
+      text: TRUNCATION_NOTICE
+    })
+    session.truncated = true
+    return
+  }
+  session.bufferedLength += text.length
   session.chunks.push({ offsetMs: performance.now() - session.monotonicStart, text })
+}
+
+/**
+ * 丢弃某会话的录制缓冲与「录制中」标记（审计 P-6）。
+ *
+ * 关闭标签 / 重连时调用：否则缓冲与 `active[id]` 都会残留，录制指示灯卡在
+ * 「录制中」且再也操作不了那个条目。
+ */
+export function discardRecording(sessionId: number): void {
+  sessions.delete(sessionId)
+  useRecordingStore.setState((state) => {
+    if (!(sessionId in state.active)) return state
+    const active = { ...state.active }
+    delete active[sessionId]
+    return { active }
+  })
 }
 
 /** 录制时长（毫秒）；未在录制返回 null。 */

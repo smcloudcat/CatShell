@@ -105,10 +105,14 @@ export function HostsView({ onOpenSessions }: Props) {
 
   const handleDelete = useCallback(
     async (host: HostProfile) => {
-      await removeHost(host.id)
+      const credential = await removeHost(host.id)
+      // 保险箱锁定时凭据删不掉、只能排队，必须明确告知，否则用户会以为已经清理干净（审计 B-15）。
+      if (credential === 'queued') {
+        showToast(t('保险箱已锁定，凭据将在下次解锁时自动清理'), 'warning')
+      }
       recordAudit('host.delete', `${host.name || host.host}`, 'success', '删除主机配置')
     },
-    [removeHost]
+    [removeHost, t]
   )
 
   // 行组件的回调签名要求返回 void；这里包一层显式 `void`，既满足 lint，也保持引用稳定。

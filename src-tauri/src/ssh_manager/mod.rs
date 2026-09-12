@@ -116,6 +116,9 @@ pub struct SshManager {
     next_forward_id: AtomicU64,
     pub sftp_transfers: Mutex<HashMap<u64, Arc<sftp::SftpTransfer>>>,
     pub sftp_disk_transfers: Mutex<HashMap<u64, Arc<sftp::SftpDiskTransfer>>>,
+    /// 半成品基准路径的占坑集合（审计 B-4）：把「检查占用」与「占坑」做成原子操作，
+    /// 避免并发同名磁盘传输共用同一个 `{target}.catshell-part` 交错写。
+    claimed_part_paths: sftp::PartPathClaims,
     next_transfer_id: AtomicU64,
     next_disk_transfer_id: AtomicU64,
     /// 磁盘上传路径令牌：本地路径只能经 Rust 侧文件对话框选取，webview 仅持有一次性令牌。
@@ -141,6 +144,7 @@ impl Default for SshManager {
             next_forward_id: AtomicU64::new(1),
             sftp_transfers: Mutex::new(HashMap::new()),
             sftp_disk_transfers: Mutex::new(HashMap::new()),
+            claimed_part_paths: sftp::new_part_path_claims(),
             next_transfer_id: AtomicU64::new(1),
             next_disk_transfer_id: AtomicU64::new(1),
             sftp_upload_path_tokens: Mutex::new(HashMap::new()),
@@ -341,7 +345,15 @@ impl client::Handler for SshHandler {
             HostKeyVerdict::Unknown => {}
         }
 
-        let token = format!("{}:{}:{}", self.host, self.port, fingerprint);
+        // token 必须带上会话 id（审计 B-9）：同一个 `host:port:fingerprint` 可能在两个
+        // 并发会话里同时首次出现，旧实现用「host:port:fingerprint」当键，第二次 insert
+        // 会覆盖并丢弃第一个 oneshot::Sender，其接收端立刻收到 Err 而被 `unwrap_or(false)`
+        // 判成「用户拒绝」——两个并发连接里有一个会毫无提示地失败。
+        // 前端只是把收到的 token 原样回传，加一段后缀不改变契约。
+        let token = format!(
+            "{}:{}:{}:{}",
+            self.host, self.port, fingerprint, self.session_id
+        );
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().await.insert(token.clone(), sender);
         self.sink.emit(
@@ -982,6 +994,12 @@ async fn run_session(
     let mut attempt: u32 = 0;
 
     let final_reason = 'outer: loop {
+        // 退避睡眠结束后必须复查「用户是否已手动关闭」：旧实现只在「决定是否重试」的
+        // 时刻检查，而随后的 sleep（2/5/10…秒）窗口里点断开或关标签会被完全漏掉，
+        // 醒来后照样建连，留下一条前端已经不认的幽灵连接（审计 B-8）。
+        if session.manual_closed.load(Ordering::SeqCst) {
+            break 'outer Some("已手动断开".to_string());
+        }
         let status_label = if attempt == 0 {
             "connecting"
         } else {

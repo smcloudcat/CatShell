@@ -18,12 +18,15 @@ export interface SftpEntryActions {
 }
 
 /**
- * 行高（px）。对应 `.sftp-entry` 的 `min-height: 42px` + 上下各 5px padding。
+ * 行高（px），必须与 `.sftp-entry` 的实际占位一致。
  *
- * 窗口化要求行高固定：激活时给行加上 border-box 的显式高度，渲染结果与原来的
- * `min-height` 完全一致（内容高度同样被约束为 42px），但总高度可精确预测。
+ * 全局 `box-sizing: border-box`（glass.css）下 `min-height: 42px` 已经把 padding
+ * 与 border 都算进去了，所以实际行高就是 42，而不是「42 + 上下各 5px」（审计 P-1）。
+ *
+ * 窗口化要求行高固定：虚拟化时给行加显式高度，渲染结果与 `min-height` 一致
+ * （内容同样被约束在 42px 内），但总高度可精确预测，不会累积滚动偏移。
  */
-const ROW_HEIGHT = 52
+const ROW_HEIGHT = 42
 /** 低于该行数时保持全量渲染：短列表不值得引入占位元素与滚动监听。 */
 const VIRTUALIZE_MIN_ROWS = 120
 

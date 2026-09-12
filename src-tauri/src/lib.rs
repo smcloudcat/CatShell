@@ -718,6 +718,10 @@ fn ai_key_load() -> Result<Option<String>, String> {
     }
 }
 
+/// AI 响应体读取上限（审计 X-4）：60 秒总超时挡不住高速响应，恶意或被劫持的
+/// 端点可以在超时窗口内推任意大小的数据进内存，直到事后才截断为 400 字符。
+const AI_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 /// 调用用户配置的 OpenAI 兼容 `/chat/completions` 接口（AI 辅助，6.17）。
 /// 无状态透传：CatShell 不内置任何模型服务，网络与凭据行为完全由用户配置决定。
 #[tauri::command]
@@ -751,6 +755,10 @@ async fn ai_complete(request: AiCompleteRequest) -> Result<String, String> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
+        // 禁用重定向（审计 X-3）：reqwest 默认策略只在**跨主机**时剥离 Authorization，
+        // 同主机 https→http 降级仍会带着 Bearer 明文外发，与上面「endpoint 必须 https」
+        // 的校验形不成闭环。
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))?;
     let mut http = client.post(&url).json(&body);
@@ -765,10 +773,24 @@ async fn ai_complete(request: AiCompleteRequest) -> Result<String, String> {
         .await
         .map_err(|error| format!("请求 AI 接口失败: {error}"))?;
     let status = response.status();
-    let text = response
-        .text()
+    // 边收边判上限（审计 X-4）：不能先 `text()` 全量读进内存再检查大小。
+    let mut response = response;
+    let mut raw: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| format!("读取 AI 响应失败: {error}"))?;
+        .map_err(|error| format!("读取 AI 响应失败: {error}"))?
+    {
+        if raw.len() + chunk.len() > AI_RESPONSE_MAX_BYTES {
+            return Err(format!(
+                "AI 响应体超过 {} MB 上限，已中止读取",
+                AI_RESPONSE_MAX_BYTES / (1024 * 1024)
+            ));
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    // 分块边界可能切开多字节字符，统一在收全之后再做有损解码。
+    let text = String::from_utf8_lossy(&raw).into_owned();
     if !status.is_success() {
         // 截断错误体，避免超长 HTML 错误页刷屏。
         let snippet: String = text.chars().take(400).collect();

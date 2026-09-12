@@ -109,17 +109,23 @@ export function SessionsView() {
   }
 
   /** 关闭标签前先断开连接，避免后端会话在标签消失后继续存活。 */
-  const handleCloseTab = (id: number) => {
+  const handleCloseTab = async (id: number) => {
     const status = sessions[id]?.status
     if (status === 'connected' || status === 'connecting' || status === 'reconnecting') {
-      // 断开/关闭失败不能再静默（审计 B-7）：否则标签看似关闭、后端会话仍存活。
-      void disconnect(id).catch((err: unknown) =>
+      // 必须 await 到断开完成再关标签（审计 X-7）：两者并发发射时没有顺序保证，
+      // closeTab 里的 sshRemove 先返回后，后到的 sshDisconnect 会对已移除的会话
+      // 报错，被 catch 捕获后弹出「断开连接失败」——正常关标签也会误报。
+      try {
+        await disconnect(id)
+      } catch (err: unknown) {
         showToast(errorText(err, t, '断开连接失败'), 'error')
-      )
+      }
     }
-    void closeTab(id).catch((err: unknown) =>
+    try {
+      await closeTab(id)
+    } catch (err: unknown) {
       showToast(errorText(err, t, '关闭会话标签失败'), 'error')
-    )
+    }
   }
 
   const handleRename = (id: number, name: string) => {
@@ -346,7 +352,7 @@ export function SessionsView() {
         connectedAt={connectedAt}
         onSelect={handleSelectTab}
         onReconnect={handleReconnect}
-        onCloseTab={handleCloseTab}
+        onCloseTab={(id) => { void handleCloseTab(id) }}
         onRename={handleRename}
       />
       <SessionToolbar

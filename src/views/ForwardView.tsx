@@ -41,10 +41,12 @@ export function ForwardView() {
   )
 
   useEffect(() => {
+    // 选中的会话可能已经断开：下拉选项里不再有它，而 form.sessionId 仍然非空，
+    // 旧实现只在「为空」时填充，于是显示值与实际提交值脱节（审计 X-6）。
+    const stillConnected = connectedSessions.some((session) => String(session.id) === form.sessionId)
+    if (stillConnected) return
     const first = connectedSessions[0]
-    if (!form.sessionId && first) {
-      setForm((current) => ({ ...current, sessionId: String(first.id) }))
-    }
+    setForm((current) => ({ ...current, sessionId: first ? String(first.id) : '' }))
   }, [connectedSessions, form.sessionId])
 
   const loadForwards = async () => {
@@ -68,7 +70,13 @@ export function ForwardView() {
     const bindPort = Number(form.bindPort)
     const targetPort = Number(form.targetPort)
     const needsTarget = form.direction !== 'dynamic'
-    if (!sessionId || (needsTarget && !form.targetHost.trim()) || !Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535 || (needsTarget && (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535))) {
+    // 提交前再校验一次会话是否仍在线：否则会对已断开的会话发起转发，
+    // 后端报错文案难懂，或者用户以为选了 A、实际提交的是旧的 B（审计 X-6）。
+    if (!sessionId || !connectedSessions.some((session) => session.id === sessionId)) {
+      setError(t('请选择一条已连接的会话'))
+      return
+    }
+    if ((needsTarget && !form.targetHost.trim()) || !Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535 || (needsTarget && (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535))) {
       setError(t('请填写有效的会话、监听端口和目标地址'))
       return
     }
