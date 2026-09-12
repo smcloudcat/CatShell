@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon, IconName } from './components/Icon'
 import { Modal } from './components/Modal'
@@ -22,7 +23,13 @@ import { useSnippets } from './store/snippets'
 import { useAudit } from './store/audit'
 import { knownHostsSetMode, traySetActiveCount } from './api/ssh'
 import { useT } from './i18n'
-import { accentContrastOf, isSafeBackgroundImage, resolveMode, withModeBackgrounds } from './types/theme'
+import {
+  accentContrastOf,
+  isSafeBackgroundImage,
+  normalizeBackgroundImagePath,
+  resolveMode,
+  withModeBackgrounds
+} from './types/theme'
 import './styles/glass.css'
 import './App.css'
 
@@ -450,9 +457,16 @@ function App() {
       } else {
         bg.classList.add('has-image')
         bg.style.background = 'none'
-        // 校验逃逸字符（审计 S-4）：备份还原路径有该校验，主加载路径此前漏了。
-        if (bgTheme.backgroundImage && isSafeBackgroundImage(bgTheme.backgroundImage)) {
-          bg.style.setProperty('--app-bg-image', `url("${bgTheme.backgroundImage}")`)
+        // 存量配置可能是反斜杠路径（旧版保存），先规范化再校验（审计 S-4）。
+        const imagePath = bgTheme.backgroundImage
+          ? normalizeBackgroundImagePath(bgTheme.backgroundImage)
+          : null
+        if (imagePath && isSafeBackgroundImage(imagePath)) {
+          // 本地路径必须走 Tauri asset 协议（tauri.conf.json 已启用 assetProtocol），
+          // 裸路径放进 url() 会被 webview 当相对地址而加载失败。
+          bg.style.setProperty('--app-bg-image', `url("${convertFileSrc(imagePath)}")`)
+        } else {
+          bg.style.removeProperty('--app-bg-image')
         }
       }
     }

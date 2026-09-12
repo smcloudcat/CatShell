@@ -25,6 +25,7 @@ export function Appearance() {
   const theme = useSettings((s) => s.theme)
   const setTheme = useSettings((s) => s.setTheme)
   const setAppearanceMode = useSettings((s) => s.setAppearanceMode)
+  const saveTheme = useSettings((s) => s.saveTheme)
   const terminal = useSettings((s) => s.terminal)
   const setTerminal = useSettings((s) => s.setTerminal)
   const saveTerminal = useSettings((s) => s.saveTerminal)
@@ -39,19 +40,19 @@ export function Appearance() {
         <div className="seg-group">
           <button
             className={`seg-btn ${theme.mode === 'auto' ? 'active' : ''}`}
-            onClick={() => setAppearanceMode('auto')}
+            onClick={() => { setAppearanceMode('auto'); void saveTheme() }}
           >
             {t('跟随系统')}
           </button>
           <button
             className={`seg-btn ${theme.mode === 'light' ? 'active' : ''}`}
-            onClick={() => setAppearanceMode('light')}
+            onClick={() => { setAppearanceMode('light'); void saveTheme() }}
           >
             {t('浅色')}
           </button>
           <button
             className={`seg-btn ${theme.mode === 'dark' ? 'active' : ''}`}
-            onClick={() => setAppearanceMode('dark')}
+            onClick={() => { setAppearanceMode('dark'); void saveTheme() }}
           >
             {t('深色')}
           </button>

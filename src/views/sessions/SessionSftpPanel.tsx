@@ -98,6 +98,10 @@ export function SessionSftpPanel({ sessionId, onCollapse }: Props) {
   const loadSeqRef = useRef(0)
   const disposedRef = useRef(false)
   useEffect(() => {
+    // React StrictMode（dev）会执行 mount → cleanup → mount 序列：cleanup 把
+    // disposedRef 置 true 后不会自动复位，重挂载阶段必须显式复位。否则 dev 模式下
+    // 目录响应全部被当「已卸载」丢弃，busy 永不解除，面板永远停在加载中。
+    disposedRef.current = false
     // 组件以 key={activeId} 重挂载，卸载后丢弃 in-flight 响应。
     return () => {
       disposedRef.current = true

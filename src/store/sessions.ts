@@ -218,6 +218,11 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const { sessions } = get()
     const info = sessions[event.id]
     if (!info) {
+      // 本地已删除的会话（如刚被 closeTab）迟到的状态事件不能复活成幽灵标签：
+      // 那样的标签没有 name/host，requests 里也没有连接参数，点「重新连接」
+      // 只会报「缺少可复用的连接参数」。只有连接过程中的事件（open() 尚未
+      // 登记时的竞争窗口）才需要兜底登记，断开/关闭事件一律忽略。
+      if (event.status !== 'connecting' && event.status !== 'connected') return
       set((s) => ({
         sessions: {
           ...s.sessions,

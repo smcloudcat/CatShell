@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 # 版本策略（P2-18）：Tauri 生态（tauri / tauri-build / tauri-plugin-*）统一声明主版本 "2"，
 # 与官方模板一致，补丁升级跟随生态；底层行为依赖（tokio / bytes / russh / russh-sftp）刻意
 # 精确到小版本，避免解析到新版本时引入行为漂移。实际锁定由 Cargo.lock 兜底。
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-dialog = "2"
 
 # 类型自动生成（6.15）：为跨 IPC 的 DTO 派生 TS 绑定，cargo test 时导出到

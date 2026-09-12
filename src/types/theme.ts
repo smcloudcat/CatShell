@@ -123,3 +123,15 @@ export function withModeBackgrounds(theme: ThemeConfig, mode: AppearanceMode): T
 export function isSafeBackgroundImage(value: string): boolean {
   return value.length > 0 && value.length <= 500 && !/["`,;()\n\r\\]/.test(value)
 }
+
+/**
+ * 把用户选择的本地路径规范化为「正斜杠」形式（C:\a\b.png → C:/a/b.png）。
+ *
+ * Windows 选择对话框返回反斜杠路径：既过不了 isSafeBackgroundImage（反斜杠在
+ * CSS url() 里是转义前缀，可能伪造引号/换行），裸放进 url() 也无法加载。
+ * 正斜杠路径在 Windows 文件 API 与 Tauri asset 协议下同样有效，配合
+ * convertFileSrc 生成 asset:// 地址后即可被 CSP 的 img-src asset: 放行。
+ */
+export function normalizeBackgroundImagePath(value: string): string {
+  return value.trim().replace(/\\/g, '/')
+}

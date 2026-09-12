@@ -1,4 +1,4 @@
-import { ThemeConfig } from '../../types/theme'
+import { ThemeConfig, normalizeBackgroundImagePath } from '../../types/theme'
 import { ColorRow, SegRow, SliderRow } from './ThemeControls'
 import { useT } from '../../i18n'
 
@@ -109,6 +109,7 @@ async function pickImage(setTheme: Props['setTheme']) {
     filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]
   })
   if (typeof file === 'string') {
-    setTheme({ backgroundImage: file })
+    // 反斜杠路径过不了 CSS/校验（见 normalizeBackgroundImagePath），存储前统一转正斜杠。
+    setTheme({ backgroundImage: normalizeBackgroundImagePath(file) })
   }
 }

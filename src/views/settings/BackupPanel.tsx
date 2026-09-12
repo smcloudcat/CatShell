@@ -2,7 +2,7 @@ import { ChangeEvent } from 'react'
 import { Icon } from '../../components/Icon'
 import { HostProfile } from '../../types/host'
 import { CommandSnippet } from '../../types/snippet'
-import { isSafeBackgroundImage, ThemeConfig } from '../../types/theme'
+import { isSafeBackgroundImage, normalizeBackgroundImagePath, ThemeConfig } from '../../types/theme'
 import { AppError, ERROR_CODES } from '../../types/errors'
 import { useHosts } from '../../store/hosts'
 import { useSnippets } from '../../store/snippets'
@@ -28,6 +28,11 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 function normalizeTheme(value: unknown): ThemeConfig | null {
   if (!value || typeof value !== 'object') return null
   const theme = value as Partial<ThemeConfig>
+  // 旧备份里可能存着反斜杠的 Windows 路径：先规范化再校验，导入后才可用。
+  const backgroundImage =
+    typeof theme.backgroundImage === 'string'
+      ? normalizeBackgroundImagePath(theme.backgroundImage)
+      : theme.backgroundImage ?? null
   if (
     typeof theme.bgOpacity !== 'number' || !Number.isFinite(theme.bgOpacity) ||
     typeof theme.blurRadius !== 'number' || !Number.isFinite(theme.blurRadius) ||
@@ -39,7 +44,7 @@ function normalizeTheme(value: unknown): ThemeConfig | null {
     typeof theme.gradient.from !== 'string' || !HEX_COLOR.test(theme.gradient.from) ||
     typeof theme.gradient.to !== 'string' || !HEX_COLOR.test(theme.gradient.to) ||
     typeof theme.gradient.angle !== 'number' || !Number.isFinite(theme.gradient.angle) ||
-    (theme.backgroundImage !== null && (typeof theme.backgroundImage !== 'string' || !isSafeBackgroundImage(theme.backgroundImage))) ||
+    (backgroundImage !== null && (typeof backgroundImage !== 'string' || !isSafeBackgroundImage(backgroundImage))) ||
     typeof theme.accentColor !== 'string' || !HEX_COLOR.test(theme.accentColor) ||
     (theme.mode !== 'auto' && theme.mode !== 'light' && theme.mode !== 'dark')
   ) {
@@ -55,7 +60,7 @@ function normalizeTheme(value: unknown): ThemeConfig | null {
       to: theme.gradient.to,
       angle: Math.min(360, Math.max(0, theme.gradient.angle))
     },
-    backgroundImage: theme.backgroundImage,
+    backgroundImage,
     bgOpacity: Math.min(1, Math.max(0.1, theme.bgOpacity)),
     blurRadius: Math.round(Math.min(20, Math.max(2, theme.blurRadius))),
     borderRadius: Math.round(Math.min(24, Math.max(0, theme.borderRadius))),
