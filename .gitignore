@@ -18,6 +18,8 @@ dist-ssr
 # Rust / Tauri build artifacts
 src-tauri/target
 src-tauri/gen
+# ts-rs 测试导出的默认目录（真实绑定导出到 src/types/bindings，经 bindings:check 校验）
+src-tauri/bindings
 
 # Local agent/AI project config (not part of the repository)
 AGENTS.md
