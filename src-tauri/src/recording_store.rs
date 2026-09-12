@@ -72,7 +72,15 @@ pub fn save_recording(dir: &Path, base: &str, content: &str) -> Result<Recording
     // 保存是唯一写入方，目录不存在时就地创建，调用方无需预建
     std::fs::create_dir_all(&target_dir).map_err(|error| format!("创建录制目录失败: {error}"))?;
     let path = target_dir.join(&name);
-    std::fs::write(&path, content_bytes).map_err(|error| format!("写入录制文件失败: {error}"))?;
+    // 先写临时文件再原子替换（审计 X-11）：直接写目标时断电/崩溃会留下半截 `.cast`，
+    // 它仍会被 `list_recordings` 列出来且读取失败。临时名不以 `.cast` 结尾，
+    // 即使意外残留也不会出现在列表里。
+    let tmp = target_dir.join(format!("{name}.catshell-tmp"));
+    std::fs::write(&tmp, content_bytes).map_err(|error| format!("写入录制文件失败: {error}"))?;
+    if let Err(error) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("替换录制文件失败: {error}"));
+    }
     Ok(meta_of(&name, content_bytes.len() as u64))
 }
 

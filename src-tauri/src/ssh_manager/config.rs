@@ -202,6 +202,17 @@ pub fn load_known_hosts_snapshot(path: Option<&Path>) -> Result<KnownHostsSnapsh
     })
 }
 
+/// 原子替换文件内容：先写 `<path>.catshell-tmp`，再 `rename` 覆盖目标。
+///
+/// 直接 `fs::write` 目标时，写入中途崩溃/断电会留下截断文件：`known_hosts` 被截断会让
+/// 之后所有主机都被当作未知需要重新确认（审计 R-1）。rename 在同目录下是原子的。
+fn atomic_replace(path: &Path, content: &str, label: &str) -> Result<(), String> {
+    let tmp = path.with_extension("catshell-tmp");
+    std::fs::write(&tmp, content).map_err(|error| format!("写入{label}临时文件失败: {error}"))?;
+    std::fs::rename(&tmp, path).map_err(|error| format!("替换{label}失败: {error}"))?;
+    Ok(())
+}
+
 pub fn remove_known_hosts_entry(
     path: Option<&Path>,
     pattern: &str,
@@ -222,7 +233,7 @@ pub fn remove_known_hosts_entry(
     }
     let backup = resolved.with_extension("bak");
     std::fs::copy(&resolved, &backup).map_err(|err| format!("备份 known_hosts 失败: {err}"))?;
-    std::fs::write(&resolved, updated).map_err(|err| format!("写入 known_hosts 失败: {err}"))?;
+    atomic_replace(&resolved, &updated, "known_hosts")?;
     Ok(removed)
 }
 
@@ -259,6 +270,32 @@ pub fn build_host_block(draft: &HostConfigDraft) -> String {
     block
 }
 
+/// 拆出配置行的关键字与其后的模式/条件部分。
+///
+/// 关键字按**任意空白**分隔（审计 R-2）：`Host\tweb` 与 `Host web` 都要识别成 host 块，
+/// 否则旧块不会被移除、留下重复定义。返回 (小写关键字, 剩余部分)。
+fn config_line_keyword(line: &str) -> (String, &str) {
+    let mut parts = line.trim().splitn(2, char::is_whitespace);
+    let keyword = parts.next().unwrap_or("").to_ascii_lowercase();
+    let rest = parts.next().unwrap_or("").trim_start();
+    (keyword, rest)
+}
+
+/// 该行是否为「会让后续主机默认继承参数」的通配/条件块起始行。
+///
+/// OpenSSH 对每个参数取「首个获得的值」，因此新块必须插在 `Host *` / `Match` 这类
+/// 会覆盖到它的块之前，否则编辑主机后配置静默失效（审计 R-2）。
+fn is_wildcard_or_match_block(line: &str) -> bool {
+    let (keyword, rest) = config_line_keyword(line);
+    match keyword.as_str() {
+        "match" => true,
+        "host" => rest
+            .split_whitespace()
+            .any(|pattern| pattern.contains('*') || pattern.contains('?')),
+        _ => false,
+    }
+}
+
 /// 删除 `Host` 模式与给定名单（小写比较，OpenSSH 大小写不敏感）匹配的整块内容。
 /// `Match` 块与其后归属不清的内容一律保留。返回 (新内容, 删除块数)。
 pub fn remove_host_blocks(content: &str, names_lower: &[String]) -> (String, usize) {
@@ -267,10 +304,9 @@ pub fn remove_host_blocks(content: &str, names_lower: &[String]) -> (String, usi
     // 当前块是否命中名单；块从 `Host` 行开始，到下一个 `Host` / `Match` 行或文末结束。
     let mut in_removed_block = false;
     for line in content.lines() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.starts_with("host ") || lower == "host" {
-            let patterns: Vec<String> = trimmed[4..]
+        let (keyword, rest) = config_line_keyword(line);
+        if keyword == "host" {
+            let patterns: Vec<String> = rest
                 .split_whitespace()
                 .map(|pattern| pattern.trim_matches('"').to_ascii_lowercase())
                 .collect();
@@ -282,7 +318,7 @@ pub fn remove_host_blocks(content: &str, names_lower: &[String]) -> (String, usi
             }
             continue;
         }
-        if lower.starts_with("match") {
+        if keyword == "match" {
             in_removed_block = false;
             kept.push(line);
             continue;
@@ -298,7 +334,10 @@ pub fn remove_host_blocks(content: &str, names_lower: &[String]) -> (String, usi
     (result, removed)
 }
 
-/// 按名单替换 + 追加主机块：已有同名 Host 块先移除（连同其选项行），再把全部草稿追加到文末。
+/// 按名单替换 + 插入主机块。
+///
+/// 已有同名 Host 块先移除（连同其选项行），新块插入到首个 `Host *` / `Match` 之前
+/// （审计 R-2）：追加到文末时，文件前部的通配块会把新块的参数整体覆盖掉。
 /// 返回 (新内容, 被替换块数)。
 pub fn upsert_host_blocks(content: &str, drafts: &[HostConfigDraft]) -> (String, usize) {
     let names: Vec<String> = drafts
@@ -306,9 +345,24 @@ pub fn upsert_host_blocks(content: &str, drafts: &[HostConfigDraft]) -> (String,
         .map(|draft| draft.name.trim().to_ascii_lowercase())
         .collect();
     let (kept, removed) = remove_host_blocks(content, &names);
-    let mut result = kept;
+    let lines: Vec<&str> = kept.lines().collect();
+    let insert_at = lines
+        .iter()
+        .position(|line| is_wildcard_or_match_block(line))
+        .unwrap_or(lines.len());
+
+    let mut new_lines: Vec<String> = Vec::new();
     for draft in drafts {
-        result.push_str(&build_host_block(draft));
+        for line in build_host_block(draft).lines() {
+            new_lines.push(line.to_string());
+        }
+        new_lines.push(String::new());
+    }
+
+    let mut merged: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    merged.splice(insert_at..insert_at, new_lines);
+    let mut result = merged.join("\n");
+    if !result.is_empty() {
         result.push('\n');
     }
     (result, removed)
@@ -371,9 +425,7 @@ fn write_ssh_config_to(path: &Path, drafts: &[HostConfigDraft]) -> Result<(usize
         let _ = std::fs::copy(path, path.with_extension("catshell-bak"));
     }
     let (updated, removed) = upsert_host_blocks(&original, drafts);
-    let tmp = path.with_extension("catshell-tmp");
-    std::fs::write(&tmp, &updated).map_err(|error| format!("写入临时文件失败: {error}"))?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("替换 ~/.ssh/config 失败: {error}"))?;
+    atomic_replace(path, &updated, "~/.ssh/config")?;
     Ok((removed, drafts.len()))
 }
 
@@ -470,11 +522,41 @@ mod tests {
         let existing = "# my keys\nHost web\n  HostName old.example.com\n  User bob\nHost db\n  HostName db.example.com\n\nHost *\n  Compression yes\n";
         let (updated, replaced) = upsert_host_blocks(existing, &[draft("web", "web.example.com")]);
         assert_eq!(replaced, 1);
-        // 旧 web 块被整体移除，db 与注释、通配块保留，新 web 追加到文末。
+        // 旧 web 块被整体移除；db、注释、通配块保留；新 web 块插入到 `Host *` **之前**
+        // （审计 R-2：OpenSSH 取首个获得的值，追加到文末会被通配块覆盖）。
         assert!(!updated.contains("old.example.com"));
         assert!(updated.contains("# my keys"));
         assert!(updated.contains("HostName db.example.com"));
         assert!(updated.contains("Host *\n  Compression yes"));
+        assert!(updated
+            .contains("Host web\n  HostName web.example.com\n  Port 22\n  User alice\n\nHost *\n"));
+    }
+
+    #[test]
+    fn upsert_matches_host_blocks_separated_by_tabs() {
+        // `Host\tweb` 形式的旧块必须被识别并移除，否则会留下重复定义（审计 R-2）。
+        let existing = "Host\tweb\n  HostName old.example.com\n";
+        let (updated, replaced) = upsert_host_blocks(existing, &[draft("web", "web.example.com")]);
+        assert_eq!(replaced, 1);
+        assert!(!updated.contains("old.example.com"));
+        assert!(updated.contains("web.example.com"));
+    }
+
+    #[test]
+    fn upsert_inserts_before_the_first_match_block() {
+        let existing = "Match host proxy\n  User bob\n";
+        let (updated, replaced) = upsert_host_blocks(existing, &[draft("web", "web.example.com")]);
+        assert_eq!(replaced, 0);
+        let web_at = updated.find("Host web").expect("新块存在");
+        let match_at = updated.find("Match host proxy").expect("Match 块保留");
+        assert!(web_at < match_at, "新块必须插在 Match 块之前");
+        assert!(updated.contains("  User bob"));
+    }
+
+    #[test]
+    fn upsert_appends_to_the_end_without_any_wildcard_block() {
+        let existing = "Host db\n  HostName db.example.com\n";
+        let (updated, _) = upsert_host_blocks(existing, &[draft("web", "web.example.com")]);
         assert!(
             updated.ends_with("Host web\n  HostName web.example.com\n  Port 22\n  User alice\n\n")
         );

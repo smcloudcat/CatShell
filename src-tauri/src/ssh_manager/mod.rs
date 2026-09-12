@@ -509,6 +509,9 @@ async fn request_kbi_answers(
             ));
         }
     };
+    // 成功分支同样要清理待答表（审计 R-3）：否则每次成功认证都残留一条，
+    // 重连反复认证会累积，之后 `answer_kbi` 可能命中陈旧条目。
+    pending.lock().await.remove(&session_id);
     Ok(answers)
 }
 
@@ -1237,17 +1240,9 @@ impl SshManager {
         output: Option<Arc<dyn RawOutput>>,
         req: ConnectRequest,
     ) -> Result<u64, String> {
-        if req.host.trim().is_empty() {
-            return Err("主机地址不能为空".to_string());
-        }
-        if req.username.trim().is_empty() {
-            return Err("用户名不能为空".to_string());
-        }
-        if let Some(proxy) = &req.proxy {
-            if proxy.host.trim().is_empty() || proxy.username.trim().is_empty() {
-                return Err("跳板机地址或用户名不能为空".to_string());
-            }
-        }
+        // 统一校验：非空、长度上限、端口范围，以及整条跳板链逐跳检查
+        // （审计 R-5 / X-12，实现见 ConnectRequest::validate）。
+        req.validate()?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = if req.name.trim().is_empty() {
             format!("{}@{}", req.username, req.host)
@@ -1321,7 +1316,12 @@ impl SshManager {
         self.cancel_transfers_for_session(id).await;
         if let Ok(session) = self.session_ref(id).await {
             session.manual_closed.store(true, Ordering::SeqCst);
-            if let Some(half) = session.write.lock().await.as_mut() {
+            // 先把写半连接从锁里 `take()` 出来，再在**锁外** close（审计 R-4）：
+            // `as_mut()` 的临时 guard 会一直持有到语句结束，关闭在栈上阻塞时
+            // 同会话的 write / resize 会被一起挂起。取出后 write 走「会话尚未连接」
+            // 分支，语义与断开一致。
+            let half = session.write.lock().await.take();
+            if let Some(half) = half {
                 let _ = half.close().await;
             }
         }

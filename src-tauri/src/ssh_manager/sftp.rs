@@ -440,21 +440,50 @@ fn resume_stamp_path(stamp_base: &str) -> String {
     format!("{stamp_base}{RESUME_STAMP_SUFFIX}")
 }
 
+/// 读取指纹。**只**在文件不存在时静默返回 `None`（首次传输、或旧版本残留）；
+/// 其它错误（权限、磁盘、内容损坏）需要留日志，否则用户看到的是「续传总是从头开始」
+/// 却查不到原因（审计 R-14）。所有失败都返回 `None`，方向仍是「宁可重传」。
 async fn read_resume_stamp(stamp_base: &str) -> Option<ResumeStamp> {
-    let raw = tokio::fs::read_to_string(resume_stamp_path(stamp_base))
-        .await
-        .ok()?;
-    serde_json::from_str(&raw).ok()
+    let path = resume_stamp_path(stamp_base);
+    let raw = match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::warn!(path = %path, error = %error, "读取续传指纹失败，按不可续传处理");
+            return None;
+        }
+    };
+    match serde_json::from_str(&raw) {
+        Ok(stamp) => Some(stamp),
+        Err(error) => {
+            tracing::warn!(path = %path, error = %error, "续传指纹解析失败，按不可续传处理");
+            None
+        }
+    }
 }
 
+/// 写指纹。失败只降级为「本次不支持续传」，但必须留日志（审计 R-14）。
 async fn write_resume_stamp(stamp_base: &str, stamp: &ResumeStamp) {
-    if let Ok(raw) = serde_json::to_string(stamp) {
-        let _ = tokio::fs::write(resume_stamp_path(stamp_base), raw).await;
+    let path = resume_stamp_path(stamp_base);
+    let raw = match serde_json::to_string(stamp) {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!(error = %error, "续传指纹序列化失败，本次传输不支持断点续传");
+            return;
+        }
+    };
+    if let Err(error) = tokio::fs::write(&path, raw).await {
+        tracing::warn!(path = %path, error = %error, "写入续传指纹失败，本次传输不支持断点续传");
     }
 }
 
 async fn clear_resume_stamp(stamp_base: &str) {
-    let _ = tokio::fs::remove_file(resume_stamp_path(stamp_base)).await;
+    let path = resume_stamp_path(stamp_base);
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::debug!(path = %path, error = %error, "清理续传指纹失败（不影响已完成的结果）");
+        }
+    }
 }
 
 /// 本地源文件的指纹（上传方向用）。
@@ -1445,6 +1474,12 @@ impl SshManager {
                     }
                 }
             }
+            // 并发备用半成品（`-{id}` 后缀）不会被任何一次续传复用（下次只认基准路径），
+            // 失败/取消后残留在磁盘上就是垃圾，就地清理（审计 R-14）。
+            if occupied && !transfer.done.load(Ordering::SeqCst) {
+                let _ = tokio::fs::remove_file(&part_path).await;
+                clear_resume_stamp(&part_path).await;
+            }
             manager
                 .sftp_disk_transfers
                 .lock()
@@ -1671,6 +1706,12 @@ impl SshManager {
                         }
                     }
                 }
+            }
+            // 并发备用半成品（远端 `-{id}` 后缀）不会被续传复用，失败/取消后清掉
+            // （审计 R-14，下载方向同处注释）。
+            if occupied && !transfer.done.load(Ordering::SeqCst) {
+                let _ = sftp.remove_file(&part_path).await;
+                clear_resume_stamp(&stamp_base).await;
             }
             manager
                 .sftp_disk_transfers

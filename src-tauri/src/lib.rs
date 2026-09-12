@@ -653,6 +653,12 @@ async fn cli_launch_request(
     Ok(state.initial.lock().await.clone())
 }
 
+/// 托盘「快捷连接」子菜单最多展示的档案数。
+///
+/// 入库时就按此上限截断（而非只在建菜单时 `take`），保证托盘菜单与
+/// `quick_connects` 状态一致（审计 X-14）。
+const TRAY_QUICK_CONNECT_LIMIT: usize = 15;
+
 /// 前端推送托盘「快捷连接」清单（主机档案变化时调用），并重建托盘菜单。
 #[tauri::command]
 async fn tray_set_quick_connects(
@@ -660,8 +666,24 @@ async fn tray_set_quick_connects(
     state: State<'_, TrayState>,
     items: Vec<TrayQuickConnect>,
 ) -> Result<(), String> {
-    *state.quick_connects.lock().await = items;
-    let snapshot = state.quick_connects.lock().await.clone();
+    // 单次加锁内完成「写入 + 取快照」：此前两次 `lock().await` 之间允许并发调用插入，
+    // 会出现菜单快照与状态短暂不一致（审计 X-14）。
+    let mut items = items;
+    if items.len() > TRAY_QUICK_CONNECT_LIMIT {
+        // 静默截断会让用户「第 16 个档案在托盘里找不到」而无从排查（审计 X-14）：
+        // 至少留一条日志说明取舍，并且入库即截断，保持状态与菜单同源。
+        tracing::warn!(
+            total = items.len(),
+            limit = TRAY_QUICK_CONNECT_LIMIT,
+            "托盘快捷连接数量超出上限，仅保留前 15 条"
+        );
+        items.truncate(TRAY_QUICK_CONNECT_LIMIT);
+    }
+    let snapshot = {
+        let mut guard = state.quick_connects.lock().await;
+        *guard = items;
+        guard.clone()
+    };
     rebuild_tray_menu(&app, &snapshot)
 }
 
@@ -828,7 +850,7 @@ fn rebuild_tray_menu(app: &AppHandle, quick: &[TrayQuickConnect]) -> Result<(), 
             .map_err(|error| error.to_string())?;
         submenu.append(&empty).map_err(|error| error.to_string())?;
     } else {
-        for item in quick.iter().take(15) {
+        for item in quick.iter().take(TRAY_QUICK_CONNECT_LIMIT) {
             // 显示名可能重复，菜单 id 用档案 id 保证唯一。
             let entry = MenuItem::with_id(
                 app,
@@ -888,7 +910,11 @@ async fn known_hosts_list(
     state: State<'_, AppState>,
 ) -> Result<ssh_manager::KnownHostsSnapshot, String> {
     let path = state.ssh.effective_known_hosts_path().await;
-    load_known_hosts_snapshot(path.as_deref())
+    // `~/.ssh` 有可能落在网络盘/慢盘上，同步读取会阻塞 tokio worker（审计 X-13）：
+    // 与同文件其余路径统一走阻塞线程池。
+    tauri::async_runtime::spawn_blocking(move || load_known_hosts_snapshot(path.as_deref()))
+        .await
+        .map_err(|error| format!("读取任务异常: {error}"))?
 }
 
 #[tauri::command]
@@ -901,7 +927,13 @@ async fn known_hosts_remove(
         return Err("主机指纹条目无效".to_string());
     }
     let path = state.ssh.effective_known_hosts_path().await;
-    remove_known_hosts_entry(path.as_deref(), pattern.trim(), key_type.trim())
+    let pattern = pattern.trim().to_string();
+    let key_type = key_type.trim().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        remove_known_hosts_entry(path.as_deref(), &pattern, &key_type)
+    })
+    .await
+    .map_err(|error| format!("删除任务异常: {error}"))?
 }
 
 /// 切换 known_hosts 存储策略：openssh = ~/.ssh/known_hosts（默认），appdata = 应用数据目录独立存储。
@@ -924,7 +956,14 @@ async fn known_hosts_set_mode(
                 .path()
                 .app_data_dir()
                 .map_err(|_| "无法定位应用数据目录".to_string())?;
-            std::fs::create_dir_all(&dir).map_err(|err| format!("创建应用数据目录失败: {err}"))?;
+            // 应用数据目录可能落在慢盘/网络盘上，建目录走阻塞线程池（审计 X-13）。
+            let create_dir = dir.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                std::fs::create_dir_all(&create_dir)
+                    .map_err(|err| format!("创建应用数据目录失败: {err}"))
+            })
+            .await
+            .map_err(|error| format!("创建应用数据目录任务异常: {error}"))??;
             state
                 .ssh
                 .set_known_hosts_path(Some(&dir.join("known_hosts")))
@@ -939,12 +978,18 @@ async fn known_hosts_set_mode(
 // 录制存储（asciicast v2）。录制采集在前端输出流上，这里只负责落盘与读取。
 // ------------------------------------------------------------------
 
-fn recordings_dir_of(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+/// 录制目录（应用数据目录下的 `recordings/`），必要时就地创建。
+///
+/// 建目录本身是同步 IO，应用数据目录可能落在慢盘/网络盘上，因此走阻塞线程池
+/// （审计 X-13/R-14）；调用方拿到的是已存在的目录。
+async fn recordings_dir_of(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|_| "无法定位应用数据目录".to_string())?;
-    recording_store::ensure_recordings_dir(&dir)
+    tauri::async_runtime::spawn_blocking(move || recording_store::ensure_recordings_dir(&dir))
+        .await
+        .map_err(|error| format!("创建录制目录任务异常: {error}"))?
 }
 
 #[tauri::command]
@@ -953,7 +998,7 @@ async fn recording_save(
     base_name: String,
     content: String,
 ) -> Result<recording_store::RecordingMeta, String> {
-    let dir = recordings_dir_of(&app)?;
+    let dir = recordings_dir_of(&app).await?;
     // 文件写入很快，直接放 async 上下文执行可接受；用 spawn_blocking 隔离潜在的磁盘阻塞。
     tokio::task::spawn_blocking(move || recording_store::save_recording(&dir, &base_name, &content))
         .await
@@ -962,7 +1007,7 @@ async fn recording_save(
 
 #[tauri::command]
 async fn recording_list(app: AppHandle) -> Result<Vec<recording_store::RecordingMeta>, String> {
-    let dir = recordings_dir_of(&app)?;
+    let dir = recordings_dir_of(&app).await?;
     // 录制数量多时 read_dir + 元数据读取仍可能碰到慢盘，与 save/read/delete 统一口径走阻塞线程池。
     tokio::task::spawn_blocking(move || recording_store::list_recordings(&dir))
         .await
@@ -971,7 +1016,7 @@ async fn recording_list(app: AppHandle) -> Result<Vec<recording_store::Recording
 
 #[tauri::command]
 async fn recording_read(app: AppHandle, name: String) -> Result<String, String> {
-    let dir = recordings_dir_of(&app)?;
+    let dir = recordings_dir_of(&app).await?;
     tokio::task::spawn_blocking(move || recording_store::read_recording(&dir, &name))
         .await
         .map_err(|error| format!("读取任务异常: {error}"))?
@@ -979,7 +1024,7 @@ async fn recording_read(app: AppHandle, name: String) -> Result<String, String> 
 
 #[tauri::command]
 async fn recording_delete(app: AppHandle, name: String) -> Result<(), String> {
-    let dir = recordings_dir_of(&app)?;
+    let dir = recordings_dir_of(&app).await?;
     tokio::task::spawn_blocking(move || recording_store::delete_recording(&dir, &name))
         .await
         .map_err(|error| format!("删除任务异常: {error}"))?

@@ -73,6 +73,12 @@ fn modified_ms(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// 目标已存在时回传的稳定错误码前缀（前端据此弹出「覆盖」确认）。
+///
+/// 不能用文案匹配：`目标路径是一个已存在的目录` 这类错误同样含「已存在」，
+/// 但覆盖无法解决，误判会让用户在确认后再次失败。前端只认这个机器码。
+pub const KEYPAIR_EXISTS_CODE: &str = "KEYPAIR_EXISTS";
+
 /// 校验目标路径能安全用于生成：非空、绝对路径、不是已存在的目录。
 /// 不限制必须位于 `~/.ssh`（保存对话框由用户自由选择），但文件存在与否由 `overwrite` 控制。
 fn validate_generate_target(path: &str, overwrite: bool) -> Result<PathBuf, String> {
@@ -88,7 +94,7 @@ fn validate_generate_target(path: &str, overwrite: bool) -> Result<PathBuf, Stri
         return Err("目标路径是一个已存在的目录".to_string());
     }
     if path.exists() && !overwrite {
-        return Err("目标文件已存在".to_string());
+        return Err(format!("{KEYPAIR_EXISTS_CODE}: 目标文件已存在"));
     }
     Ok(path)
 }
@@ -103,7 +109,7 @@ pub fn generate_keypair(
     let private_path = validate_generate_target(private_path, overwrite)?;
     let public_path = PathBuf::from(format!("{}.pub", private_path.to_string_lossy()));
     if public_path.exists() && !overwrite {
-        return Err("同名公钥文件（.pub）已存在".to_string());
+        return Err(format!("{KEYPAIR_EXISTS_CODE}: 同名公钥文件（.pub）已存在"));
     }
 
     let mut key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)

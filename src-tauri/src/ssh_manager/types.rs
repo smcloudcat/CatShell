@@ -14,6 +14,17 @@ pub(super) const OUTPUT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 /// PTY 输出聚合体积上限：攒满即发，避免大输出场景下延迟被窗口时间拖长。
 pub(super) const OUTPUT_FLUSH_THRESHOLD: usize = 64 * 1024;
 
+/// 连接参数的字符串长度上限（审计 X-12）。
+///
+/// 这些值会原样进入 `redacted_summary()` 日志与 `session-status` 事件，无上限时
+/// 超长字符串会放大 IPC/日志体积；端口 0 也只会换来一条难懂的底层报错。
+pub(super) const MAX_HOST_LEN: usize = 255;
+pub(super) const MAX_USERNAME_LEN: usize = 128;
+pub(super) const MAX_NAME_LEN: usize = 120;
+pub(super) const MAX_KEY_PATH_LEN: usize = 1024;
+/// 跳板链最大深度：再深的链只会把连接流程拖长，没有任何实际用途（审计 X-12）。
+pub(super) const MAX_PROXY_DEPTH: usize = 8;
+
 /// 跳板机连接参数（含明文凭据）。
 ///
 /// 刻意**不**实现 `Debug` / `Serialize`：一次不慎的 `{:?}` 日志或序列化就会把口令写出去。
@@ -49,6 +60,40 @@ impl ProxyConfig {
             cursor = hop.next.as_deref();
         }
         hops
+    }
+
+    /// 校验单跳的必填项与长度上限（审计 R-5 / X-12）。`hop_index` 从 0 起，用于报错定位。
+    pub(super) fn validate_hop(&self, hop_index: usize) -> Result<(), String> {
+        let label = if hop_index == 0 {
+            "跳板机".to_string()
+        } else {
+            format!("第 {} 跳跳板机", hop_index + 1)
+        };
+        if self.host.trim().is_empty() {
+            return Err(format!("{label}地址不能为空"));
+        }
+        if self.host.chars().count() > MAX_HOST_LEN {
+            return Err(format!("{label}地址过长（最多 {MAX_HOST_LEN} 个字符）"));
+        }
+        if self.port == 0 {
+            return Err(format!("{label}端口必须在 1~65535 之间"));
+        }
+        if self.username.trim().is_empty() {
+            return Err(format!("{label}用户名不能为空"));
+        }
+        if self.username.chars().count() > MAX_USERNAME_LEN {
+            return Err(format!(
+                "{label}用户名过长（最多 {MAX_USERNAME_LEN} 个字符）"
+            ));
+        }
+        if let Some(path) = self.key_path.as_deref() {
+            if path.chars().count() > MAX_KEY_PATH_LEN {
+                return Err(format!(
+                    "{label}私钥路径过长（最多 {MAX_KEY_PATH_LEN} 个字符）"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -105,6 +150,53 @@ impl ConnectRequest {
                 None => "none".to_string(),
             }
         )
+    }
+
+    /// 连接前的统一校验：非空、长度上限、端口范围，以及**整条**跳板链的逐跳检查。
+    ///
+    /// 此前只校验链头（审计 R-5）：`proxy.next` 各级的空字段会一路带到 `create`，
+    /// 被归类成「瞬时错误」后在 `MAX_RECONNECT_ATTEMPTS` 内反复重试并延迟报错。
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.host.trim().is_empty() {
+            return Err("主机地址不能为空".to_string());
+        }
+        if self.host.chars().count() > MAX_HOST_LEN {
+            return Err(format!("主机地址过长（最多 {MAX_HOST_LEN} 个字符）"));
+        }
+        if self.port == 0 {
+            return Err("端口必须在 1~65535 之间".to_string());
+        }
+        if self.username.trim().is_empty() {
+            return Err("用户名不能为空".to_string());
+        }
+        if self.username.chars().count() > MAX_USERNAME_LEN {
+            return Err(format!("用户名过长（最多 {MAX_USERNAME_LEN} 个字符）"));
+        }
+        if self.name.chars().count() > MAX_NAME_LEN {
+            return Err(format!("会话名称过长（最多 {MAX_NAME_LEN} 个字符）"));
+        }
+        if let Some(path) = self.key_path.as_deref() {
+            if path.chars().count() > MAX_KEY_PATH_LEN {
+                return Err(format!("私钥路径过长（最多 {MAX_KEY_PATH_LEN} 个字符）"));
+            }
+        }
+        if let Some(mut hop) = self.proxy.as_ref() {
+            let mut index = 0usize;
+            loop {
+                if index >= MAX_PROXY_DEPTH {
+                    return Err(format!("跳板链最多支持 {MAX_PROXY_DEPTH} 跳"));
+                }
+                hop.validate_hop(index)?;
+                match hop.next.as_deref() {
+                    Some(next) => {
+                        hop = next;
+                        index += 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -503,5 +595,105 @@ mod tests {
         let mut secret: Option<String> = None;
         zeroize_secret(&mut secret);
         assert!(secret.is_none());
+    }
+
+    fn chained(hosts: &[&str]) -> ProxyConfig {
+        let mut iter = hosts.iter().rev();
+        let last = iter.next().expect("至少一跳");
+        let mut chain = ProxyConfig {
+            host: (*last).to_string(),
+            port: 22,
+            username: "ops".to_string(),
+            auth_method: "password".to_string(),
+            password: None,
+            key_path: None,
+            passphrase: None,
+            next: None,
+        };
+        for host in iter {
+            chain = ProxyConfig {
+                host: (*host).to_string(),
+                port: 22,
+                username: "ops".to_string(),
+                auth_method: "password".to_string(),
+                password: None,
+                key_path: None,
+                passphrase: None,
+                next: Some(Box::new(chain)),
+            };
+        }
+        chain
+    }
+
+    #[test]
+    fn validate_accepts_a_well_formed_request() {
+        assert!(sample_request().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_target_fields() {
+        let mut request = sample_request();
+        request.host = "   ".to_string();
+        assert!(request.validate().is_err());
+
+        let mut request = sample_request();
+        request.username = String::new();
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_port() {
+        let mut request = sample_request();
+        request.port = 0;
+        let error = request.validate().expect_err("端口 0 必须被拒绝");
+        assert!(error.contains("端口"));
+    }
+
+    #[test]
+    fn validate_rejects_oversized_fields() {
+        let mut request = sample_request();
+        request.host = "h".repeat(MAX_HOST_LEN + 1);
+        assert!(request.validate().is_err());
+
+        let mut request = sample_request();
+        request.name = "n".repeat(MAX_NAME_LEN + 1);
+        assert!(request.validate().is_err());
+
+        let mut request = sample_request();
+        request.key_path = Some("k".repeat(MAX_KEY_PATH_LEN + 1));
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn validate_checks_every_hop_not_just_the_head() {
+        // 第 3 跳地址为空：此前只校验链头，空字段会一路带到连接流程（审计 R-5）。
+        let mut request = sample_request();
+        request.proxy = Some(chained(&["jump", "relay", "   "]));
+        let error = request.validate().expect_err("内层空地址必须被拒绝");
+        assert!(error.contains("第 3 跳"), "报错要能定位到具体跳数: {error}");
+
+        // 内层端口 0 同样要被拦下。
+        let mut request = sample_request();
+        let mut chain = chained(&["jump", "relay"]);
+        chain.next.as_mut().expect("二级存在").port = 0;
+        request.proxy = Some(chain);
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn validate_caps_proxy_chain_depth() {
+        let hosts: Vec<String> = (0..MAX_PROXY_DEPTH + 1)
+            .map(|index| format!("hop{index}"))
+            .collect();
+        let refs: Vec<&str> = hosts.iter().map(String::as_str).collect();
+
+        let mut request = sample_request();
+        request.proxy = Some(chained(&refs[..MAX_PROXY_DEPTH]));
+        assert!(request.validate().is_ok(), "恰好达到上限应当放行");
+
+        let mut request = sample_request();
+        request.proxy = Some(chained(&refs));
+        let error = request.validate().expect_err("超过深度上限必须被拒绝");
+        assert!(error.contains("跳板链"), "错误信息应说明链长限制: {error}");
     }
 }
