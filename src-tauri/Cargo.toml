@@ -7,6 +7,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "catshell"
+# main.rs 只是 5 行的启动壳（无任何 #[test]），但 cargo test 的 --test 目标
+# 会连带链接 bin 的空测试 harness；应用本体运行时该文件被占用，集成测试
+# 直接 LNK1104 失败。关闭后 CI/本地行为不变，环境冲突消除。
+test = false
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
