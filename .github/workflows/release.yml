@@ -29,6 +29,14 @@ jobs:
           if ($conf.plugins.updater.pubkey -like 'REPLACE_WITH*') {
             throw 'tauri.conf.json still contains the placeholder updater pubkey; commit the real signing public key before tagging a release.'
           }
+          # tag 与配置版本一致性校验：latest.json 的 version 取自 tauri.conf.json，
+          # 错打 tag（如 v0.1.1 但配置仍是 0.1.0）会让 Release 名与更新端点版本互相矛盾。
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Tag name '$($env:GITHUB_REF_NAME)' is not vX.Y.Z; refusing to build a release from it."
+          }
+          if ($conf.version -ne $env:GITHUB_REF_NAME.Substring(1)) {
+            throw "Tag $($env:GITHUB_REF_NAME) does not match tauri.conf.json version $($conf.version); bump the version and re-tag."
+          }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22

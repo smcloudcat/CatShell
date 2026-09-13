@@ -75,7 +75,14 @@ pub fn save_recording(dir: &Path, base: &str, content: &str) -> Result<Recording
     // 先写临时文件再原子替换（审计 X-11）：直接写目标时断电/崩溃会留下半截 `.cast`，
     // 它仍会被 `list_recordings` 列出来且读取失败。临时名不以 `.cast` 结尾，
     // 即使意外残留也不会出现在列表里。
-    let tmp = target_dir.join(format!("{name}.catshell-tmp"));
+    // 临时名带进程内唯一序号（审计待验证项-3）：同名录制并发保存时互不覆盖半成品。
+    let tmp = target_dir.join(format!(
+        "{name}.catshell-tmp-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     std::fs::write(&tmp, content_bytes).map_err(|error| format!("写入录制文件失败: {error}"))?;
     if let Err(error) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);

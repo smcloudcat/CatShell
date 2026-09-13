@@ -476,8 +476,15 @@ function App() {
           // 本地路径必须走 Tauri asset 协议（tauri.conf.json 已启用 assetProtocol），
           // 裸路径放进 url() 会被 webview 当相对地址而加载失败。
           // scope 为空、只按文件动态授权，且授权是运行时状态，每次启动都要重新申请（审计 S-2）。
-          void allowAssetFile(imagePath).catch(() => undefined)
-          bg.style.setProperty('--app-bg-image', `url("${convertFileSrc(imagePath)}")`)
+          // 授权成功后再设置 URL：先设 URL 会在授权完成前发起 asset 请求，
+          // 被 403 拒绝后 webview 不会自动重试，背景图就一直加载不出来。
+          void allowAssetFile(imagePath)
+            .then(() => {
+              bg.style.setProperty('--app-bg-image', `url("${convertFileSrc(imagePath)}")`)
+            })
+            .catch(() => {
+              // 授权失败（文件被移动/删除或用户拒绝）：保持无背景，与下方 removeProperty 分支一致。
+            })
         } else {
           bg.style.removeProperty('--app-bg-image')
         }

@@ -197,14 +197,27 @@ pub fn load_known_hosts_snapshot(path: Option<&Path>) -> Result<KnownHostsSnapsh
     })
 }
 
-/// 原子替换文件内容：先写 `<path>.catshell-tmp`，再 `rename` 覆盖目标。
+/// 原子替换文件内容：先写唯一临时文件，再 `rename` 覆盖目标。
 ///
 /// 直接 `fs::write` 目标时，写入中途崩溃/断电会留下截断文件：`known_hosts` 被截断会让
 /// 之后所有主机都被当作未知需要重新确认（审计 R-1）。rename 在同目录下是原子的。
+/// 临时名追加进程内唯一后缀（不用 with_extension：它会替换已有扩展名），
+/// 避免两个写入方并发操作同一目标时互相覆盖半成品。
 fn atomic_replace(path: &Path, content: &str, label: &str) -> Result<(), String> {
-    let tmp = path.with_extension("catshell-tmp");
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = PathBuf::from(format!(
+        "{}catshell-tmp-{}",
+        path.to_string_lossy(),
+        ((std::process::id() as u64) << 32) | seq
+    ));
     std::fs::write(&tmp, content).map_err(|error| format!("写入{label}临时文件失败: {error}"))?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("替换{label}失败: {error}"))?;
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        // rename 失败时清理半成品，避免残留垃圾临时文件。
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("替换{label}失败: {error}"));
+    }
     Ok(())
 }
 

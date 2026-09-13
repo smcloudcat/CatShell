@@ -613,6 +613,9 @@ async fn run_sync_job(
             continue;
         }
         current_file = Some(entry.relative_path.clone());
+        // transferred 取流函数真实返回的字节数：entry.size 来自 IPC 回传的计划值，
+        // 与实际传输量可能有出入（源文件在计划生成后被修改），进度按真实值累计。
+        let mut transferred: u64 = 0;
         let action_result: Result<(), String> = if entry.action == "mkdir" {
             match direction {
                 SYNC_UPLOAD => {
@@ -635,14 +638,18 @@ async fn run_sync_job(
                     let remote = join_remote(&remote_dir, &entry.relative_path);
                     stream_upload(&sftp, &local, &remote, &job.cancelled)
                         .await
-                        .map(|_| ())
+                        .map(|bytes| {
+                            transferred = bytes;
+                        })
                 }
                 _ => {
                     let remote = join_remote(&remote_dir, &entry.relative_path);
                     let local = local_root.join(&entry.relative_path);
                     stream_download(&sftp, &remote, &local, &job.cancelled)
                         .await
-                        .map(|_| ())
+                        .map(|bytes| {
+                            transferred = bytes;
+                        })
                 }
             }
         };
@@ -661,7 +668,7 @@ async fn run_sync_job(
             errors.push(format!("{}: {}", entry.relative_path, message));
         } else if entry.action != "mkdir" {
             done_files += 1;
-            done_bytes += entry.size;
+            done_bytes = done_bytes.saturating_add(transferred);
         }
         report(
             false,
