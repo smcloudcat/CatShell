@@ -5,7 +5,7 @@
 - 审计对象：CatShell 当前 `main` 分支（Tauri 2 + React 19 + TypeScript 6 + Rust + russh）
 - 审计性质：在上一轮 56 项整改全部闭环后的独立复审；本报告不复述已修复事项
 - 总体结论：**高风险**。当前未发现可直接远程利用的代码执行、认证绕过或明文凭据泄露，但确认存在 2 项可导致恢复记录或正式文件丢失的高风险数据完整性问题，以及 8 项中低风险问题。
-- **修复状态（2026-09-12 晚）**：正文 10 项正式发现（H-1/H-2/M-1~M-6/L-1/L-2）已全部修复并通过全量验证（Rust 115 + 前端 294 测试、fmt/clippy/tsc/eslint/build/i18n/mojibake 全绿），改动未提交。
+- **修复状态（2026-09-12 晚）**：正文 10 项正式发现（H-1/H-2/M-1~M-6/L-1/L-2）与第 8 章 4 个待验证项已全部修复并通过全量验证（Rust 115 + 前端 294 测试、fmt/clippy/tsc/eslint/build/i18n/mojibake 全绿），改动未提交。
 
 ## 1. 执行摘要
 
@@ -337,14 +337,16 @@ plugin-store 写入失败，且 localStorage 因配额、权限、损坏或 WebV
 
 Release workflow 已在构建前强制检查并拒绝占位符，因此它不是当前可利用漏洞，也不会静默产出未签名更新。但任何正式 tag 发布前都必须提交真实公钥，并配置 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets。
 
-## 8. 待验证项
+## 8. 待验证项（已全部处理）
 
-以下线索尚不足以列为正式缺陷，建议在修复 10 项正式问题后专项验证：
+以下线索经专项验证后已全部修复，不再是遗留项：
 
-1. **Release tag 与配置版本缺少一致性检查**：workflow 由 `v*` tag 触发，但 `latest.json.version` 取自 `tauri.conf.json`；错误打 tag 可能造成 Release 名称与 updater 版本不一致。建议增加 `vX.Y.Z == config.version` 前置校验。
-2. **背景图片 asset 授权存在时序窗口**：`src/App.tsx:478-479` 未等待 `allowAssetFile()` 成功就设置 URL。需在冷启动和慢磁盘环境观察是否稳定出现首次加载失败。
-3. **固定临时文件名的并发冲突**：SSH config 的 `.catshell-tmp` 和录制保存的同名临时文件理论上会在同目标并发写时竞争；正常 UI 是否允许同目标并发尚未证实。
-4. **同步进度信任 IPC 回传 size**：完成字节数使用 `entry.size` 而非流函数真实返回值，恶意或陈旧计划可使进度失真；当前不会改变实际传输内容，暂不定为安全缺陷。
+1. **[已修复] Release tag 与配置版本一致性**：`release.yml` 校验 step 新增两道检查——tag 必须匹配 `vX.Y.Z` 格式，且 tag 版本号必须与 `tauri.conf.json` 的 `version` 一致，不一致直接拒绝构建。
+2. **[已修复] 背景图片 asset 授权时序窗口**：`src/App.tsx` 改为 `allowAssetFile()` 成功后再设置 `--app-bg-image` URL。此前先设 URL 会在授权完成前发起 asset 请求，被 403 拒绝后 webview 不会自动重试，背景图首次加载可能永远失败。授权失败保持无背景（与 ThemeParams 选图路径的既有行为一致）。
+3. **[已修复] 固定临时文件名并发冲突**：`config.rs` 的 `atomic_replace` 与 `recording_store.rs` 的录制保存均改为进程内唯一临时名（pid + 序号 / 纳秒时间戳），并统一改用「追加后缀」而不是 `with_extension`（后者会替换已有扩展名）。rename 失败时清理半成品。
+4. **[已修复] 同步进度信任 IPC 回传 size**：`sync.rs` 的 `done_bytes` 改为累计 `stream_upload` / `stream_download` 返回的真实传输字节数（原实现把返回值丢弃后用计划值 `entry.size`），并用 `saturating_add` 防御溢出。
+
+附带环境健壮性修复：`Cargo.toml` 为 bin 显式声明 `test = false`（`main.rs` 仅 5 行启动壳无任何测试）；此前 cargo test 的集成测试目标会连带链接 bin 测试 harness，应用本体运行时该文件被占用导致集成测试 LNK1104 失败。
 
 ## 9. 已验证的安全与健壮性控制
 
@@ -403,7 +405,7 @@ Release workflow 已在构建前强制检查并拒绝占位符，因此它不是
 
 - M-3 把取消 token 下沉到同步分块循环。
 - L-1 为事件订阅增加失败回滚与可重试初始化。
-- 处理 Release 版本一致性等待验证项。
+- Release 版本一致性校验已随第 8 章待验证项一并落地。
 
 ## 12. 验收标准
 
